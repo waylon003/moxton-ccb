@@ -1,0 +1,37 @@
+﻿{
+    "env": {
+        "CCB_CALLER": "claude"
+    },
+    "teammateMode": "auto",
+    "disableSkills": [
+        "oh-my-claudecode:autopilot",
+        "oh-my-claudecode:ultrawork",
+        "oh-my-claudecode:ralph",
+        "oh-my-claudecode:swarm",
+        "oh-my-claudecode:ultrapilot"
+    ],
+    "hooks": {
+        "SessionStart": [
+            {
+                "matcher": "startup",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/on-session-start.py",
+                        "timeout": 10
+                    }
+                ]
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/on-user-prompt-submit.py"
+                    }
+                ]
+            }
+        ]
+    }
+}

@@ -1,0 +1,68 @@
+{
+  "version": "1.2",
+  "team_lead": {
+    "provider": "claude",
+    "model": "qwen3-max",
+    "workspace": "E:\\moxton-ccb"
+  },
+  "roles": {
+    "SHOP-FE": {
+      "provider": "gemini",
+      "repo": "E:\\nuxt-moxton",
+      "task_dir": "01-tasks/active/shop-frontend",
+      "mcp": ["playwright"]
+    },
+    "ADMIN-FE": {
+      "provider": "codex",
+      "repo": "E:\\moxton-lotadmin",
+      "task_dir": "01-tasks/active/admin-frontend",
+      "mcp": ["playwright", "vitest"]
+    },
+    "BACKEND": {
+      "provider": "codex",
+      "repo": "E:\\moxton-lotapi",
+      "task_dir": "01-tasks/active/backend",
+      "mcp": ["playwright", "vitest"]
+    },
+    "SHOP-FE-QA": {
+      "provider": "gemini",
+      "repo": "E:\\nuxt-moxton",
+      "mcp": ["playwright"]
+    },
+    "ADMIN-FE-QA": {
+      "provider": "codex",
+      "repo": "E:\\moxton-lotadmin",
+      "mcp": ["playwright", "vitest"]
+    },
+    "BACKEND-QA": {
+      "provider": "codex",
+      "repo": "E:\\moxton-lotapi",
+      "mcp": ["playwright", "vitest"]
+    },
+    "DOC-UPDATER": {
+      "provider": "codex",
+      "repo": "E:\\moxton-ccb",
+      "task_dir": "01-tasks/active"
+    }
+  },
+  "mcp_tools": {
+    "playwright": {
+      "package": "@playwright/mcp@0.0.68",
+      "tools": ["browser_navigate", "browser_snapshot", "browser_click", "browser_fill_form", "browser_console_messages", "browser_take_screenshot", "browser_press_key", "browser_hover", "browser_tabs", "browser_wait_for"]
+    },
+    "vitest": {
+      "package": "@djankies/vitest-mcp@0.5.1",
+      "tools": ["list_tests", "run_tests", "analyze_coverage", "set_project_root"]
+    }
+  },
+  "doc_update_triggers": {
+    "realtime": {
+      "condition": "BACKEND 任务 QA PASS 且涉及 API 端点新增/修改/删除",
+      "action": "立即派遣 DOC-UPDATER 更新 02-api/ 文档"
+    },
+    "batch": {
+      "condition": "当前轮次所有任务状态为 completed",
+      "action": "派遣 DOC-UPDATER 做全量文档一致性检查"
+    }
+  }
+}
