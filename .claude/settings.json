@@ -1,7 +1,4 @@
 ﻿{
-    "env": {
-        "CCB_CALLER": "claude"
-    },
     "teammateMode": "auto",
     "disableSkills": [
         "oh-my-claudecode:autopilot",
@@ -19,16 +16,6 @@
                         "type": "command",
                         "command": "python .claude/hooks/on-session-start.py",
                         "timeout": 10
-                    }
-                ]
-            }
-        ],
-        "UserPromptSubmit": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "python .claude/hooks/on-user-prompt-submit.py"
                     }
                 ]
             }

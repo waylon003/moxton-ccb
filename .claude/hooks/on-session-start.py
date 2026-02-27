@@ -8,7 +8,7 @@ sys.stdin.read()
 
 # Display welcome message to stderr
 sys.stderr.write("=" * 50 + "\n")
-sys.stderr.write("🎯 CCB Team Lead Mode Activated\n")
+sys.stderr.write("🎯 Team Lead Mode Activated\n")
 sys.stderr.write("=" * 50 + "\n")
 
 # Get current task status
@@ -30,8 +30,7 @@ try:
 except Exception:
     pass
 
-sys.stderr.write("\n✅ 环境变量: CCB_CALLER=claude (已自动设置)\n")
-sys.stderr.write("✅ Team Lead 角色定义已注入\n")
+sys.stderr.write("\n✅ Team Lead 角色定义已注入\n")
 sys.stderr.write("\n💡 下一步: python scripts/assign_task.py --standard-entry\n")
 sys.stderr.write("=" * 50 + "\n\n")
 
@@ -50,7 +49,7 @@ try:
             startup_reminder = f"\n\n---\n\n# 启动提醒\n\n{f.read()}"
 
     # Combine context
-    full_context = f"{team_lead_content}{startup_reminder}\n\n---\n\n**重要**: CCB_CALLER 环境变量已自动设置为 'claude'，Codex 完成任务后会自动通知你，无需手动轮询 `pend codex`。"
+    full_context = f"{team_lead_content}{startup_reminder}\n\n---\n\n**重要**: Worker 通过 WezTerm 强制回执机制与 Team Lead 通信，任务完成后会自动推送 [ROUTE] 通知。"
 
     result = {
         "hookSpecificOutput": {
@@ -64,6 +63,6 @@ except Exception as e:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": "Team Lead mode active. CCB_CALLER=claude is set."
+            "additionalContext": "Team Lead mode active. Worker notification via WezTerm is configured."
         }
     }))

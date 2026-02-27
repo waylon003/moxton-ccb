@@ -54,5 +54,39 @@ $command = @"
 & "$wrapperScript" -Engine $Engine -WorkDir "$WorkDir" -WorkerName "$WorkerName" -TeamLeadPaneId "$TeamLeadPaneId" -TimeoutSeconds $TimeoutSeconds
 "@
 
+Write-Host "🚀 启动 Worker: $WorkerName ..." -ForegroundColor Cyan
+
+# 获取当前所有 pane（用于找到新创建的）
+$panesBefore = wezterm cli list --format json | ConvertFrom-Json
+$existingPaneIds = $panesBefore | ForEach-Object { $_.pane_id }
+
 # 在新 WezTerm pane 中启动 Wrapper
-wezterm cli spawn --cwd "$PSScriptRoot" -- powershell -NoExit -Command $command
+$newPaneOutput = wezterm cli spawn --cwd "$PSScriptRoot" -- powershell -NoExit -Command $command 2>&1
+
+# 等待 pane 创建
+Start-Sleep -Seconds 2
+
+# 获取新的 pane_id
+$panesAfter = wezterm cli list --format json | ConvertFrom-Json
+$newPane = $panesAfter | Where-Object { $_.pane_id -notin $existingPaneIds -and $_.title -like "*$WorkerName*" } | Select-Object -First 1
+
+if (-not $newPane) {
+    # 如果没找到匹配的 title，尝试找最新创建的
+    $newPane = $panesAfter | Where-Object { $_.pane_id -notin $existingPaneIds } | Select-Object -Last 1
+}
+
+if ($newPane) {
+    $paneId = $newPane.pane_id
+    Write-Host "✅ Worker 已启动: $WorkerName -> pane $paneId" -ForegroundColor Green
+
+    # 注册到 Worker Pane Registry
+    $registryScript = Join-Path $PSScriptRoot "worker-registry.ps1"
+    & $registryScript -Action register -WorkerName $WorkerName -PaneId $paneId -WorkDir $WorkDir -Engine $Engine
+
+    Write-Host ""
+    Write-Host "使用以下命令分派任务:" -ForegroundColor Yellow
+    Write-Host "  .\scripts\dispatch-task.ps1 -WorkerName `"$WorkerName`" -TaskId `"<TASK-ID>`" -TaskContent `"<内容>`"" -ForegroundColor White
+}
+else {
+    Write-Warning "无法获取新创建的 pane ID，请手动检查: wezterm cli list"
+}

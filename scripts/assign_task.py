@@ -1787,11 +1787,8 @@ def main() -> int:
         exit_code = max(exit_code, doctor_code)
         did_work = True
 
-    codex_action = bool(args.team_prompt or args.write_brief is not None or (args.task_id and args.provider == "codex"))
-    claude_action = bool(args.task_id and args.provider == "claude")
-    ccb_action = bool(args.dispatch_ccb or args.poll_ccb)
-
-    required_runner = "codex" if codex_action else ("claude" if (claude_action or ccb_action) else "")
+    codex_action = bool(args.team_prompt or args.write_brief is not None or args.task_id)
+    required_runner = "codex" if codex_action else ""
     active_runner = runner_lock["runner"]
 
     if required_runner and active_runner not in ("none", required_runner):
@@ -1855,24 +1852,15 @@ def main() -> int:
             )
             return 2
 
-        expected_runner = args.provider
-        if existing.get("runner") != expected_runner:
-            print(
-                f"[LOCKED] task {task.task_id} locked by runner '{existing.get('runner')}', "
-                f"but provider is '{expected_runner}'."
-            )
-            return 2
-
+        expected_runner = existing.get("runner", "codex")
         print(f"[ASSIGN] {task.task_id} -> {task.project}")
         print(
             f"[ASSIGN] lock owner={existing.get('owner')} "
             f"state={existing.get('state')} runner={existing.get('runner')}"
         )
         print("-" * 72)
-        if args.provider == "codex":
-            print(build_codex_single_prompt(task, root))
-        else:
-            print(build_claude_single_prompt(task))
+        # 只打印 codex 的提示（当前通过 WezTerm 派遣给 Worker）
+        print(build_codex_single_prompt(task, root))
         did_work = True
 
     if not did_work:

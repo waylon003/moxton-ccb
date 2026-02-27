@@ -62,10 +62,10 @@ Worker 通过 wrapper 脚本启动，确保**无论任务成功、失败或超�
 
 ```powershell
 # 启动后端 Worker (Codex)
-.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
 
 # 启动前端 Worker (Gemini)
-.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini
+.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
 ```
 
 **启动过程**：
@@ -99,9 +99,37 @@ body: |
 [/ROUTE]
 ```
 
+### 4. 监控 [ROUTE] 回执（自动更新任务锁）
+
+启动监控器，自动解析 Worker 的 [ROUTE] 消息并更新任务锁：
+
+```powershell
+# 持续监控模式（推荐）
+.\scripts\route-monitor.ps1 -Continuous
+
+# 单次检查模式
+.\scripts\route-monitor.ps1
+```
+
+监控器会自动：
+- 解析 `[ROUTE]` 消息
+- 更新 `TASK-LOCKS.json` 状态
+- 显示可视化通知
+
 ---
 
-## Worker 管理
+### 5. Worker Pane Registry 管理
+
+```powershell
+# 查看已注册的 Workers
+.\scripts\worker-registry.ps1 -Action list
+
+# 健康检查（清理不存在的 pane）
+.\scripts\worker-registry.ps1 -Action health-check
+
+# 手动注销 Worker
+.\scripts\worker-registry.ps1 -Action unregister -WorkerName "backend-dev"
+```
 
 ### 列出所有 pane
 

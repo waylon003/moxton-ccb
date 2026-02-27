@@ -24,14 +24,14 @@ cd E:\moxton-ccb
 ### 步骤 2: 启动 Workers
 
 ```powershell
-# Codex — 后端 worker
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-codex.ps1" "E:\moxton-lotapi"
+# Codex — 后端 worker（强制回执）
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex -TeamLeadPaneId <TEAM_LEAD_PANE_ID>
 
-# Codex — 管理后台 worker
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-codex.ps1" "E:\moxton-lotadmin"
+# Codex — 管理后台 worker（强制回执）
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotadmin" -WorkerName "admin-fe-dev" -Engine codex -TeamLeadPaneId <TEAM_LEAD_PANE_ID>
 
-# Gemini — 商城前端 worker
-wezterm cli spawn --cwd "E:\nuxt-moxton" -- cmd /c "gemini"
+# Gemini — 商城前端 worker（强制回执）
+.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini -TeamLeadPaneId <TEAM_LEAD_PANE_ID>
 ```
 
 每个 worker 在独立的 WezTerm pane 中运行。用 `wezterm cli list` 查看 pane ID。

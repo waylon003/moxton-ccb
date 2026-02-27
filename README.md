@@ -10,7 +10,7 @@
 - Workers：
   - Codex — 负责 BACKEND（开发+QA）和 ADMIN-FE（开发+QA）
   - Gemini CLI — 负责 SHOP-FE（开发+QA），配有 playwright-mcp
-- 通信方式：WezTerm `send-text`（主要）/ CCB `ask`（Codex 备用）
+- 通信方式：WezTerm `send-text` 直接推送（强制回执机制）
 - 状态来源：`01-tasks/*` 与 `01-tasks/TASK-LOCKS.json`
 
 ## Quick Start

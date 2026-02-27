@@ -68,27 +68,35 @@ python scripts/assign_task.py --scan
 
 ## 5. WezTerm 工作流程
 
-### 启动 Workers
+### 启动 Workers（自动注册到 Registry）
 
 ```powershell
 # 启动后端 Worker (Codex)
-.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
 
 # 启动前端 Worker (Gemini)
-.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini
+.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
 
 # 启动管理后台 Worker (Codex)
-.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotadmin" -WorkerName "admin-fe-dev" -Engine codex
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotadmin" -WorkerName "admin-fe-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
 ```
 
-### 分派任务
+Worker 启动后会自动注册到 `config/worker-panels.json`，无需手动记录 pane ID。
+
+### 分派任务（通过 WorkerName 自动查表）
 
 ```powershell
-# 派遣任务到指定 Worker
+# 方式1: 通过 WorkerName 自动查表（推荐）
+.\scripts\dispatch-task.ps1 `
+  -WorkerName "backend-dev" `
+  -TaskId "BACKEND-008" `
+  -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-008.md" -Raw)
+
+# 方式2: 直接指定 Pane ID（备用）
 .\scripts\dispatch-task.ps1 `
   -WorkerPaneId <worker-pane-id> `
-  -TaskId "BACKEND-008" `
   -WorkerName "backend-dev" `
+  -TaskId "BACKEND-008" `
   -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-008.md" -Raw)
 ```
 
@@ -99,7 +107,7 @@ Worker 完成后会自动推送 `[ROUTE]` 消息到 Team Lead，无需手动轮�
 
 ### 自动通知
 
-设置 `CCB_CALLER=claude` 后，Codex 完成任务会自动通知你，**无需手动轮询 `pend`**。
+Worker 通过 wrapper 脚本启动，**无论任务成功、失败或超时**，都会强制发送 `[ROUTE]` 通知到 Team Lead。
 
 ---
 
