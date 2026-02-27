@@ -1,7 +1,7 @@
 ﻿# 任务状态总览
 
 **更新时间**: 2026-02-27
-**活跃任务**: 4 个
+**活跃任务**: 6 个
 
 ## 项目映射
 
@@ -16,9 +16,9 @@
 | 角色 | backlog | active | completed | 总计 |
 |------|---------|--------|-----------|------|
 | SHOP-FE | 0 | 2 | 1 | 3 |
-| ADMIN-FE | 0 | 1 | 8 | 9 |
-| BACKEND | 0 | 1 | 13 | 14 |
-| **TOTAL** | **0** | **4** | **22** | **26** |
+| ADMIN-FE | 0 | 2 | 8 | 10 |
+| BACKEND | 0 | 2 | 13 | 15 |
+| **TOTAL** | **0** | **6** | **22** | **28** |
 
 ## 目录结构
 
@@ -46,12 +46,14 @@
 | 任务ID | 标题 |
 |--------|------|
 | [BACKEND-008](./active/backend/BACKEND-008-admin-user-management-api.md) | admin user management api |
+| [BACKEND-010](./active/backend/BACKEND-010-role-system-operator.md) | role system operator |
 
 ### 管理后台前端 (ADMIN-FE)
 
 | 任务ID | 标题 |
 |--------|------|
 | [ADMIN-FE-008](./active/admin-frontend/ADMIN-FE-008-user-management-page.md) | user management page |
+| [ADMIN-FE-009](./active/admin-frontend/ADMIN-FE-009-role-based-access-control.md) | role based access control |
 
 ### 独立站前端 (SHOP-FE)
 

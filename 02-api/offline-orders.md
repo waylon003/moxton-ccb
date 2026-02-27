@@ -126,12 +126,10 @@ Headers: X-Guest-ID: guest_abc123
   "message": "Success",
   "data": {
     "list": [...], // 订单列表
-    "pagination": {
-      "total": 5,
-      "pageNum": 1,
-      "pageSize": 10,
-      "totalPages": 1
-    }
+    "total": 5,
+    "pageNum": 1,
+    "pageSize": 10,
+    "totalPages": 1
   },
   "success": true
 }

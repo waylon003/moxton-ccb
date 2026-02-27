@@ -64,7 +64,10 @@
       "Bash(PATH=\"$PATH:/d/WezTerm-windows-20240203-110809-5046fc22\" wezterm cli spawn --cwd \"E:/moxton-lotadmin\" -- powershell.exe -NoExit -Command \"powershell -ExecutionPolicy Bypass -File ''E:\\\\moxton-ccb\\\\scripts\\\\start-codex.ps1'' ''E:\\\\moxton-lotadmin''\")",
       "Bash(PATH=\"$PATH:/d/WezTerm-windows-20240203-110809-5046fc22\" wezterm cli spawn --cwd \"E:/nuxt-moxton\" -- powershell.exe -NoExit -Command \"powershell -ExecutionPolicy Bypass -File ''E:\\\\moxton-ccb\\\\scripts\\\\start-codex.ps1'' ''E:\\\\nuxt-moxton''\")",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(PATH=\"$PATH:/d/WezTerm-windows-20240203-110809-5046fc22\" wezterm cli spawn:*)"
     ]
   }
 }

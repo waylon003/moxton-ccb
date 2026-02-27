@@ -73,7 +73,7 @@ cping  # 检查所有 workers
 
 **重要原则：**
 - 分派任务前必须先确保 worker 已启动（使用 start-codex.ps1）
-- 优先启动 Codex workers（开发和 QA），不启动 Gemini（不可靠，浪费资源）
+- 分派任务前确保对应 worker 已启动
 - 不要因为 workers 未启动就停下来等用户操作，主动解决
 
 ## Mandatory Workflow
@@ -84,18 +84,33 @@ cping  # 检查所有 workers
    - 脚本输出 EXECUTION：有 active 任务。
    - 脚本输出 PLANNING：无 active 任务。
    - STATUS.md 是静态摘要，可能过期，不作为判断依据。
-2. Planning 模式：
-   - 讨论方案。
-   - 按模板拆分任务到 `01-tasks/active/*`。
+2. Planning 模式（必须使用 Superpowers）：
+   - **需求讨论阶段**：使用 `superpowers:brainstorming` 进行头脑风暴，探索用户意图、需求边界和设计方案。
+   - **编写开发计划**：使用 `superpowers:writing-plans` 产出详细实施计划（精确到文件路径、代码片段、验收标准）。
+   - **产出物路径覆盖（CRITICAL，优先级高于 skill 默认值）**：
+     - `superpowers:writing-plans` 默认保存到 `docs/plans/`，**在本项目中禁止使用该默认路径**。
+     - 所有计划文档必须保存到：`01-tasks/active/<domain>/<TASK-ID>.md`
+     - `<domain>` 取值：`backend`、`shop-frontend`、`admin-frontend`
+     - 文件名必须使用 TASK-ID 格式（如 `BACKEND-009-xxx.md`），不使用日期前缀格式。
+     - Execution Handoff 部分跳过（Team Lead 通过 CCB 分派给 Workers 执行，不使用 subagent-driven 或 parallel session）。
    - 给任务加锁后再分派。
-3. Execution 模式：
+3. **派遣前编排（CRITICAL — 派遣任何 worker 之前必须完成）**：
+   - **依赖分析**：梳理所有任务间的前置依赖关系，画出依赖图。
+   - **并行/串行编排**：根据依赖关系和 worker 分配，规划分阶段执行顺序，最大化并行度。
+   - **QA 介入点**：每个 dev 任务完成后必须安排对应 qa worker 验收，QA PASS 才能解锁下游依赖。
+   - **doc-updater 触发点**：后端 API 变更任务 QA PASS 后，立即派遣 doc-updater 更新 `02-api/` 文档；一轮任务全部完成后，派遣 doc-updater 做全量文档一致性检查。
+   - **QA FAIL 闭环**：QA FAIL → Team Lead 审阅报告 → 带 QA 报告重新 dispatch 给 dev → 修复后再派 qa，最多 3 轮，超过上报用户。
+   - **临时角色创建**：如果当前任务需要项目中尚未定义的角色（如性能测试、安全审计、数据迁移等），Team Lead 可临时创建角色定义并分派，事后归档到 `.claude/agents/`。
+   - **产出物**：将编排结果写入 `01-tasks/WAVE<N>-EXECUTION-PLAN.md`，包含：阶段划分、每阶段的 worker 分配、触发条件、关键路径、风险预案。
+   - **用户确认**：编排计划完成后向用户展示，确认后再开始派遣。
+4. Execution 模式：
    - 通过 CCB 向对应 worker 下发任务。
    - 用 `pend` 轮询结果与阻塞。
    - 发现跨角色依赖时由 Team Lead 中继。
-4. QA：
+5. QA：
    - Dev 完成后必须安排 QA worker 验证。
    - 无测试证据不得宣告完成。
-5. 收口：
+6. 收口：
    - 先向用户汇报。
    - 用户确认后才能移动到 `completed/`。
 
