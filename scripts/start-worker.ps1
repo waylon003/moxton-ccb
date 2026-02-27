@@ -55,10 +55,11 @@ Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # 构建引擎启动命令
+$ccbRoot = Split-Path -Parent $PSScriptRoot
 $engineCommand = if ($Engine -eq "codex") {
-    "codex --full-auto"
+    "codex -a never --add-dir '$ccbRoot'"
 } else {
-    "gemini"
+    "gemini --yolo --include-directories '$ccbRoot'"
 }
 
 # 生成 wrapper 脚本到临时文件（避免 EncodedCommand 编码问题）
@@ -145,7 +146,7 @@ try {
 
     Write-Host ""
     Write-Host "使用以下命令分派任务:" -ForegroundColor Yellow
-    Write-Host "  .\scripts\dispatch-task.ps1 -WorkerName `"$WorkerName`" -TaskId `"<TASK-ID>`" -TaskContent `"<内容>`"" -ForegroundColor White
+    Write-Host "  .\scripts\dispatch-task.ps1 -WorkerName `"$WorkerName`" -TaskId `"<TASK-ID>`" -TaskFilePath `"<路径>`"" -ForegroundColor White
     Write-Host ""
     Write-Host "📋 Worker 信息:" -ForegroundColor Cyan
     Write-Host "   Name: $WorkerName" -ForegroundColor Gray

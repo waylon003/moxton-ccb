@@ -1,10 +1,8 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # 派遣任务到 Worker（支持 Worker Pane Registry）
+# Worker 通过文件路径自行读取任务内容，避免 send-text 超长截断
 # 用法:
-#   方式1: 通过 WorkerName 自动查表
-#     .\dispatch-task.ps1 -WorkerName "backend-dev" -TaskId "BACKEND-008" -TaskContent "内容"
-#   方式2: 直接指定 Pane ID（旧方式）
-#     .\dispatch-task.ps1 -WorkerPaneId 42 -WorkerName "backend-dev" -TaskId "BACKEND-008" -TaskContent "内容"
+#   .\dispatch-task.ps1 -WorkerPaneId 42 -WorkerName "backend-dev" -TaskId "BACKEND-008" -TaskFilePath "E:\moxton-ccb\01-tasks\active\backend\BACKEND-008-xxx.md"
 
 param(
     [Parameter(Mandatory=$false)]
@@ -14,16 +12,22 @@ param(
     [string]$TaskId,
 
     [Parameter(Mandatory=$true)]
-    [string]$TaskContent,
+    [string]$TaskFilePath,
 
     [Parameter(Mandatory=$false)]
     [string]$WorkerName,
+
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("codex", "gemini")]
+    [string]$Engine = "codex",
 
     [Parameter(Mandatory=$false)]
     [string]$TeamLeadPaneId = $env:TEAM_LEAD_PANE_ID
 )
 
 $ErrorActionPreference = "Stop"
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # 验证环境
 if (-not $TeamLeadPaneId) {
@@ -34,7 +38,7 @@ if (-not $TeamLeadPaneId) {
 # 如果没有直接提供 PaneId，尝试从 Registry 获取
 if (-not $WorkerPaneId) {
     if (-not $WorkerName) {
-        Write-Error "必须提供 -WorkerPaneId 或 -WorkerName。`n用法: .\dispatch-task.ps1 -WorkerName 'backend-dev' -TaskId 'xxx' -TaskContent 'xxx'"
+        Write-Error "必须提供 -WorkerPaneId 或 -WorkerName。`n用法: .\dispatch-task.ps1 -WorkerName 'backend-dev' -TaskId 'xxx' -TaskFilePath 'path/to/task.md'"
         exit 1
     }
 
@@ -58,11 +62,17 @@ else {
     }
 }
 
-# 构建强制协议头
-$protocolHeader = @"
-═══════════════════════════════════════════════════════════════════
-⚠️  强制协议提醒 ⚠️
-═══════════════════════════════════════════════════════════════════
+# 验证任务文件存在
+if (-not (Test-Path $TaskFilePath)) {
+    Write-Error "任务文件不存在: $TaskFilePath"
+    exit 1
+}
+
+# 构建派遣指令（短内容：协议头 + 文件路径引用 + 完成提醒）
+$fullTask = @"
+===================================================================
+  PROTOCOL REMINDER
+===================================================================
 
 你在接受任务前必须确认：
 
@@ -74,19 +84,20 @@ $protocolHeader = @"
 Team Lead Pane ID: $TeamLeadPaneId
 Worker: $WorkerName
 
-═══════════════════════════════════════════════════════════════════
+===================================================================
+  TASK CONTENT
+===================================================================
 
-"@
+请读取以下文件获取完整任务内容，严格按照文件中的要求执行：
 
-# 构建完整任务内容
-$fullTask = $protocolHeader + $TaskContent + "`n`n" + @"
-═══════════════════════════════════════════════════════════════════
-⚠️  完成提醒 ⚠️
-═══════════════════════════════════════════════════════════════════
+$TaskFilePath
+
+===================================================================
+  COMPLETION REMINDER
+===================================================================
 
 任务完成后，执行以下命令通知 Team Lead：
 
-```powershell
 wezterm cli send-text --pane-id "$TeamLeadPaneId" --no-paste @'
 [ROUTE]
 from: $WorkerName
@@ -99,23 +110,61 @@ body: |
 [/ROUTE]
 '@
 wezterm cli send-text --pane-id "$TeamLeadPaneId" --no-paste "`r"
-```
 
-═══════════════════════════════════════════════════════════════════
+===================================================================
 "@
 
 # 发送到 Worker
 Write-Host ""
-Write-Host "📤 派遣任务 $TaskId 到 Worker..."
+Write-Host "派遣任务 $TaskId 到 Worker..."
 Write-Host "   Worker: $WorkerName"
 Write-Host "   Worker Pane: $WorkerPaneId"
+Write-Host "   Engine: $Engine"
+Write-Host "   Task file: $TaskFilePath"
 Write-Host ""
 
-# 发送任务内容
-wezterm cli send-text --pane-id $WorkerPaneId --no-paste $fullTask
+# 等待 Worker CLI 就绪（避免 CLI 未加载完就发送导致内容丢失）
+$readyPatterns = if ($Engine -eq "gemini") {
+    @("Type your message", "? for shortcuts")
+} else {
+    @("codex>", "Codex is ready", "full-auto", "OpenAI Codex")
+}
 
-# 发送回车提交
-Start-Sleep -Milliseconds 100
-wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r"
+$maxWait = 60
+$waited = 0
+$ready = $false
+
+Write-Host "Waiting for $Engine CLI to be ready..." -ForegroundColor Yellow
+while ($waited -lt $maxWait) {
+    try {
+        $paneText = wezterm cli get-text --pane-id $WorkerPaneId 2>$null
+        foreach ($pattern in $readyPatterns) {
+            if ($paneText -match [regex]::Escape($pattern)) {
+                Write-Host ('[OK] Worker CLI ready (matched: ' + $pattern + ')') -ForegroundColor Green
+                $ready = $true
+                break
+            }
+        }
+    } catch {}
+    if ($ready) { break }
+    Start-Sleep -Seconds 2
+    $waited += 2
+    if ($waited % 10 -eq 0) {
+        $lastLines = if ($paneText) { ($paneText -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join " | " } else { "(empty)" }
+        Write-Host ('  ... still waiting (' + $waited + 's) pane text: ' + $lastLines) -ForegroundColor DarkGray
+    }
+}
+
+if (-not $ready) {
+    Write-Host ('[FAIL] Worker CLI not ready after ' + $maxWait + 's, aborting dispatch') -ForegroundColor Red
+    exit 1
+}
+
+# 发送任务指令 + 回车（合并为一次 send-text，避免时序问题）
+wezterm cli send-text --pane-id $WorkerPaneId --no-paste "$fullTask`r`n"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '[FAIL] wezterm send-text failed' -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "Task dispatched." -ForegroundColor Green
