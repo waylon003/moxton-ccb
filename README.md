@@ -15,7 +15,7 @@
 
 ## Quick Start
 
-1. 安装 WezTerm 和 CCB（一次性设置），确保 Gemini CLI 已安装
+1. 安装 WezTerm（一次性设置），确保 Gemini CLI 已安装
 
 2. 启动 Claude Code 作为 Team Lead:
 ```bash
@@ -25,21 +25,24 @@ cd E:\moxton-ccb
 
 3. 启动 Workers:
 ```powershell
-# Codex workers（后端 + 管理后台）
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-codex.ps1" "E:\moxton-lotapi"
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-codex.ps1" "E:\moxton-lotadmin"
+# 设置环境变量
+$env:PATH += ";D:\WezTerm-windows-20240203-110809-5046fc22"
+$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1).pane_id
 
-# Gemini worker（商城前端）
-wezterm cli spawn --cwd "E:\nuxt-moxton" -- cmd /c "gemini"
+# 启动后端 Worker (Codex)
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
+
+# 启动前端 Worker (Gemini)
+.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
 ```
 
 4. 创建和分派任务:
-```bash
+```powershell
 # 创建任务
 python scripts/assign_task.py --intake "实现订单支付状态查询接口"
 
-# 分派任务（通过 WezTerm send-text）
-wezterm cli send-text --pane-id <PANE_ID> --no-paste "<dispatch prompt>"
+# 分派任务
+.\scripts\dispatch-task.ps1 -WorkerName "backend-dev" -TaskId "BACKEND-010" -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-010.md" -Raw)
 
 # 查看 worker 状态
 wezterm cli get-text --pane-id <PANE_ID>
@@ -55,10 +58,10 @@ wezterm cli get-text --pane-id <PANE_ID>
 - 让用户确认是否进入执行
 
 执行模式（存在 active 任务）：
-- 分派任务（WezTerm send-text 或 CCB ask）
-- 监控 worker 状态（wezterm cli get-text）
-- 推进任务锁状态：`assigned -> in_progress -> qa -> completed/blocked`
-- QA PASS 后归档报告到 `05-verification/ccb-runs/`，清理业务仓库临时文件
+- 分派任务：`dispatch-task.ps1`
+- 监控 worker 状态：`route-monitor.ps1 -Continuous`
+- 推进任务锁状态：`assigned -> in_progress -> waiting_qa (dev完成) -> completed (qa通过)`
+- QA PASS 后归档报告到 `05-verification/`，清理业务仓库临时文件
 
 ## 常用命令
 
@@ -84,7 +87,7 @@ python scripts/assign_task.py --split-request "<requirement text>"
 | SHOP-FE-QA | Gemini | E:\nuxt-moxton | 商城前端 QA |
 | DOC-UPDATER | Codex | E:\moxton-ccb | 文档更新 |
 
-详细配置见：`config/ccb-routing.json`
+详细配置见：`config/worker-panels.json`
 
 ## 关键路径
 
@@ -92,9 +95,9 @@ python scripts/assign_task.py --split-request "<requirement text>"
 - `01-tasks/completed/*` — 已完成任务
 - `01-tasks/ACTIVE-RUNNER.md`
 - `01-tasks/TASK-LOCKS.json`
-- `05-verification/ccb-runs/*` — QA 报告归档
+- `05-verification/*` — QA 报告归档
 - `.claude/agents/*` — 角色定义
-- `config/ccb-routing.json` — Worker 路由配置
+- `config/worker-panels.json` — Worker 注册表
 - `config/dispatch-template.md` — 标准 dispatch 模板
 
 ## 故障排查
@@ -124,12 +127,12 @@ python scripts/assign_task.py --split-request "<requirement text>"
 - **[QUICK-START.md](./QUICK-START.md)** - 快速启动指南
 - **[CLAUDE.md](./CLAUDE.md)** - Team Lead 工作流程指南
 - **[config/dispatch-template.md](./config/dispatch-template.md)** - Dispatch 模板
-- **[config/ccb-routing.json](./config/ccb-routing.json)** - Worker 路由配置
+- **[config/worker-panels.json](./config/worker-panels.json)** - Worker 注册表
 - **[docs/reports/DOCUMENTATION-INDEX.md](./docs/reports/DOCUMENTATION-INDEX.md)** - 完整文档索引
 
-### CCB 相关文档
+### 历史文档
 - [CCB 迁移完成报告](./docs/ccb/CCB-MIGRATION-COMPLETE.md)
-- [CCB 安装指南](./docs/ccb/CCB-INSTALLATION-GUIDE.md)
+- [CCB 安装指南](./docs/ccb/CCB-INSTALLATION-GUIDE.md)（已废弃，仅供参考）
 
 ## Team Lead 边界
 

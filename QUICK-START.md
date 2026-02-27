@@ -126,14 +126,8 @@ wezterm cli send-text --pane-id <PANE_ID> --no-paste "消息内容"
 # 读取 worker 输出
 wezterm cli get-text --pane-id <PANE_ID>
 
-# 新建 pane
-wezterm cli spawn --cwd "E:\moxton-lotapi" -- cmd /c "python ccb codex"
-
-# CCB 备用方式（仅 Codex）
-cd E:\moxton-lotapi
-ask codex "<prompt>"
-pend codex
-cping
+# 新建 pane（示例：后端 worker）
+wezterm cli spawn --cwd "E:\moxton-lotapi" -- powershell -NoProfile -Command "codex --full-auto"
 ```
 
 ## Worker 分配
@@ -148,7 +142,7 @@ cping
 | SHOP-FE-QA | Gemini | E:\nuxt-moxton | 商城前端 QA（playwright-mcp） |
 | DOC-UPDATER | Codex | E:\moxton-ccb | 文档更新 |
 
-详细配置：`config/ccb-routing.json`
+详细配置：`config/worker-panels.json`
 
 ## 任务文档结构
 
@@ -185,6 +179,6 @@ cping
 
 - `CLAUDE.md` — Team Lead 工作流程指南
 - `config/dispatch-template.md` — 标准 dispatch 模板
-- `config/ccb-routing.json` — Worker 路由配置
+- `config/worker-panels.json` — Worker 注册表
 - `.claude/agents/*` — 角色定义文件
 - `docs/reports/DOCUMENTATION-INDEX.md` — 完整文档索引

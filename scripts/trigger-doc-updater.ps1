@@ -136,15 +136,16 @@ if (-not $docUpdaterPane) {
         triggeredAt = Get-Date -Format "o"
         status = "pending"
         reason = "doc-updater worker not available"
-    } | ConvertTo-Json
+    }
 
     $pendingFile = "$rootDir\config\pending-doc-updates.json"
     $pendingUpdates = @()
     if (Test-Path $pendingFile) {
-        $pendingUpdates = Get-Content $pendingFile -Raw | ConvertFrom-Json
+        $existing = Get-Content $pendingFile -Raw | ConvertFrom-Json
+        if ($existing) { $pendingUpdates = @($existing) }
     }
     $pendingUpdates += $pendingDocUpdate
-    $pendingUpdates | ConvertTo-Json -Depth 10 | Set-Content $pendingFile -Encoding UTF8
+    ConvertTo-Json $pendingUpdates -Depth 10 | Set-Content $pendingFile -Encoding UTF8
 
     Write-Host "已记录到待处理队列: config\pending-doc-updates.json" -ForegroundColor Gray
     exit 0
@@ -170,14 +171,15 @@ $triggerRecord = @{
     triggeredAt = Get-Date -Format "o"
     docUpdaterPane = $docUpdaterPane
     status = "dispatched"
-} | ConvertTo-Json
+}
 
 $historyFile = "$rootDir\config\doc-update-history.json"
 $history = @()
 if (Test-Path $historyFile) {
-    $history = Get-Content $historyFile -Raw | ConvertFrom-Json
+    $existing = Get-Content $historyFile -Raw | ConvertFrom-Json
+    if ($existing) { $history = @($existing) }
 }
 $history += $triggerRecord
-$history | ConvertTo-Json -Depth 10 | Set-Content $historyFile -Encoding UTF8
+ConvertTo-Json $history -Depth 10 | Set-Content $historyFile -Encoding UTF8
 
 exit 0

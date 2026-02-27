@@ -26,11 +26,11 @@ $ErrorActionPreference = "Stop"
 function Write-Info { param([string]$msg) Write-Host "[INFO] $msg" -ForegroundColor Cyan }
 function Write-Success { param([string]$msg) Write-Host "[SUCCESS] $msg" -ForegroundColor Green }
 function Write-Warn { param([string]$msg) Write-Host "[WARN] $msg" -ForegroundColor Yellow }
-function Write-Error { param([string]$msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
+function Write-Err { param([string]$msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
 
 # 验证环境
 if (-not $TeamLeadPaneId) {
-    Write-Error "TEAM_LEAD_PANE_ID 未设置。请先设置环境变量或在参数中指定。"
+    Write-Err "TEAM_LEAD_PANE_ID 未设置。请先设置环境变量或在参数中指定。"
     exit 1
 }
 
@@ -86,7 +86,7 @@ body: |
         return $true
     }
     catch {
-        Write-Error "发送通知失败: $_"
+        Write-Err "发送通知失败: $_"
         return $false
     }
 }
@@ -178,10 +178,14 @@ try {
         if (Test-Path $outputFile) {
             $output = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
         }
+        $timeoutBody = "任务执行超时 (${TimeoutSeconds}秒) 被强制终止。`n`n输出摘要:`n$output"
+        if ($timeoutBody.Length -gt 500) {
+            $timeoutBody = $timeoutBody.Substring(0, 500)
+        }
         Send-NotificationToTeamLead `
             -Status "timeout" `
             -TaskId "UNKNOWN" `
-            -Body "任务执行超时 (${TimeoutSeconds}秒) 被强制终止。`n`n输出摘要:`n$output".Substring(0, [Math]::Min(500, $output.Length))
+            -Body $timeoutBody
     }
     else {
         $exitCode = $process.ExitCode
@@ -192,13 +196,13 @@ try {
 
         # 读取输出
         $output = ""
-        $error = ""
+        $errOutput = ""
 
         if (Test-Path $outputFile) {
             $output = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
         }
         if (Test-Path $errorFile) {
-            $error = Get-Content $errorFile -Raw -ErrorAction SilentlyContinue
+            $errOutput = Get-Content $errorFile -Raw -ErrorAction SilentlyContinue
         }
 
         # 尝试从输出中提取任务ID
@@ -230,10 +234,10 @@ try {
             $bodyLines += "(无标准输出)"
         }
 
-        if ($error) {
+        if ($errOutput) {
             $bodyLines += ""
             $bodyLines += "错误输出:"
-            $errLines = $error -split "`n"
+            $errLines = $errOutput -split "`n"
             $bodyLines += $errLines | Select-Object -Last 10
         }
 
@@ -244,7 +248,7 @@ try {
     }
 }
 catch {
-    Write-Error "执行过程中发生异常: $_"
+    Write-Err "执行过程中发生异常: $_"
 
     # 发送错误通知
     Send-NotificationToTeamLead `

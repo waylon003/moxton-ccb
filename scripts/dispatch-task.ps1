@@ -118,4 +118,4 @@ wezterm cli send-text --pane-id $WorkerPaneId --no-paste $fullTask
 Start-Sleep -Milliseconds 100
 wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r"
 
-Write-Host "✅ 任务已派遣" -ForegroundColor Green
+Write-Host "Task dispatched." -ForegroundColor Green

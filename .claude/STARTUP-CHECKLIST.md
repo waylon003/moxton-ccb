@@ -119,8 +119,8 @@ Worker 通过 wrapper 脚本启动，**无论任务成功、失败或超时**，
 | `01-tasks/TASK-LOCKS.json` | 任务锁状态 |
 | `01-tasks/ACTIVE-RUNNER.md` | 当前执行者 |
 | `.claude/agents/` | 角色定义 |
-| `config/ccb-routing.json` | CCB 路由配置 |
-| `05-verification/ccb-runs/` | QA 验收报告 |
+| `config/worker-panels.json` | Worker 注册表 |
+| `05-verification/` | QA 验收报告 |
 
 ---
 
@@ -132,13 +132,12 @@ python scripts/assign_task.py --list
 ```
 
 ### Q: 如何分派任务给 Codex？
-```bash
-cd <对应仓库>
-CCB_CALLER=claude ask codex "任务内容"
+```powershell
+.\scripts\dispatch-task.ps1 -WorkerName "backend-dev" -TaskId "TASK-ID" -TaskContent "任务内容"
 ```
 
 ### Q: 如何检查 Codex 是否完成？
-**不需要手动检查**，设置 `CCB_CALLER=claude` 后会自动通知。
+**不需要手动检查**，Worker 完成后会自动发送 `[ROUTE]` 通知到 Team Lead。
 
 ### Q: 如何更新任务状态？
 ```bash
@@ -166,17 +165,15 @@ python scripts/assign_task.py --standard-entry
 - **你是协调者，不是执行者**
 - **所有代码修改都通过 Codex workers**
 - **所有任务都要经过 QA 验证**
-- **CCB_CALLER=claude 启用自动通知**
+- **Worker 完成后自动发送 [ROUTE] 通知**
 
 ---
 
 **最后检查**：
 ```bash
 # 确认环境
-echo "CCB_CALLER: $CCB_CALLER"
 echo "当前目录: $(pwd)"
 echo "WezTerm: $(wezterm --version 2>&1 | head -1)"
-echo "CCB: $(ccb --version 2>&1 | head -1)"
 
 # 确认角色
 echo "我是 Team Lead，负责协调而非执行"

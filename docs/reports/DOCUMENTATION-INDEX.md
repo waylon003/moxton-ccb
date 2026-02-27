@@ -90,7 +90,7 @@
 | 文件 | 说明 |
 |------|------|
 | `.claude/settings.json` | Claude Code 设置（包含 hooks） |
-| `config/ccb-routing.json` | CCB 路由配置 |
+| `config/worker-panels.json` | Worker 注册表 |
 
 ---
 

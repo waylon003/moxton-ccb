@@ -1,0 +1,21 @@
+﻿{
+    "updated_at":  "2026-02-27T19:05:57.6329435+08:00",
+    "workers":  {
+                    "backend-dev":  {
+                                        "last_seen":  "2026-02-27T19:02:00.5039853+08:00",
+                                        "pane_id":  "77",
+                                        "work_dir":  "E:\\moxton-lotapi",
+                                        "status":  "active",
+                                        "registered_at":  "2026-02-27T19:02:00.5039853+08:00",
+                                        "engine":  "codex"
+                                    },
+                    "backend-qa":  {
+                                       "last_seen":  "2026-02-27T19:05:57.6314221+08:00",
+                                       "pane_id":  "78",
+                                       "work_dir":  "E:\\moxton-lotapi",
+                                       "status":  "active",
+                                       "registered_at":  "2026-02-27T19:05:57.6314221+08:00",
+                                       "engine":  "codex"
+                                   }
+                }
+}

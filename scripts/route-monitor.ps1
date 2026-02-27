@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
-# [ROUTE] 消息监控器 - 自动解析 Worker 回执并更新任务锁
-# 用法: .\route-monitor.ps1 -TeamLeadPaneId <id> [-Continuous]
+# [ROUTE] Message Monitor - Auto-parse Worker receipts and update task locks
+# Usage: .\route-monitor.ps1 -TeamLeadPaneId <id> [-Continuous]
 
 param(
     [Parameter(Mandatory=$false)]
@@ -15,33 +15,80 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# 验证环境
+# Validate environment
 if (-not $TeamLeadPaneId) {
-    Write-Error "TEAM_LEAD_PANE_ID 未设置。请先设置环境变量。"
+    Write-Error "TEAM_LEAD_PANE_ID not set. Please set environment variable first."
     exit 1
 }
 
-# 获取项目根目录
+# Get project root
 $scriptDir = Split-Path $PSScriptRoot -Parent
-$assignTaskScript = Join-Path $scriptDir "scripts\assign_task.py"
+$locksFile = Join-Path $scriptDir "01-tasks\TASK-LOCKS.json"
 
 Write-Host ""
 Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "       [ROUTE] 消息监控器启动" -ForegroundColor Cyan
+Write-Host "       [ROUTE] Message Monitor Started" -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "Team Lead Pane ID: $TeamLeadPaneId" -ForegroundColor Cyan
 if ($Continuous) {
-    Write-Host "模式: 持续监控" -ForegroundColor Cyan
-}
-else {
-    Write-Host "模式: 单次检查" -ForegroundColor Cyan
+    Write-Host "Mode: Continuous monitoring" -ForegroundColor Cyan
+} else {
+    Write-Host "Mode: Single check" -ForegroundColor Cyan
 }
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 存储已处理的 ROUTE 消息（避免重复处理）
+# Processed messages tracking
 $processedRoutes = @{}
+$processedRoutesFile = Join-Path $env:TEMP "moxton-ccb-processed-routes.json"
 
+# Load persisted records
+function Load-ProcessedRoutes {
+    if (Test-Path $processedRoutesFile) {
+        try {
+            $content = Get-Content $processedRoutesFile -Raw -ErrorAction SilentlyContinue
+            if ($content) {
+                $saved = $content | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($saved) {
+                    foreach ($key in $saved.PSObject.Properties.Name) {
+                        $processedRoutes[$key] = $saved.$key
+                    }
+                    Write-Host "  Loaded $($processedRoutes.Count) historical message records" -ForegroundColor Gray
+                }
+            }
+        }
+        catch {
+            # Ignore load errors
+        }
+    }
+}
+
+# Save processed records (CALLED AFTER EACH MESSAGE)
+function Save-ProcessedRoutes {
+    try {
+        # Keep only last 100 records
+        $recentRoutes = @{}
+        $sortedKeys = $processedRoutes.Keys | Sort-Object -Descending | Select-Object -First 100
+        foreach ($key in $sortedKeys) {
+            $recentRoutes[$key] = $processedRoutes[$key]
+        }
+        $recentRoutes | ConvertTo-Json -Depth 3 | Set-Content $processedRoutesFile -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+    catch {
+        # Ignore save errors
+    }
+}
+
+# Compute SHA256 hash for deduplication
+function Get-MessageHash {
+    param([string]$content)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
+    $hash = $sha256.ComputeHash($bytes)
+    return [BitConverter]::ToString($hash).Replace("-", "").Substring(0, 16)
+}
+
+# Update task lock from ROUTE message
 function Update-TaskLockFromRoute {
     param(
         [string]$TaskId,
@@ -50,62 +97,97 @@ function Update-TaskLockFromRoute {
         [string]$Body
     )
 
-    Write-Host "更新任务锁: $TaskId -> $Status" -ForegroundColor Yellow
+    Write-Host "Updating task lock: $TaskId -> $Status" -ForegroundColor Yellow
 
-    # 状态映射
+    # Smart state mapping: dev success -> waiting_qa, qa success -> completed
     $lockState = switch ($Status.ToLower()) {
-        "success" { "completed" }
+        "success" {
+            if ($WorkerName -match "-qa$") {
+                "completed"
+            } elseif ($WorkerName -match "-dev$") {
+                Write-Host "  Dev done, marking as waiting_qa, needs QA verification" -ForegroundColor Cyan
+                "waiting_qa"
+            } else {
+                "waiting_qa"
+            }
+        }
         "fail" { "blocked" }
         "blocked" { "blocked" }
         "in_progress" { "in_progress" }
         "qa" { "qa" }
+        "waiting_qa" { "waiting_qa" }
         default { $Status }
     }
 
     try {
-        # 实际更新 TASK-LOCKS.json
-        $locksFile = Join-Path $scriptDir "01-tasks\TASK-LOCKS.json"
         if (Test-Path $locksFile) {
             $locks = Get-Content $locksFile -Raw | ConvertFrom-Json
 
             if ($locks.locks.$TaskId) {
                 $locks.locks.$TaskId.state = $lockState
                 $locks.locks.$TaskId.updated_at = Get-Date -Format "o"
-                $locks.locks.$TaskId.routeUpdate = @{
+                $bodyPreview = if ($Body.Length -gt 100) { $Body.Substring(0, 100) + "..." } else { $Body }
+                $routeInfo = [PSCustomObject]@{
                     worker = $WorkerName
                     timestamp = Get-Date -Format "o"
-                    bodyPreview = if ($Body.Length -gt 100) { $Body.Substring(0, 100) + "..." } else { $Body }
+                    bodyPreview = $bodyPreview
+                }
+                if ($locks.locks.$TaskId.PSObject.Properties["routeUpdate"]) {
+                    $locks.locks.$TaskId.routeUpdate = $routeInfo
+                } else {
+                    $locks.locks.$TaskId | Add-Member -NotePropertyName "routeUpdate" -NotePropertyValue $routeInfo
                 }
 
                 $locks | ConvertTo-Json -Depth 10 | Set-Content $locksFile -Encoding UTF8
-                Write-Host "  任务锁已更新: $TaskId -> $lockState" -ForegroundColor Green
+                Write-Host "  Task lock updated: $TaskId -> $lockState" -ForegroundColor Green
 
-                # 如果状态是 completed，提示可以归档
-                if ($lockState -eq "completed") {
-                    Write-Host "  提示: 任务已完成，可以归档到 completed/ 目录" -ForegroundColor Cyan
+                # Show next steps
+                switch ($lockState) {
+                    "waiting_qa" {
+                        Write-Host "  Next: Dispatch QA Worker for verification" -ForegroundColor Cyan
+                    }
+                    "completed" {
+                        Write-Host "  Task completed, can archive to completed/ folder" -ForegroundColor Cyan
+
+                        # Trigger Doc-Updater for BACKEND QA success
+                        if ($TaskId -match "^BACKEND-" -and $WorkerName -match "-qa$") {
+                            Write-Host "  Triggering Doc-Updater for API documentation..." -ForegroundColor Cyan
+                            $docTriggerScript = Join-Path $scriptDir "trigger-doc-updater.ps1"
+                            if (Test-Path $docTriggerScript) {
+                                Start-Job -ScriptBlock {
+                                    param($script, $task, $pane)
+                                    & $script -TaskId $task -TeamLeadPaneId $pane
+                                } -ArgumentList $docTriggerScript, $TaskId, $TeamLeadPaneId | Out-Null
+                            }
+                        }
+                    }
+                    "blocked" {
+                        Write-Host "  WARNING: Task blocked, needs Team Lead intervention" -ForegroundColor Red
+                    }
                 }
             }
             else {
-                Write-Host "  警告: 任务 $TaskId 未找到锁记录，跳过更新" -ForegroundColor Yellow
+                Write-Host "  Warning: Task $TaskId lock record not found, skipping update" -ForegroundColor Yellow
             }
         }
     }
     catch {
-        Write-Host "  错误: 更新任务锁失败: $_" -ForegroundColor Red
+        Write-Host "  Error: Failed to update task lock: $_" -ForegroundColor Red
     }
 }
 
+# Parse ROUTE messages from text
 function Parse-RouteMessage {
     param([string]$text)
 
-    # 匹配 [ROUTE] ... [/ROUTE] 块
+    # Match [ROUTE] ... [/ROUTE] blocks
     $routePattern = '\[ROUTE\]\s*(.*?)\s*\[/ROUTE\]'
     $matchResults = [regex]::Matches($text, $routePattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
 
     foreach ($match in $matchResults) {
         $routeContent = $match.Groups[1].Value
 
-        # 解析各个字段 - 使用局部变量避免 $matches 冲突
+        # Parse fields
         $localFrom = ""
         $localTo = ""
         $localType = ""
@@ -128,17 +210,20 @@ function Parse-RouteMessage {
             $localStatus = $matches[1]
         }
 
-        # 提取 body（多行）
+        # Extract body (multiline)
         $localBody = ""
         if ($routeContent -match 'body:\s*\|?\s*\r?\n(.*)') {
             $localBody = $matches[1].Trim()
         }
 
-        # 生成唯一标识（用于去重）- 使用分钟级精度避免吞消息
-        $routeId = "$localFrom-$localTask-$localStatus-$(Get-Date -Format 'yyyyMMddHHmm')"
+        # Deduplication: Use content hash (NOT minute-based)
+        $routeId = Get-MessageHash -content $routeContent
 
         if (-not $processedRoutes.ContainsKey($routeId)) {
-            $processedRoutes[$routeId] = Get-Date
+            $processedRoutes[$routeId] = (Get-Date).ToString("o")
+
+            # SAVE AFTER EACH MESSAGE (required by acceptance criteria)
+            Save-ProcessedRoutes
 
             [PSCustomObject]@{
                 From = $localFrom
@@ -166,7 +251,7 @@ function Show-RouteNotification {
 
     Write-Host ""
     Write-Host "==============================================" -ForegroundColor $color
-    Write-Host "  [ROUTE] 消息收到" -ForegroundColor White
+    Write-Host "  [ROUTE] Message Received" -ForegroundColor White
     Write-Host "==============================================" -ForegroundColor $color
     Write-Host "  From:   $($route.From)" -ForegroundColor White
     Write-Host "  To:     $($route.To)" -ForegroundColor White
@@ -177,10 +262,13 @@ function Show-RouteNotification {
     Write-Host ""
 }
 
-# 主监控循环
+# Initialize
+Load-ProcessedRoutes
+
+# Main monitoring loop
 do {
     try {
-        # 获取 Team Lead pane 的最新输出
+        # Get latest output from Team Lead pane
         $output = wezterm cli get-text --pane-id $TeamLeadPaneId 2>&1
 
         if ($output -match '\[ROUTE\]') {
@@ -189,40 +277,24 @@ do {
             foreach ($route in $routes) {
                 Show-RouteNotification -route $route
 
-                # 自动更新任务锁
+                # Auto-update task lock
                 if ($route.Task -and $route.Status) {
                     Update-TaskLockFromRoute `
                         -TaskId $route.Task `
                         -Status $route.Status `
                         -WorkerName $route.From `
                         -Body $route.Body
-
-                    # 如果 Backend 任务成功完成，检查是否需要触发 Doc-Updater
-                    if ($route.Status -eq "success" -and $route.Task -match "^BACKEND-") {
-                        Write-Host ""
-                        Write-Host "检测到 Backend 任务完成，检查是否需要更新 API 文档..." -ForegroundColor Cyan
-
-                        $docTriggerScript = Join-Path $scriptDir "trigger-doc-updater.ps1"
-                        if (Test-Path $docTriggerScript) {
-                            Start-Job -ScriptBlock {
-                                param($script, $task, $pane)
-                                & $script -TaskId $task -TeamLeadPaneId $pane
-                            } -ArgumentList $docTriggerScript, $route.Task, $TeamLeadPaneId | Out-Null
-
-                            Write-Host "  Doc-Updater 检查已触发 (后台运行)" -ForegroundColor Green
-                        }
-                    }
                 }
 
-                # 如果消息类型是 blocker，特别标记
+                # Blocker handling
                 if ($route.Type -eq "blocker") {
-                    Write-Host "BLOCKER 收到！需要 Team Lead 介入协调。" -ForegroundColor Red -BackgroundColor Black
+                    Write-Host "BLOCKER received! Team Lead intervention required." -ForegroundColor Red -BackgroundColor Black
                 }
             }
         }
     }
     catch {
-        Write-Host "监控出错: $_" -ForegroundColor Yellow
+        Write-Host "Monitor error: $_" -ForegroundColor Yellow
     }
 
     if ($Continuous) {
@@ -232,4 +304,4 @@ do {
 } while ($Continuous)
 
 Write-Host ""
-Write-Host "监控结束。" -ForegroundColor Cyan
+Write-Host "Monitor stopped." -ForegroundColor Cyan

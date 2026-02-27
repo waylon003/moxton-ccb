@@ -15,7 +15,7 @@ description: 指导 Team Lead 如何为 Moxton 项目编写正确的开发计划
 **用途**: 定义 Codex worker 的身份和行为规范
 
 **文件列表**:
-- `team-lead.md` - Team Lead 角色定义（CCB 编排者）
+- `team-lead.md` - Team Lead 角色定义（编排者）
 - `shop-frontend.md` - 商城前端开发者
 - `admin-frontend.md` - 管理后台前端开发者
 - `backend.md` - 后端开发者
@@ -238,8 +238,8 @@ python scripts/assign_task.py --split-request "需求描述"
 # 添加任务锁
 python scripts/assign_task.py --lock-task BACKEND-001 --task-owner team-lead --task-state assigned
 
-# 分派任务给 worker
-python scripts/assign_task.py --dispatch-ccb BACKEND-001
+# 分派任务给 worker（通过 WezTerm dispatch）
+.\scripts\dispatch-task.ps1 -WorkerName "backend-dev" -TaskId "BACKEND-001" -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-001.md" -Raw)
 
 # 查看任务锁状态
 python scripts/assign_task.py --show-task-locks
@@ -355,7 +355,7 @@ python scripts/assign_task.py --split-request "实现 Stripe 支付流程：前�
 | API 文档 | `02-api/` | 后端 API 规范 |
 | 开发指南 | `03-guides/` | 技术指南和最佳实践 |
 | 项目状态 | `04-projects/` | 三端项目状态 |
-| CCB 通信协议 | `.claude/agents/protocol.md` | 跨 agent 通信规范 |
+| 通信协议 | `.claude/agents/protocol.md` | 跨 agent 通信规范 |
 
 
 

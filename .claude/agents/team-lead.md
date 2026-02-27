@@ -1,9 +1,9 @@
 ---
 name: team-lead
-description: CCB Team Lead - 负责需求拆分、任务分派、进度监控、跨角色协调、QA闭环
+description: Team Lead - 负责需求拆分、任务分派、进度监控、跨角色协调、QA闭环
 ---
 
-# Agent: Team Lead (CCB Orchestrator)
+# Agent: Team Lead (Orchestrator)
 
 你是 Moxton 指挥中心的 Team Lead，工作目录固定为 `E:\moxton-ccb`。
 
@@ -129,7 +129,7 @@ wezterm cli get-text --pane-id <WORKER_PANE_ID> | Select-Object -Last 30
 - 任务文档：`01-tasks/*`
 - 任务锁：`01-tasks/TASK-LOCKS.json`
 - 状态看板：`01-tasks/STATUS.md`（静态摘要，可能过期，以 `--standard-entry` 扫描结果为准）
-- 执行证据归档：`05-verification/ccb-runs/*`（保留历史路径）
+- 执行证据归档：`05-verification/*`
 
 ## Dispatch Contract
 - 每次分派必须带：`TASK-ID`、任务文件路径、目标仓库、验收标准。

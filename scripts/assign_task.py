@@ -139,9 +139,9 @@ ROLE_CONFIGS: Dict[str, RoleConfig] = {
 TASK_NAME_RE = re.compile(r"^([A-Z]+(?:-[A-Z]+)?-\d+)-(.+)\.md$")
 RUNNER_LOCK_REL = Path("01-tasks") / "ACTIVE-RUNNER.md"
 TASK_LOCKS_REL = Path("01-tasks") / "TASK-LOCKS.json"
-CCB_RUNS_REL = Path("05-verification") / "ccb-runs"
+VERIFICATION_RUNS_REL = Path("05-verification") / "ccb-runs"
 VALID_RUNNERS = {"codex", "claude", "none"}
-VALID_TASK_STATES = {"assigned", "in_progress", "qa", "blocked", "completed"}
+VALID_TASK_STATES = {"assigned", "in_progress", "waiting_qa", "qa", "blocked", "completed"}
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
 DEFAULT_TASK_LOCK_TTL_HOURS = 24.0
 
@@ -573,12 +573,12 @@ def get_task_lock(data: Dict[str, Any], task_id: str) -> Dict[str, str] | None:
     return locks.get(normalize_task_id(task_id))
 
 
-def ccb_runs_dir(root: Path) -> Path:
-    return root / CCB_RUNS_REL
+def verification_runs_dir(root: Path) -> Path:
+    return root / VERIFICATION_RUNS_REL
 
 
-def ensure_ccb_runs_dir(root: Path) -> Path:
-    path = ccb_runs_dir(root)
+def ensure_verification_runs_dir(root: Path) -> Path:
+    path = verification_runs_dir(root)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -696,7 +696,7 @@ def run_doctor(
     else:
         fail("runner lock invalid or unreadable")
     if runner_lock.get("runner") == "none":
-        warn("runner lock is 'none'; set with --lock claude (CCB) or --lock codex before execution")
+        warn("runner lock is 'none'; set with --lock claude or --lock codex before execution")
 
     stale_ids = stale_task_ids(task_locks, ttl_hours)
     if stale_ids:
@@ -1872,8 +1872,6 @@ def main() -> int:
         print("  python scripts/assign_task.py --show-task-locks")
         print("  python scripts/assign_task.py --lock-task SHOP-FE-001 --task-owner team-lead")
         print("  python scripts/assign_task.py --unlock-task SHOP-FE-001")
-        print("  python scripts/assign_task.py --dispatch-ccb <TASK-ID>")
-        print("  python scripts/assign_task.py --poll-ccb --ccb-worker <WORKER-NAME>")
         print("  python scripts/assign_task.py --intake \"请编写xx接口\"")
         print("  python scripts/assign_task.py --split-request \"<requirement text>\"")
         print("  python scripts/assign_task.py --split-request-file req.md --split-roles SHOP-FE,ADMIN-FE")
