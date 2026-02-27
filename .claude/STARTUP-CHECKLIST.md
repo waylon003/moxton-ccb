@@ -6,16 +6,19 @@
 
 ## 1. 环境变量设置
 
-```bash
-export CCB_CALLER=claude
-export PATH="$PATH:/d/WezTerm-windows-20240203-110809-5046fc22"
+```powershell
+# 设置 WezTerm 路径
+$env:PATH += ";D:\WezTerm-windows-20240203-110809-5046fc22"
+
+# 获取 Team Lead 自己的 pane_id
+$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1).pane_id
+Write-Host "Team Lead Pane ID: $env:TEAM_LEAD_PANE_ID"
 ```
 
 **验证**：
-```bash
-echo $CCB_CALLER  # 应该输出: claude
+```powershell
 wezterm --version  # 应该显示版本信息
-ccb --version      # 应该显示 CCB 版本
+$env:TEAM_LEAD_PANE_ID  # 应该显示 pane ID
 ```
 
 ---
@@ -25,7 +28,7 @@ ccb --version      # 应该显示 CCB 版本
 **你是 Team Lead**，职责：
 - ✅ 需求分析、任务拆分、路由协调
 - ✅ 维护任务文档和任务锁
-- ✅ 通过 CCB 分派任务给 Codex workers
+- ✅ 通过 WezTerm 分派任务给 Workers
 - ✅ 汇总 QA 证据并向用户报告
 
 **你不是**：
@@ -63,41 +66,35 @@ python scripts/assign_task.py --scan
 
 ---
 
-## 5. CCB 工作流程
+## 5. WezTerm 工作流程
 
-### 启动 Codex Workers（如需要）
-
-**推荐方式：使用启动脚本（--full-auto + --add-dir CCB）**
+### 启动 Workers
 
 ```powershell
-# 在对应的工作目录启动 Codex
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-codex.ps1" "E:\moxton-lotapi"
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-codex.ps1" "E:\nuxt-moxton"
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-codex.ps1" "E:\moxton-lotadmin"
-```
+# 启动后端 Worker (Codex)
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex
 
-**方法 1：自动分屏**（在 PowerShell 中）：
-```powershell
-cd E:\moxton-lotapi
-ccb codex
-```
+# 启动前端 Worker (Gemini)
+.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini
 
-**方法 2：手动创建 pane**（在 Git Bash 中）：
-```bash
-# 创建新 pane
-wezterm cli split-pane --right
-
-# 在新 pane 中启动 Codex
-cd E:\moxton-lotapi
-python C:\Users\26249\AppData\Local\codex-dual\ccb codex --full-auto --add-dir "E:\moxton-ccb"
+# 启动管理后台 Worker (Codex)
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotadmin" -WorkerName "admin-fe-dev" -Engine codex
 ```
 
 ### 分派任务
 
-```bash
-# 在对应仓库目录下
-cd E:\moxton-lotapi
-CCB_CALLER=claude ask codex "$(cat .ccb/dispatch-TASK-ID.md)"
+```powershell
+# 派遣任务到指定 Worker
+.\scripts\dispatch-task.ps1 `
+  -WorkerPaneId <worker-pane-id> `
+  -TaskId "BACKEND-008" `
+  -WorkerName "backend-dev" `
+  -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-008.md" -Raw)
+```
+
+### 等待 Worker 回调
+
+Worker 完成后会自动推送 `[ROUTE]` 消息到 Team Lead，无需手动轮询。
 ```
 
 ### 自动通知

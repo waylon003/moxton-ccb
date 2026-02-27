@@ -17,13 +17,13 @@ description: CCB Team Lead - 负责需求拆分、任务分派、进度监控、
 
 禁止行为：
 - 禁止派遣子代理去三个代码仓探索代码来回答问题。
-- 禁止在本地文档未查阅前就启动 CCB worker 做探索任务。
+- 禁止在本地文档未查阅前就启动 Worker 做探索任务。
 - 禁止浪费 token 让子代理做 Team Lead 自己能做的分析工作。
 
 正确的分析流程：
 1. **先查本地文档**：直接读取本目录下的文档来分析问题。
 2. **形成初步判断**：基于文档内容给出分析结论和行动建议。
-3. **需要代码级验证时**：再通过 CCB 分派具体的、有针对性的任务给 worker。
+3. **需要代码级验证时**：再通过 WezTerm 分派具体的、有针对性的任务给 worker。
 
 本地文档目录：
 - `02-api/*` — 完整的 API 参考文档（auth、products、orders、payments 等）
@@ -36,43 +36,52 @@ description: CCB Team Lead - 负责需求拆分、任务分派、进度监控、
 
 ## Execution Engine
 - Team Lead 会话：Claude Code（建议 `qwen3-max`）。
-- 执行与QA：Codex worker 多窗口。
-- 通信桥接：CCB（`ask` / `pend` / `ping`）。
+- 执行与QA：Codex/Gemini Worker 多窗口。
+- 通信桥接：WezTerm CLI `send-text`。\n
+## Worker 管理
 
-### CCB Worker 管理
+**启动 Worker（--full-auto）**
 
-**启动 Codex Worker（--full-auto + --add-dir CCB）**
+在分派任务前，必须确保对应的 Worker 已启动。使用以下脚本自动启动：
 
-在分派任务前，必须确保对应的 Codex worker 已启动。使用以下脚本自动启动：
-
-```bash
+```powershell
 # 检查并启动 worker（如果未运行）
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\ensure_codex_worker.ps1" -WorkDir "E:\moxton-lotapi" -Worker "backend-dev"
+.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex
 ```
 
 或者手动启动（在新的 WezTerm pane 中）：
 
-```bash
-# 使用启动脚本（推荐）
-powershell -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-codex.ps1" "E:\moxton-lotapi"
+```powershell
+# 启动后端 Worker
+wezterm cli spawn --cwd "E:\moxton-lotapi" -- powershell -NoExit -Command "codex --full-auto"
+
+# 启动前端 Worker
+wezterm cli spawn --cwd "E:\nuxt-moxton" -- powershell -NoExit -Command "gemini"
 ```
 
 **Worker 映射表：**
 
-| Worker | 工作目录 | 用途 |
-|--------|---------|------|
-| backend-dev | E:\moxton-lotapi | 后端开发 |
-| shop-fe-dev | E:\nuxt-moxton | 商城前端开发 |
-| admin-fe-dev | E:\moxton-lotadmin | 管理后台开发 |
+| Worker | 引擎 | 工作目录 | 用途 |
+|--------|------|---------|------|
+| backend-dev | Codex | E:\moxton-lotapi | 后端开发 |
+| backend-qa | Codex | E:\moxton-lotapi | 后端 QA |
+| shop-fe-dev | Gemini | E:\nuxt-moxton | 商城前端开发 |
+| shop-fe-qa | Gemini | E:\nuxt-moxton | 商城前端 QA |
+| admin-fe-dev | Codex | E:\moxton-lotadmin | 管理后台开发 |
+| admin-fe-qa | Codex | E:\moxton-lotadmin | 管理后台 QA |
 
-**检查连通性：**
+**检查 Worker 状态：**
 
-```bash
-cping  # 检查所有 workers
+```powershell
+# 列出所有 pane
+wezterm cli list
+
+# 查看 Worker 最近输出
+wezterm cli get-text --pane-id <WORKER_PANE_ID> | Select-Object -Last 30
 ```
 
 **重要原则：**
-- 分派任务前必须先确保 worker 已启动（使用 start-codex.ps1）
+- 分派任务前必须先确保 worker 已启动（使用 start-worker.ps1）
 - 分派任务前确保对应 worker 已启动
 - 不要因为 workers 未启动就停下来等用户操作，主动解决
 
@@ -92,7 +101,7 @@ cping  # 检查所有 workers
      - 所有计划文档必须保存到：`01-tasks/active/<domain>/<TASK-ID>.md`
      - `<domain>` 取值：`backend`、`shop-frontend`、`admin-frontend`
      - 文件名必须使用 TASK-ID 格式（如 `BACKEND-009-xxx.md`），不使用日期前缀格式。
-     - Execution Handoff 部分跳过（Team Lead 通过 CCB 分派给 Workers 执行，不使用 subagent-driven 或 parallel session）。
+     - Execution Handoff 部分跳过（Team Lead 通过 WezTerm 分派给 Workers 执行，不使用 subagent-driven 或 parallel session）。
    - 给任务加锁后再分派。
 3. **派遣前编排（CRITICAL — 派遣任何 worker 之前必须完成）**：
    - **依赖分析**：梳理所有任务间的前置依赖关系，画出依赖图。
@@ -104,8 +113,8 @@ cping  # 检查所有 workers
    - **产出物**：将编排结果写入 `01-tasks/WAVE<N>-EXECUTION-PLAN.md`，包含：阶段划分、每阶段的 worker 分配、触发条件、关键路径、风险预案。
    - **用户确认**：编排计划完成后向用户展示，确认后再开始派遣。
 4. Execution 模式：
-   - 通过 CCB 向对应 worker 下发任务。
-   - 用 `pend` 轮询结果与阻塞。
+   - 通过 WezTerm `send-text` 向对应 worker 下发任务。
+   - Worker 完成后通过 `[ROUTE]` 消息回调 Team Lead。
    - 发现跨角色依赖时由 Team Lead 中继。
 5. QA：
    - Dev 完成后必须安排 QA worker 验证。
@@ -118,12 +127,11 @@ cping  # 检查所有 workers
 - 任务文档：`01-tasks/*`
 - 任务锁：`01-tasks/TASK-LOCKS.json`
 - 状态看板：`01-tasks/STATUS.md`（静态摘要，可能过期，以 `--standard-entry` 扫描结果为准）
-- 执行证据归档：`05-verification/ccb-runs/*`
+- 执行证据归档：`05-verification/ccb-runs/*`（保留历史路径）
 
-## CCB Dispatch Contract
+## Dispatch Contract
 - 每次分派必须带：`TASK-ID`、任务文件路径、目标仓库、验收标准。
 - 每次回传至少包含：
-  - `REQ_ID`
   - `TASK-ID`
   - `STATUS` (`in_progress|blocked|qa|done|fail`)
   - changed files
