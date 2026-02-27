@@ -67,7 +67,10 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "Bash(PATH=\"$PATH:/d/WezTerm-windows-20240203-110809-5046fc22\" wezterm cli spawn:*)"
+      "Bash(PATH=\"$PATH:/d/WezTerm-windows-20240203-110809-5046fc22\" wezterm cli spawn:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(powershell.exe -Command \"$env:PATH += '';D:\\\\WezTerm-windows-20240203-110809-5046fc22''; $pane = wezterm cli list --format json | ConvertFrom-Json | Where-Object { $_title -like ''*claude*'' } | Select-Object -First 1; $env:TEAM_LEAD_PANE_ID = $pane.pane_id; Write-Host \"\"Team Lead Pane ID: $env:TEAM_LEAD_PANE_ID\"\"; .\\\\scripts\\\\start-worker.ps1 -WorkDir ''E:\\\\moxton-lotapi'' -WorkerName ''backend-dev'' -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID\")",
+      "Bash(powershell -File:*)"
     ]
   }
 }

@@ -4,6 +4,47 @@
 
 ---
 
+## Shell 使用规则（必读）
+
+本项目运行在 Windows 上，所有脚本均为 PowerShell (.ps1)。Claude Code 默认 shell 是 bash（Git Bash），直接在 bash 中内联 PowerShell 命令会导致 `$` 变量被 bash 吞掉、引号冲突、中文乱码等不可调试的问题。
+
+**硬性规则：**
+
+1. **执行 .ps1 脚本** — 始终用 `-File`，禁止用 `-Command`：
+   ```bash
+   powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\xxx.ps1" -Arg1 value1
+   ```
+
+2. **需要内联 PowerShell 逻辑** — 先写临时 .ps1 文件，再用 `-File` 执行，最后删除：
+   ```bash
+   # 1. Write tool 写 _temp.ps1
+   # 2. powershell -NoProfile -ExecutionPolicy Bypass -File "_temp.ps1"
+   # 3. 删除 _temp.ps1
+   ```
+
+3. **绝对禁止的模式：**
+   ```bash
+   # ❌ bash 套 powershell -Command "..." — $ 和引号必崩
+   powershell -Command "$files = @('a','b'); foreach($f in $files){...}"
+
+   # ❌ bash 套 powershell -EncodedCommand — 难以维护
+   powershell -EncodedCommand <base64>
+   ```
+
+4. **简单只读命令例外** — 不含 `$`、不含中文、不含引号嵌套时可用 `-Command`：
+   ```bash
+   powershell -NoProfile -Command "Get-Date"
+   powershell -NoProfile -Command "Test-Path 'E:\moxton-ccb\scripts\xxx.ps1'"
+   ```
+
+5. **WezTerm CLI** 是原生命令行工具，可直接在 bash 中调用：
+   ```bash
+   wezterm cli list --format json
+   wezterm cli send-text --pane-id 123 --no-paste "hello"
+   ```
+
+---
+
 ## 架构概述
 
 Moxton-CCB 是三个业务仓库的共享知识与编排中心：

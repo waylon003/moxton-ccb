@@ -1,0 +1,346 @@
+#!/usr/bin/env pwsh
+# [ROUTE] 消息监控器 - 自动解析 Worker 回执并更新任务锁
+# 用法: .\route-monitor.ps1 -TeamLeadPaneId <id> [-Continuous]
+
+param(
+    [Parameter(Mandatory=$false)]
+    [string]$TeamLeadPaneId = $env:TEAM_LEAD_PANE_ID,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$Continuous,
+
+    [Parameter(Mandatory=$false)]
+    [int]$PollIntervalSeconds = 5
+)
+
+$ErrorActionPreference = "Stop"
+
+# 验证环境
+if (-not $TeamLeadPaneId) {
+    Write-Error "TEAM_LEAD_PANE_ID 未设置。请先设置环境变量。"
+    exit 1
+}
+
+# 获取项目根目录
+$scriptDir = Split-Path $PSScriptRoot -Parent
+$assignTaskScript = Join-Path $scriptDir "scripts\assign_task.py"
+
+Write-Host ""
+Write-Host "==============================================" -ForegroundColor Cyan
+Write-Host "       [ROUTE] 消息监控器启动" -ForegroundColor Cyan
+Write-Host "==============================================" -ForegroundColor Cyan
+Write-Host "Team Lead Pane ID: $TeamLeadPaneId" -ForegroundColor Cyan
+if ($Continuous) {
+    Write-Host "模式: 持续监控" -ForegroundColor Cyan
+}
+else {
+    Write-Host "模式: 单次检查" -ForegroundColor Cyan
+}
+Write-Host "==============================================" -ForegroundColor Cyan
+Write-Host ""
+
+# 存储已处理的 ROUTE 消息（避免重复处理）
+$processedRoutes = @{}
+
+# 持久化已处理消息记录的路径
+$processedRoutesFile = Join-Path $env:TEMP "moxton-ccb-processed-routes.json"
+
+# 加载已持久化的记录
+function Load-ProcessedRoutes {
+    if (Test-Path $processedRoutesFile) {
+        try {
+            $content = Get-Content $processedRoutesFile -Raw -ErrorAction SilentlyContinue
+            if ($content) {
+                $saved = $content | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($saved) {
+                    foreach ($key in $saved.PSObject.Properties.Name) {
+                        $processedRoutes[$key] = $saved.$key
+                    }
+                    Write-Host "  已加载 $($processedRoutes.Count) 条历史消息记录" -ForegroundColor Gray
+                }
+            }
+        }
+        catch {
+            # 忽略加载错误
+        }
+    }
+}
+
+# 保存已处理记录
+function Save-ProcessedRoutes {
+    try {
+        # 只保留最近100条记录，避免文件过大
+        $recentRoutes = @{}
+        $sortedKeys = $processedRoutes.Keys | Sort-Object -Descending | Select-Object -First 100
+        foreach ($key in $sortedKeys) {
+            $recentRoutes[$key] = $processedRoutes[$key]
+        }
+        $recentRoutes | ConvertTo-Json -Depth 3 | Set-Content $processedRoutesFile -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+    catch {
+        # 忽略保存错误
+    }
+}
+
+# 清理过期记录（超过24小时的）
+function Clean-OldProcessedRoutes {
+    $now = Get-Date
+    $keysToRemove = @()
+    foreach ($key in $processedRoutes.Keys) {
+        try {
+            $timestamp = [DateTime]$processedRoutes[$key]
+            if (($now - $timestamp).TotalHours -gt 24) {
+                $keysToRemove += $key
+            }
+        }
+        catch {
+            $keysToRemove += $key
+        }
+    }
+    foreach ($key in $keysToRemove) {
+        $processedRoutes.Remove($key)
+    }
+}
+
+# 计算消息内容的 SHA256 哈希作为去重键
+function Get-MessageHash {
+    param([string]$content)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
+    $hash = $sha256.ComputeHash($bytes)
+    return [BitConverter]::ToString($hash).Replace("-", "").Substring(0, 16)
+}
+
+# 初始化加载
+Load-ProcessedRoutes
+Clean-OldProcessedRoutes
+
+function Update-TaskLockFromRoute {
+    param(
+        [string]$TaskId,
+        [string]$Status,
+        [string]$WorkerName,
+        [string]$Body,
+        [string]$MessageType = "dev"  # 新增：消息类型 (dev/qa)
+    )
+
+    Write-Host "更新任务锁: $TaskId -> $Status (from: $WorkerName, type: $MessageType)" -ForegroundColor Yellow
+
+    # 智能状态映射：区分 dev 和 qa 的 success
+    $lockState = switch ($Status.ToLower()) {
+        "success" {
+            # 关键修复：根据 Worker 名称判断是 dev 还是 qa
+            if ($WorkerName -match "-qa$") {
+                # QA Worker 成功 -> 任务真正完成
+                "completed"
+            }
+            elseif ($WorkerName -match "-dev$") {
+                # Dev Worker 成功 -> 等待 QA
+                Write-Host "  Dev 完成，标记为 waiting_qa，需要 QA 验收" -ForegroundColor Cyan
+                "waiting_qa"
+            }
+            else {
+                # 无法判断，保持保守状态
+                Write-Host "  警告：无法判断 Worker 类型，默认标记为 waiting_qa" -ForegroundColor Yellow
+                "waiting_qa"
+            }
+        }
+        "fail" { "blocked" }
+        "blocked" { "blocked" }
+        "in_progress" { "in_progress" }
+        "qa" { "qa" }
+        "waiting_qa" { "waiting_qa" }
+        default { $Status }
+    }
+
+    try {
+        # 实际更新 TASK-LOCKS.json
+        $locksFile = Join-Path $scriptDir "01-tasks\TASK-LOCKS.json"
+        if (Test-Path $locksFile) {
+            $locks = Get-Content $locksFile -Raw | ConvertFrom-Json
+
+            if ($locks.locks.$TaskId) {
+                $locks.locks.$TaskId.state = $lockState
+                $locks.locks.$TaskId.updated_at = Get-Date -Format "o"
+                $locks.locks.$TaskId.routeUpdate = @{
+                    worker = $WorkerName
+                    timestamp = Get-Date -Format "o"
+                    bodyPreview = if ($Body.Length -gt 100) { $Body.Substring(0, 100) + "..." } else { $Body }
+                    messageType = $MessageType
+                }
+
+                # 记录状态流转历史
+                if (-not $locks.locks.$TaskId.stateHistory) {
+                    $locks.locks.$TaskId.stateHistory = @()
+                }
+                $locks.locks.$TaskId.stateHistory += @{
+                    state = $lockState
+                    timestamp = Get-Date -Format "o"
+                    worker = $WorkerName
+                }
+
+                $locks | ConvertTo-Json -Depth 10 | Set-Content $locksFile -Encoding UTF8
+                Write-Host "  任务锁已更新: $TaskId -> $lockState" -ForegroundColor Green
+
+                # 提示下一步操作
+                switch ($lockState) {
+                    "waiting_qa" {
+                        Write-Host "  下一步: 派遣 QA Worker 进行验收" -ForegroundColor Cyan
+                    }
+                    "completed" {
+                        Write-Host "  提示: 任务已完成，可以归档到 completed/ 目录" -ForegroundColor Cyan
+                    }
+                    "blocked" {
+                        Write-Host "  警告: 任务阻塞，需要 Team Lead 介入" -ForegroundColor Red
+                    }
+                }
+            }
+            else {
+                Write-Host "  警告: 任务 $TaskId 未找到锁记录，跳过更新" -ForegroundColor Yellow
+            }
+        }
+    }
+    catch {
+        Write-Host "  错误: 更新任务锁失败: $_" -ForegroundColor Red
+    }
+}
+
+function Parse-RouteMessage {
+    param([string]$text)
+
+    # 匹配 [ROUTE] ... [/ROUTE] 块
+    $routePattern = '\[ROUTE\]\s*(.*?)\s*\[/ROUTE\]'
+    $matchResults = [regex]::Matches($text, $routePattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+
+    foreach ($match in $matchResults) {
+        $routeContent = $match.Groups[1].Value
+
+        # 解析各个字段 - 使用局部变量避免 $matches 冲突
+        $localFrom = ""
+        $localTo = ""
+        $localType = ""
+        $localTask = ""
+        $localStatus = ""
+
+        if ($routeContent -match 'from:\s*(\S+)') {
+            $localFrom = $matches[1]
+        }
+        if ($routeContent -match 'to:\s*(\S+)') {
+            $localTo = $matches[1]
+        }
+        if ($routeContent -match 'type:\s*(\S+)') {
+            $localType = $matches[1]
+        }
+        if ($routeContent -match 'task:\s*(\S+)') {
+            $localTask = $matches[1]
+        }
+        if ($routeContent -match 'status:\s*(\S+)') {
+            $localStatus = $matches[1]
+        }
+
+        # 提取 body（多行）
+        $localBody = ""
+        if ($routeContent -match 'body:\s*\|?\s*\r?\n(.*)') {
+            $localBody = $matches[1].Trim()
+        }
+
+        # 生成唯一标识（用于去重）- 使用消息内容哈希
+        $routeId = Get-MessageHash -content $routeContent
+
+        if (-not $processedRoutes.ContainsKey($routeId)) {
+            $processedRoutes[$routeId] = (Get-Date).ToString("o")
+            Save-ProcessedRoutes
+
+            [PSCustomObject]@{
+                From = $localFrom
+                To = $localTo
+                Type = $localType
+                Task = $localTask
+                Status = $localStatus
+                Body = $localBody
+                RouteId = $routeId
+            }
+        }
+    }
+}
+
+function Show-RouteNotification {
+    param([PSCustomObject]$route)
+
+    $color = "Yellow"
+    if ($route.Status -eq "success") {
+        $color = "Green"
+    }
+    elseif ($route.Status -eq "fail") {
+        $color = "Red"
+    }
+
+    Write-Host ""
+    Write-Host "==============================================" -ForegroundColor $color
+    Write-Host "  [ROUTE] 消息收到" -ForegroundColor White
+    Write-Host "==============================================" -ForegroundColor $color
+    Write-Host "  From:   $($route.From)" -ForegroundColor White
+    Write-Host "  To:     $($route.To)" -ForegroundColor White
+    Write-Host "  Task:   $($route.Task)" -ForegroundColor White
+    Write-Host "  Status: $($route.Status)" -ForegroundColor White
+    Write-Host "  Type:   $($route.Type)" -ForegroundColor White
+    Write-Host "==============================================" -ForegroundColor $color
+    Write-Host ""
+}
+
+# 主监控循环
+do {
+    try {
+        # 获取 Team Lead pane 的最新输出
+        $output = wezterm cli get-text --pane-id $TeamLeadPaneId 2>&1
+
+        if ($output -match '\[ROUTE\]') {
+            $routes = Parse-RouteMessage -text $output
+
+            foreach ($route in $routes) {
+                Show-RouteNotification -route $route
+
+                # 自动更新任务锁
+                if ($route.Task -and $route.Status) {
+                    Update-TaskLockFromRoute `
+                        -TaskId $route.Task `
+                        -Status $route.Status `
+                        -WorkerName $route.From `
+                        -Body $route.Body
+
+                    # 如果 Backend QA 任务成功完成，触发 Doc-Updater
+                    if ($route.Status -eq "success" -and $route.Task -match "^BACKEND-" -and $route.From -match "-qa$") {
+                        Write-Host ""
+                        Write-Host "检测到 Backend QA 通过，触发 API 文档更新..." -ForegroundColor Cyan
+
+                        $docTriggerScript = Join-Path $scriptDir "trigger-doc-updater.ps1"
+                        if (Test-Path $docTriggerScript) {
+                            Start-Job -ScriptBlock {
+                                param($script, $task, $pane)
+                                & $script -TaskId $task -TeamLeadPaneId $pane
+                            } -ArgumentList $docTriggerScript, $route.Task, $TeamLeadPaneId | Out-Null
+
+                            Write-Host "  Doc-Updater 已触发 (后台运行)" -ForegroundColor Green
+                        }
+                    }
+                }
+
+                # 如果消息类型是 blocker，特别标记
+                if ($route.Type -eq "blocker") {
+                    Write-Host "BLOCKER 收到！需要 Team Lead 介入协调。" -ForegroundColor Red -BackgroundColor Black
+                }
+            }
+        }
+    }
+    catch {
+        Write-Host "监控出错: $_" -ForegroundColor Yellow
+    }
+
+    if ($Continuous) {
+        Write-Host "." -NoNewline -ForegroundColor Gray
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+} while ($Continuous)
+
+Write-Host ""
+Write-Host "Monitor stopped." -ForegroundColor Cyan
