@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Doc-Updater 自动触发器
 # 在检测到 Backend API 变更完成后自动更新文档
 

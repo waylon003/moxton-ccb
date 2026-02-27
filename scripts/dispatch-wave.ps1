@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # 波浪式并行任务编排执行器
 # 自动读取 WAVE-EXECUTION-PLAN.md 并并行分派任务
 

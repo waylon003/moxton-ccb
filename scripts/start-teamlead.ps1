@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Team Lead 启动交互脚本 - 自动检测模式并询问用户
 
 param(

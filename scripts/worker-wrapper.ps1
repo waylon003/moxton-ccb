@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Worker Wrapper - 强制回执机制
 # 用法: .\scripts\worker-wrapper.ps1 -Engine codex -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev"
 
