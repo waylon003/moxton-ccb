@@ -160,9 +160,49 @@ assigned → in_progress → qa → completed
               blocked    fail → retry
 ```
 
+### 6. 启动向导（推荐入口）
+
+一键启动 Team Lead 交互向导，自动检测任务状态并引导选择：
+
+```powershell
+.\scripts\start-teamlead.ps1
+```
+
+向导会自动：
+- 检测活跃任务数量
+- 询问工作模式（执行/规划/管理）
+- 引导启动 Workers 或分派任务
+
 ---
 
-## 关键路径
+### 7. 并行编排执行（Waves）
+
+如果你有 WAVE-EXECUTION-PLAN.md 执行计划：
+
+```powershell
+# 自动读取最新计划并并行分派
+.\scripts\dispatch-wave.ps1
+
+# 指定特定计划文件
+.\scripts\dispatch-wave.ps1 -WavePlan "01-tasks\WAVE3-EXECUTION-PLAN.md"
+
+# 模拟运行（不实际分派）
+.\scripts\dispatch-wave.ps1 -DryRun
+```
+
+---
+
+### 8. 自动 API 文档更新
+
+当 Backend 任务成功完成时，系统会自动：
+1. 检测是否涉及 API 变更
+2. 触发 doc-updater Worker
+3. 更新 `02-api/` 文档
+
+也可手动触发：
+```powershell
+.\scripts\trigger-doc-updater.ps1 -TaskId "BACKEND-008"
+```
 
 | 路径 | 用途 |
 |------|------|

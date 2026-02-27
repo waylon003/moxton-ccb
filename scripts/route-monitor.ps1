@@ -196,6 +196,22 @@ do {
                         -Status $route.Status `
                         -WorkerName $route.From `
                         -Body $route.Body
+
+                    # 如果 Backend 任务成功完成，检查是否需要触发 Doc-Updater
+                    if ($route.Status -eq "success" -and $route.Task -match "^BACKEND-") {
+                        Write-Host ""
+                        Write-Host "检测到 Backend 任务完成，检查是否需要更新 API 文档..." -ForegroundColor Cyan
+
+                        $docTriggerScript = Join-Path $scriptDir "trigger-doc-updater.ps1"
+                        if (Test-Path $docTriggerScript) {
+                            Start-Job -ScriptBlock {
+                                param($script, $task, $pane)
+                                & $script -TaskId $task -TeamLeadPaneId $pane
+                            } -ArgumentList $docTriggerScript, $route.Task, $TeamLeadPaneId | Out-Null
+
+                            Write-Host "  Doc-Updater 检查已触发 (后台运行)" -ForegroundColor Green
+                        }
+                    }
                 }
 
                 # 如果消息类型是 blocker，特别标记
