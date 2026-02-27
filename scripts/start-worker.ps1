@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
-# 启动 Worker 并注入强制通信协议
-# 用法: .\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -TeamLeadPaneId "5"
+# 启动 Worker（使用 Wrapper 强制回执）
+# 用法: .\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex
 
 param(
     [Parameter(Mandatory=$true)]
@@ -9,58 +9,50 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$WorkerName,
 
-    [Parameter(Mandatory=$true)]
-    [string]$TeamLeadPaneId,
+    [Parameter(Mandatory=$false)]
+    [string]$TeamLeadPaneId = $env:TEAM_LEAD_PANE_ID,
 
     [Parameter(Mandatory=$false)]
     [ValidateSet("codex", "gemini")]
-    [string]$Engine = "codex"
+    [string]$Engine = "codex",
+
+    [Parameter(Mandatory=$false)]
+    [int]$TimeoutSeconds = 3600
 )
 
 $ErrorActionPreference = "Stop"
 
-# 1. 生成强制指令
-$instructions = & "$PSScriptRoot\worker-instructions.ps1" `
-    -WorkerName $WorkerName `
-    -WorkDir $WorkDir `
-    -TeamLeadPaneId $TeamLeadPaneId `
-    -Engine $Engine
+# 验证 TeamLeadPaneId
+if (-not $TeamLeadPaneId) {
+    Write-Error "TEAM_LEAD_PANE_ID 未设置。请设置环境变量或在参数中指定。"
+    Write-Host "示例: `$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { `$_.title -like '*claude*' } | Select-Object -First 1).pane_id"
+    exit 1
+}
 
-# 2. 保存指令到临时文件
-$tempFile = "$env:TEMP\$WorkerName-instructions-$(Get-Random).md"
-$instructions | Set-Content -Path $tempFile -Encoding UTF8
-Write-Host "Instructions saved to: $tempFile"
+# 获取 Wrapper 脚本路径
+$wrapperScript = Join-Path $PSScriptRoot "worker-wrapper.ps1"
 
-# 3. 设置环境变量
-$env:TEAM_LEAD_PANE_ID = $TeamLeadPaneId
-$env:WORKER_NAME = $WorkerName
-$env:WORK_DIR = $WorkDir
+if (-not (Test-Path $wrapperScript)) {
+    Write-Error "Worker wrapper 脚本未找到: $wrapperScript"
+    exit 1
+}
 
-# 4. 启动 Worker
 Write-Host ""
-Write-Host "=========================================="
-Write-Host "Starting $Engine Worker: $WorkerName"
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host "启动 Worker (强制回执模式)" -ForegroundColor Cyan
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host "Worker: $WorkerName"
+Write-Host "Engine: $Engine"
 Write-Host "WorkDir: $WorkDir"
 Write-Host "Team Lead Pane: $TeamLeadPaneId"
-Write-Host "=========================================="
+Write-Host "Timeout: $TimeoutSeconds seconds"
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host ""
 
-if ($Engine -eq "codex") {
-    # Codex: 使用 --prompt 注入指令
-    $env:CURRENT_INSTRUCTIONS = $tempFile
+# 构建启动命令
+$command = @"
+& "$wrapperScript" -Engine $Engine -WorkDir "$WorkDir" -WorkerName "$WorkerName" -TeamLeadPaneId "$TeamLeadPaneId" -TimeoutSeconds $TimeoutSeconds
+"@
 
-    # 切换到工作目录启动
-    Set-Location $WorkDir
-
-    # 启动 Codex（指令已通过环境变量和 prompt 注入）
-    # 用户会看到强制协议，必须遵守
-    codex --prompt $instructions
-
-} else {
-    # Gemini: 直接注入到环境变量
-    $env:GEMINI_INSTRUCTIONS = $instructions
-
-    Set-Location $WorkDir
-
-    # Gemini CLI 会读取环境变量中的指令
-    gemini
-}
+# 在新 WezTerm pane 中启动 Wrapper
+wezterm cli spawn --cwd "$PSScriptRoot" -- powershell -NoExit -Command $command

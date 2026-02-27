@@ -56,7 +56,9 @@ Write-Host "Team Lead Pane ID: $env:TEAM_LEAD_PANE_ID"
 $env:PATH += ";D:\WezTerm-windows-20240203-110809-5046fc22"
 ```
 
-### 2. 启动 Workers
+### 2. 启动 Workers（强制回执机制）
+
+Worker 通过 wrapper 脚本启动，确保**无论任务成功、失败或超时**，都会强制发送回执通知给 Team Lead。
 
 ```powershell
 # 启动后端 Worker (Codex)
@@ -65,6 +67,12 @@ $env:PATH += ";D:\WezTerm-windows-20240203-110809-5046fc22"
 # 启动前端 Worker (Gemini)
 .\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini
 ```
+
+**启动过程**：
+1. Wrapper 启动 Codex/Gemini 进程
+2. 实时监控输出
+3. 进程退出/超时后**强制发送** `[ROUTE]` 通知到 Team Lead
+4. 通知包含：exit code、输出摘要、错误信息
 
 ### 3. 派遣任务
 

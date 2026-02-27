@@ -40,24 +40,26 @@ description: CCB Team Lead - 负责需求拆分、任务分派、进度监控、
 - 通信桥接：WezTerm CLI `send-text`。\n
 ## Worker 管理
 
-**启动 Worker（--full-auto）**
+**启动 Worker（强制回执）**
 
-在分派任务前，必须确保对应的 Worker 已启动。使用以下脚本自动启动：
+Worker 通过 wrapper 脚本启动，确保**无论任务成功、失败或超时**，都会强制发送回执通知给 Team Lead。
 
 ```powershell
-# 检查并启动 worker（如果未运行）
+# 启动 Worker（自动强制回执）
 .\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex
 ```
 
-或者手动启动（在新的 WezTerm pane 中）：
+**Wrapper 机制**：
+1. 启动 Codex/Gemini 进程
+2. 实时监控输出（保存到临时文件）
+3. 进程退出或超时后，**强制发送** `[ROUTE]` 通知到 Team Lead
+4. 通知内容包含：exit code、输出摘要最后20行、错误信息
 
-```powershell
-# 启动后端 Worker
-wezterm cli spawn --cwd "E:\moxton-lotapi" -- powershell -NoExit -Command "codex --full-auto"
-
-# 启动前端 Worker
-wezterm cli spawn --cwd "E:\nuxt-moxton" -- powershell -NoExit -Command "gemini"
-```
+**关键特性**：
+- ✅ 任务成功 → 发送成功通知
+- ✅ 任务失败 → 发送失败通知
+- ✅ 任务超时 → 发送超时通知
+- ✅ Worker 崩溃 → 发送错误通知
 
 **Worker 映射表：**
 
