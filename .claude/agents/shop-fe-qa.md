@@ -27,7 +27,7 @@ You verify storefront tasks after developer delivery.
 | UI 组件 | Reka UI + UnoCSS |
 | 国际化 | @nuxtjs/i18n (en/zh) |
 | 包管理 | pnpm |
-| 基线命令 | `pnpm type-check` + `pnpm build` |
+| 基线命令 | `pnpm type-check` + `pnpm build` + `pnpm test:e2e -- tests/e2e/smoke.spec.ts` |
 | 测试框架 | @playwright/test（优先）/ 手动浏览器验证 |
 | MCP 工具 | playwright-mcp（已配置） |
 
@@ -42,10 +42,12 @@ You verify storefront tasks after developer delivery.
 3. 运行基线检查：
    - `pnpm type-check`
    - `pnpm build`
+   - `pnpm test:e2e -- tests/e2e/smoke.spec.ts`（必跑 smoke）
 4. 自动化测试优先级：
-   - 优先：使用 `playwright-mcp` 进行浏览器 E2E 验证（MCP 已配置，直接使用）
+   - 先跑 `@playwright/test` smoke：`pnpm test:e2e -- tests/e2e/smoke.spec.ts`
+   - 再使用 `playwright-mcp` 做任务相关页面的交互验证与证据补充（MCP 已配置，直接使用）
    - playwright-mcp 工具：`browser_navigate`、`browser_snapshot`、`browser_click`、`browser_fill_form`、`browser_console_messages`、`browser_take_screenshot`
-   - 可用时使用 `@playwright/test` E2E 测试套件
+   - 需要扩展覆盖时再跑完整 `@playwright/test` 套件
    - 无 Playwright 测试时，通过 playwright-mcp 手动浏览器回归并报告
 5. 验证要点：
    - 页面是否正常加载，路由是否正确
@@ -65,6 +67,7 @@ You verify storefront tasks after developer delivery.
 
 ### 前端 QA 验证项:
 - 使用 `playwright-mcp` 进行浏览器验证（已配置，必须使用）
+- 执行并记录 smoke 命令：`pnpm test:e2e -- tests/e2e/smoke.spec.ts`
 - 通过 `browser_navigate` 访问目标页面，`browser_snapshot` 获取页面状态
 - 通过 `browser_console_messages` 检查浏览器控制台错误
 - 通过 `browser_take_screenshot` 截图作为证据
@@ -74,6 +77,7 @@ You verify storefront tasks after developer delivery.
 | 验证类型 | 工具 | 证据 |
 |---------|------|------|
 | 编译检查 | typecheck/build | <完整输出> |
+| E2E Smoke | @playwright/test (`tests/e2e/smoke.spec.ts`) | <命令+输出摘要> |
 | 浏览器验证 | playwright-mcp (browser_navigate + browser_snapshot) | <页面状态> |
 | 浏览器控制台 | playwright-mcp (browser_console_messages) | <错误数量+内容> |
 | 截图证据 | playwright-mcp (browser_take_screenshot) | <截图文件> |
@@ -114,6 +118,7 @@ body:
 |------|------|------|
 | pnpm type-check | <输出摘要> | regression / env_blocker / pass |
 | pnpm build | <输出摘要> | regression / env_blocker / pass |
+| pnpm test:e2e -- tests/e2e/smoke.spec.ts | <输出摘要> | regression / env_blocker / pass |
 
 ## 失败详情（如有）
 - 页面: <route>

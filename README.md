@@ -1,142 +1,46 @@
-﻿# Moxton-CCB 指挥中心
+# Moxton-CCB 指挥中心
 
-本仓库是三个业务仓库的共享知识与编排中心：
-- `E:\nuxt-moxton`（SHOP-FE，商城前端）
-- `E:\moxton-lotadmin`（ADMIN-FE，管理后台前端）
-- `E:\moxton-lotapi`（BACKEND，后端 API）
+多 AI 协作的任务编排系统，协调三个业务仓库的开发工作。
 
-架构说明：
-- Team Lead：在 `E:\moxton-ccb` 启动的 Claude Code 会话
-- Workers：
-  - Codex — 负责 BACKEND（开发+QA）和 ADMIN-FE（开发+QA）
-  - Gemini CLI — 负责 SHOP-FE（开发+QA），配有 playwright-mcp
-- 通信方式：WezTerm `send-text` 直接推送（强制回执机制）
-- 状态来源：`01-tasks/*` 与 `01-tasks/TASK-LOCKS.json`
+## 架构
 
-## Quick Start
+- **Team Lead**：Claude Code 会话（本仓库）— 需求拆分、任务分派、进度监控
+- **Workers**：Codex / Gemini CLI — 在 WezTerm 多窗口中执行开发和 QA
+- **通信**：WezTerm CLI `send-text` + `[ROUTE]` 回调机制
 
-1. 安装 WezTerm（一次性设置），确保 Gemini CLI 已安装
+## 业务仓库
 
-2. 启动 Claude Code 作为 Team Lead:
-```bash
-cd E:\moxton-ccb
-# Claude Code 会自动加载 Team Lead 角色
-```
+| 前缀 | 仓库 | Worker 引擎 |
+|------|------|------------|
+| BACKEND | `E:\moxton-lotapi` | Codex |
+| ADMIN-FE | `E:\moxton-lotadmin` | Codex |
+| SHOP-FE | `E:\nuxt-moxton` | Gemini |
 
-3. 启动 Workers:
-```powershell
-# 设置环境变量
-$env:PATH += ";D:\WezTerm-windows-20240203-110809-5046fc22"
-$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1).pane_id
+## 使用方式
 
-# 启动后端 Worker (Codex)
-.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
-
-# 启动前端 Worker (Gemini)
-.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
-```
-
-4. 创建和分派任务:
-```powershell
-# 创建任务
-python scripts/assign_task.py --intake "实现订单支付状态查询接口"
-
-# 分派任务
-.\scripts\dispatch-task.ps1 -WorkerName "backend-dev" -TaskId "BACKEND-010" -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-010.md" -Raw)
-
-# 查看 worker 状态
-wezterm cli get-text --pane-id <PANE_ID>
-```
-
-标准 dispatch 模板见：`config/dispatch-template.md`
-
-## Team Lead 工作流
-
-规划模式（无 active 任务）：
-- 讨论需求
-- 拆分任务模板
-- 让用户确认是否进入执行
-
-执行模式（存在 active 任务）：
-- 分派任务：`dispatch-task.ps1`
-- 监控 worker 状态：`route-monitor.ps1 -Continuous`
-- 推进任务锁状态：`assigned -> in_progress -> waiting_qa (dev完成) -> completed (qa通过)`
-- QA PASS 后归档报告到 `05-verification/`，清理业务仓库临时文件
-
-## 常用命令
+所有操作通过统一控制器 `scripts/teamlead-control.ps1`：
 
 ```bash
-python scripts/assign_task.py --standard-entry
-python scripts/assign_task.py --list
-python scripts/assign_task.py --scan
-python scripts/assign_task.py --show-lock
-python scripts/assign_task.py --show-task-locks
-python scripts/assign_task.py --doctor
-python scripts/assign_task.py --split-request "<requirement text>"
+# 新会话第一步
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action bootstrap
+
+# 派遣任务
+... -Action dispatch -TaskId BACKEND-010
+
+# 查看状态
+... -Action status
 ```
 
-## Worker 分配
+详细工作流程见 [CLAUDE.md](./CLAUDE.md)。
 
-| 角色 | Provider | 仓库 | 说明 |
-|------|----------|------|------|
-| BACKEND | Codex | E:\moxton-lotapi | 后端开发 |
-| BACKEND-QA | Codex | E:\moxton-lotapi | 后端 QA |
-| ADMIN-FE | Codex | E:\moxton-lotadmin | 管理后台开发 |
-| ADMIN-FE-QA | Codex | E:\moxton-lotadmin | 管理后台 QA |
-| SHOP-FE | Gemini | E:\nuxt-moxton | 商城前端开发 |
-| SHOP-FE-QA | Gemini | E:\nuxt-moxton | 商城前端 QA |
-| DOC-UPDATER | Codex | E:\moxton-ccb | 文档更新 |
+## 目录结构
 
-详细配置见：`config/worker-panels.json`
-
-## 关键路径
-
-- `01-tasks/active/*` — 活动任务
-- `01-tasks/completed/*` — 已完成任务
-- `01-tasks/ACTIVE-RUNNER.md`
-- `01-tasks/TASK-LOCKS.json`
-- `05-verification/*` — QA 报告归档
-- `.claude/agents/*` — 角色定义
-- `config/worker-panels.json` — Worker 注册表
-- `config/dispatch-template.md` — 标准 dispatch 模板
-
-## 故障排查
-
-1. `doctor` 失败
-- 执行 `python scripts/assign_task.py --doctor`
-- 按输出修复缺失文件或配置
-
-2. `dispatch` 被阻塞
-- 检查 `python scripts/assign_task.py --show-lock`
-- 检查 `python scripts/assign_task.py --show-task-locks`
-- 确保 runner 为 `claude`
-
-3. Codex 子代理卡审批
-- 检查 `~/.codex/config.toml` 中项目段是否有 `approval_policy = "never"` 和 `sandbox_mode = "danger-full-access"`
-
-4. WezTerm pane 丢失
-- `wezterm cli list` 查看存活 pane
-- 用 `wezterm cli spawn` 重建
-
-5. Gemini MCP 不生效
-- 检查 `~/.gemini/settings.json` 中 `mcpServers` 配置
-- 重启 Gemini CLI 使配置生效
-
-## 文档导航
-
-- **[QUICK-START.md](./QUICK-START.md)** - 快速启动指南
-- **[CLAUDE.md](./CLAUDE.md)** - Team Lead 工作流程指南
-- **[config/dispatch-template.md](./config/dispatch-template.md)** - Dispatch 模板
-- **[config/worker-panels.json](./config/worker-panels.json)** - Worker 注册表
-- **[docs/reports/DOCUMENTATION-INDEX.md](./docs/reports/DOCUMENTATION-INDEX.md)** - 完整文档索引
-
-### 历史文档
-- [CCB 迁移完成报告](./docs/ccb/CCB-MIGRATION-COMPLETE.md)
-- [CCB 安装指南](./docs/ccb/CCB-INSTALLATION-GUIDE.md)（已废弃，仅供参考）
-
-## Team Lead 边界
-
-- Team Lead 负责协调，不直接改业务仓库代码
-- 不绕过任务锁
-- 不跳过 QA 证据
-- 未经用户确认不标记完成
+```
+01-tasks/          任务文档与锁
+02-api/            API 参考文档
+03-guides/         技术指南
+04-projects/       项目文档与协调关系
+05-verification/   QA 验证报告
+config/            配置（worker-map、dispatch 模板）
+scripts/           控制器与工具脚本
+```

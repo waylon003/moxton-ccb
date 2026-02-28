@@ -1,0 +1,24 @@
+{
+  "BACKEND": {
+    "dev": "backend-dev",
+    "qa": "backend-qa",
+    "engine": "codex",
+    "workdir": "E:\\moxton-lotapi",
+    "domain": "backend"
+  },
+  "ADMIN-FE": {
+    "dev": "admin-fe-dev",
+    "qa": "admin-fe-qa",
+    "engine": "codex",
+    "workdir": "E:\\moxton-lotadmin",
+    "domain": "admin-frontend"
+  },
+  "SHOP-FE": {
+    "dev": "shop-fe-dev",
+    "qa": "shop-fe-qa",
+    "dev_engine": "gemini",
+    "qa_engine": "codex",
+    "workdir": "E:\\nuxt-moxton",
+    "domain": "shop-frontend"
+  }
+}

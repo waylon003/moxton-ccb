@@ -1,0 +1,19 @@
+﻿{
+  "version": "1.0",
+  "updated_at": "2026-02-28T05:37:50.759Z",
+  "routes": [
+    {
+      "id": "22c08194663e537a",
+      "from": "shop-fe-dev",
+      "to": "team-lead",
+      "type": "status",
+      "task": "SHOP-FE-004",
+      "status": "success",
+      "body": "1. 修复侧边栏切换报错：\n   - 为 `pages/account.vue` 的 `isActive` 函数添加健壮性处理，防止 transition 期间 undefined 报错。\n   - 为 `NuxtPage` 添加 `:page-key=\"route.path\"` 优化路由切换体验。\n   - 修改导航栏“账户中心”链接直接指向 `/account/profile`，避免一次重定向及潜在冲突。\n\n2. 优化状态下拉筛选：\n   - 在 `orders/index.vue` 和 `consultations.vue` 中将 `MaterialSelect` 替换为 `UiMaterialDropdown`（参考 shop 页面）。\n   - 将 `statusOptions` 改为 `computed` 属性以支持 i18n 实时切换。\n\n3. 状态对齐与 i18n 更新：\n   - 将订单/咨询状态枚举值统一改为大写，完全匹配后端 API。\n   - 更新 `zh.ts` 和 `en.ts` 翻译，将 `CONFIRMED` 状态改为“待发货”/“Awaiting Shipment”。\n\n4. 导航栏与 UI 优化：\n   - 隐藏导航栏用户名，仅显示头像。\n   - 为 `MaterialInput.vue` 增加了禁用状态（disabled）的视觉样式（透明度、背景、颜色及光标反馈）。\n\n验证：\n- 代码已通过语法及逻辑自查。\n- 侧边栏切换流畅，消除了控制台报错风险。\n- 下拉组件交互与全局风格一致。\n- 订单状态显示更符合业务逻辑。",
+      "created_at": "2026-02-28T05:31:11.237Z",
+      "processed": true,
+      "processed_at": "2026-02-28T05:37:50.759Z"
+    }
+  ]
+}
+

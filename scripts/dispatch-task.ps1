@@ -76,12 +76,14 @@ $fullTask = @"
 
 你在接受任务前必须确认：
 
-1. 任务完成后，必须使用 wezterm cli 通知 Team Lead
-2. 通知格式必须是 [ROUTE] ... [/ROUTE]
-3. 禁止不通知就声明完成！
+1. 任务完成后，必须调用 MCP tool report_route 通知 Team Lead
+2. 禁止不调用 report_route 就声明完成！
+3. 文档规则：
+   - 项目 API 契约：按任务文件中引用的 02-api/*.md 路径查阅
+   - 外部框架/库：优先用 context7 MCP 查询；不可用时查官方文档并注明来源
+   - 禁止凭记忆假设任何 API 行为
 
 当前任务ID: $TaskId
-Team Lead Pane ID: $TeamLeadPaneId
 Worker: $WorkerName
 
 ===================================================================
@@ -96,20 +98,14 @@ $TaskFilePath
   COMPLETION REMINDER
 ===================================================================
 
-任务完成后，执行以下命令通知 Team Lead：
+任务完成后，必须调用 MCP tool report_route，参数如下：
 
-wezterm cli send-text --pane-id "$TeamLeadPaneId" --no-paste @'
-[ROUTE]
-from: $WorkerName
-to: team-lead
-type: status
-task: $TaskId
-status: success
-body: |
-  <填写：修改的文件、执行的命令、测试结果>
-[/ROUTE]
-'@
-wezterm cli send-text --pane-id "$TeamLeadPaneId" --no-paste "`r"
+  from: "$WorkerName"
+  task: "$TaskId"
+  status: success（或 fail / blocked）
+  body: <填写：修改的文件、执行的命令、测试结果>
+
+这是强制要求。不调用 report_route 就声明完成视为违规。
 
 ===================================================================
 "@
@@ -160,11 +156,15 @@ if (-not $ready) {
     exit 1
 }
 
-# 发送任务指令 + 回车（合并为一次 send-text，避免时序问题）
-wezterm cli send-text --pane-id $WorkerPaneId --no-paste "$fullTask`r`n"
+# 发送任务指令，然后单独发回车确保提交
+wezterm cli send-text --pane-id $WorkerPaneId --no-paste "$fullTask"
 if ($LASTEXITCODE -ne 0) {
     Write-Host '[FAIL] wezterm send-text failed' -ForegroundColor Red
     exit 1
 }
+
+# 短暂延迟后单独发回车，确保 CLI 正确接收提交
+Start-Sleep -Milliseconds 500
+wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r"
 
 Write-Host "Task dispatched." -ForegroundColor Green

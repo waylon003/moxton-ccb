@@ -1,0 +1,12 @@
+{
+  "name": "@moxton/route-server",
+  "version": "1.0.0",
+  "description": "MCP server for CCB route messaging between Team Lead and Workers",
+  "main": "index.js",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "proper-lockfile": "^4.1.2",
+    "zod": "^3.25.0"
+  }
+}

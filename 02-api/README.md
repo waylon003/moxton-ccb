@@ -7,6 +7,7 @@
 | 模块 | 文档 | 状态 |
 |------|------|------|
 | 认证系统 | [auth.md](auth.md) | ✅ |
+| 权限与角色 | [authorization.md](authorization.md) | ✅ |
 | 购物车 | [cart.md](cart.md) | ✅ |
 | 订单管理 | [orders.md](orders.md) | ✅ |
 | 支付系统 | [payments.md](payments.md) | ✅ |
@@ -19,7 +20,7 @@
 
 ## 🔗 基础信息
 
-- **Base URL**: `http://localhost:3006`
+- **Base URL**: `http://localhost:3033`
 - **认证方式**: Bearer Token / X-Guest-ID
 - **数据格式**: JSON
 - **字符编码**: UTF-8

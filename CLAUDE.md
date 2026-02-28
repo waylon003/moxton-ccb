@@ -61,7 +61,7 @@ Moxton-CCB 是三个业务仓库的共享知识与编排中心：
   wezterm cli send-text --pane-id <WORKER_PANE_ID> --no-paste "<任务内容>"
   wezterm cli send-text --pane-id <WORKER_PANE_ID> --no-paste $'\r'
   ```
-- **回调机制**：Worker 完成后通过 WezTerm 推送 `[ROUTE]` 消息到 Team Lead
+- **回调机制**：Worker 完成后通过 MCP tool `report_route` 通知 Team Lead，Team Lead 通过 `check_routes` 查询待处理回调
 
 ---
 
@@ -84,168 +84,45 @@ Moxton-CCB 是三个业务仓库的共享知识与编排中心：
 
 ---
 
-## 快速开始
+## 统一控制器（单入口）
 
-### 1. Team Lead 初始化
+**所有操作必须通过 `teamlead-control.ps1`，禁止直接调用子脚本。**
 
-```powershell
-# 获取 Team Lead 自己的 pane_id
-$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1).pane_id
-Write-Host "Team Lead Pane ID: $env:TEAM_LEAD_PANE_ID"
+### 操作表
 
-# 设置 WezTerm 路径
-$env:PATH += ";D:\WezTerm-windows-20240203-110809-5046fc22"
-```
+| 操作 | 命令 |
+|------|------|
+| 初始化 | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action bootstrap` |
+| 派遣开发任务 | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId <ID>` |
+| 派遣 QA 任务 | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch-qa -TaskId <ID>` |
+| 查看状态 | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status` |
+| 恢复操作 | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action recover -RecoverAction <reap-stale\|restart-worker\|reset-task>` |
+| 补建任务锁 | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId <ID>` |
 
-### 2. 启动 Workers（强制回执机制）
+### 新会话流程
 
-Worker 通过 wrapper 脚本启动，确保**无论任务成功、失败或超时**，都会强制发送回执通知给 Team Lead。
+1. 每次新会话**必须先 bootstrap**，否则 hook 会阻止所有操作
+2. bootstrap 自动完成：检测 pane ID、健康检查、启动 route-monitor
+3. bootstrap 后根据意图选择操作
 
-```powershell
-# 启动后端 Worker (Codex) - 默认创建独立窗口
-.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
+### 意图识别表
 
-# 启动前端 Worker (Gemini) - 默认创建独立窗口
-.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
-
-# 如需左右分屏（不推荐，会遮挡视线）
-.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID -Split
-```
-
-**启动过程**：
-1. 默认创建**独立窗口**（推荐，不遮挡 Team Lead 视图）
-2. 使用 `-Split` 参数可创建**左右分屏**
-3. Worker 自动注册到 Registry，无需手动记录 pane ID
-4. 进程退出/超时后**强制发送** `[ROUTE]` 通知到 Team Lead
-
-### 3. 派遣任务
-
-```powershell
-.\scripts\dispatch-task.ps1 `
-  -WorkerPaneId <worker-pane-id> `
-  -TaskId "BACKEND-008" `
-  -WorkerName "backend-dev" `
-  -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-008.md" -Raw)
-```
-
-### 4. 等待 Worker 回调
-
-Worker 完成后会自动推送消息到 Team Lead：
-```
-[ROUTE]
-from: backend-dev
-to: team-lead
-type: status
-task: BACKEND-008
-status: success
-body: |
-  任务完成，修改文件：...
-[/ROUTE]
-```
-
-### 4. 监控 [ROUTE] 回执（自动更新任务锁）
-
-启动监控器，自动解析 Worker 的 [ROUTE] 消息并更新任务锁：
-
-```powershell
-# 持续监控模式（推荐）
-.\scripts\route-monitor.ps1 -Continuous
-
-# 单次检查模式
-.\scripts\route-monitor.ps1
-```
-
-监控器会自动：
-- 解析 `[ROUTE]` 消息
-- 更新 `TASK-LOCKS.json` 状态
-- 显示可视化通知
-
----
-
-### 5. Worker Pane Registry 管理
-
-```powershell
-# 查看已注册的 Workers
-.\scripts\worker-registry.ps1 -Action list
-
-# 健康检查（清理不存在的 pane）
-.\scripts\worker-registry.ps1 -Action health-check
-
-# 手动注销 Worker
-.\scripts\worker-registry.ps1 -Action unregister -WorkerName "backend-dev"
-```
-
-### 列出所有 pane
-
-```bash
-wezterm cli list
-```
-
-### 获取 pane 文本
-
-```bash
-wezterm cli get-text --pane-id <PANE_ID>
-```
-
-### 检查 Worker 状态
-
-```powershell
-# 查看 Worker 最近输出
-wezterm cli get-text --pane-id <WORKER_PANE_ID> | Select-Object -Last 30
-```
+| 用户意图 | 走哪条路 | 操作 |
+|----------|---------|------|
+| "执行未完成的任务" / "继续开发" | 硬逻辑 | `status` → `dispatch` |
+| "派遣 QA" / "验证任务" | 硬逻辑 | `dispatch-qa` |
+| "讨论需求" / "规划新功能" | Brainstorming | 读本地文档 → 分析 → 写计划 |
+| "查看进度" / "什么状态" | 硬逻辑 | `status` |
+| "Worker 挂了" / "任务卡住" | 恢复 | `recover` |
 
 ---
 
 ## 任务状态流转
 
 ```
-assigned → in_progress → qa → completed
-                ↓           ↓
-              blocked    fail → retry
-```
-
-### 6. 启动向导（推荐入口）
-
-一键启动 Team Lead 交互向导，自动检测任务状态并引导选择：
-
-```powershell
-.\scripts\start-teamlead.ps1
-```
-
-向导会自动：
-- 检测活跃任务数量
-- 询问工作模式（执行/规划/管理）
-- 引导启动 Workers 或分派任务
-
----
-
-### 7. 并行编排执行（Waves）
-
-如果你有 WAVE-EXECUTION-PLAN.md 执行计划：
-
-```powershell
-# 自动读取最新计划并并行分派
-.\scripts\dispatch-wave.ps1
-
-# 指定特定计划文件
-.\scripts\dispatch-wave.ps1 -WavePlan "01-tasks\WAVE3-EXECUTION-PLAN.md"
-
-# 模拟运行（不实际分派）
-.\scripts\dispatch-wave.ps1 -DryRun
-```
-
----
-
-### 8. 自动 API 文档更新
-
-当 Backend 任务成功完成时，系统会自动：
-1. 检测是否涉及 API 变更
-2. 触发 doc-updater Worker
-3. 更新 `02-api/` 文档
-
-也可手动触发：
-```powershell
-.\scripts\trigger-doc-updater.ps1 -TaskId "BACKEND-008"
+assigned → in_progress → waiting_qa → qa → completed
+                ↓                      ↓
+              blocked               fail → retry
 ```
 
 | 路径 | 用途 |
@@ -253,9 +130,9 @@ assigned → in_progress → qa → completed
 | `01-tasks/active/*` | 活跃任务文档 |
 | `01-tasks/completed/*` | 已完成任务 |
 | `01-tasks/TASK-LOCKS.json` | 任务锁状态 |
-| `01-tasks/ACTIVE-RUNNER.md` | 当前执行者 |
+| `config/worker-map.json` | Worker 角色映射 |
+| `config/worker-panels.json` | Worker Pane 注册表 |
 | `.claude/agents/*` | 角色定义 |
-| `config/dispatch-template.md` | 派遣模板 |
 
 ---
 
@@ -266,3 +143,6 @@ assigned → in_progress → qa → completed
 3. **不跳过 QA 验证**
 4. **未经用户确认不标记任务完成**
 5. **Worker 必须发送 [ROUTE] 通知后才能声明完成**
+6. **所有操作必须通过 `teamlead-control.ps1` 统一入口**，禁止直接调用 `start-worker.ps1`、`dispatch-task.ps1`、`route-monitor.ps1` 等子脚本
+7. **禁止 `powershell -Command` 执行复杂逻辑**（含 `$`、中文、引号嵌套），只允许 `powershell -File`
+8. **禁止手动拼接 `wezterm cli send-text` 命令**，dispatch 由控制器统一处理

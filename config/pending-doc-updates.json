@@ -4,5 +4,17 @@
         "reason":  "doc-updater worker not available",
         "triggeredAt":  "2026-02-27T19:51:52.5562129+08:00",
         "taskId":  "BACKEND-010"
+    },
+    {
+        "status":  "pending",
+        "reason":  "doc-updater worker not available",
+        "triggeredAt":  "2026-02-28T01:06:55.3719636+08:00",
+        "taskId":  "BACKEND-008"
+    },
+    {
+        "status":  "pending",
+        "reason":  "doc-updater worker not available",
+        "triggeredAt":  "2026-02-28T01:06:57.6631841+08:00",
+        "taskId":  "BACKEND-010"
     }
 ]

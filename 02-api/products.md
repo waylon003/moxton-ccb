@@ -1,5 +1,23 @@
 ## 🛍️ 商品 API
 
+## 权限更新（BACKEND-010）
+
+`/products` 写接口已统一使用 `requireRole('admin', 'operator')`。  
+即：`admin` 与 `operator` 均可管理商品，`user` 无权限。
+
+| 方法 | 路径 | 权限要求 |
+|------|------|----------|
+| POST | `/products` | 登录 + `admin/operator` |
+| GET | `/products/admin/all` | 登录 + `admin/operator` |
+| PUT | `/products/batch/stock` | 登录 + `admin/operator` |
+| DELETE | `/products/batch` | 登录 + `admin/operator` |
+| POST | `/products/batch/restore` | 登录 + `admin/operator` |
+| GET | `/products/deleted` | 登录 + `admin/operator` |
+| PUT | `/products/:id` | 登录 + `admin/operator` |
+| DELETE | `/products/:id` | 登录 + `admin/operator` |
+| PUT | `/products/:id/stock` | 登录 + `admin/operator` |
+| POST | `/products/:id/restore` | 登录 + `admin/operator` |
+
 ### 获取商品列表
 
 **GET** `/products`
@@ -127,7 +145,7 @@ if (product.hasPrice) {
 - `GET /products/search` - 搜索商品
 - `GET /products/popular` - 获取热门商品
 - `GET /products/category/:categoryId` - 根据分类获取商品
-- `GET /products/admin/all` - 管理员获取所有商品
+- `GET /products/admin/all` - 管理端（admin/operator）获取所有商品
 
 **业务场景**:
 - 💳 **有价格商品**: 标准电商商品，直接在线购买
@@ -180,7 +198,7 @@ const createProductData = {
 
 **适用范围**: 以下所有商品API都返回`tags`字段：
 - `GET /products` - 获取商品列表
-- `GET /products/admin/all` - 管理员获取所有商品
+- `GET /products/admin/all` - 管理端（admin/operator）获取所有商品
 - `GET /products/:id` - 获取商品详情
 - `GET /products/search` - 搜索商品
 - `GET /products/popular` - 获取热门商品
@@ -190,11 +208,11 @@ const createProductData = {
 
 ---
 
-### 管理员专用：获取所有商品
+### 管理端：获取所有商品
 
 **GET** `/products/admin/all`
 
-**认证**: 必需认证 + 管理员权限
+**认证**: 必需认证 + `admin`/`operator` 角色
 
 **权限说明**:
 - 专门为Soybean Admin管理后台设计
@@ -213,12 +231,12 @@ const createProductData = {
 **示例请求**:
 ```
 GET /products/admin/all?pageNum=1&pageSize=10&keyword=传感器
-Authorization: Bearer <admin_token>
+Authorization: Bearer <admin_or_operator_token>
 ```
 
 **权限检查**:
 - 401 Unauthorized: 未提供token
-- 403 Forbidden: 非管理员角色
+- 403 Forbidden: 非 `admin`/`operator` 角色
 
 ### 搜索商品
 
@@ -332,7 +350,7 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **POST** `/products`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -359,7 +377,7 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **PUT** `/products/:id`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -382,7 +400,7 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **DELETE** `/products/:id`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **说明**: 使用逻辑删除，商品不会从数据库中物理删除
 
@@ -390,7 +408,7 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **DELETE** `/products/batch`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -423,7 +441,7 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **PUT** `/products/:id/stock`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -438,7 +456,7 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **PUT** `/products/batch/stock`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -465,9 +483,9 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **POST** `/products/:id/restore`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
-**权限说明**: 仅管理员可恢复已删除的商品
+**权限说明**: `admin` 与 `operator` 均可恢复已删除商品
 
 **响应**:
 ```json
@@ -489,9 +507,9 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **POST** `/products/batch/restore`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
-**权限说明**: 仅管理员可批量恢复已删除的商品
+**权限说明**: `admin` 与 `operator` 均可批量恢复已删除商品
 
 **请求体**:
 ```json
@@ -520,9 +538,9 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 
 **GET** `/products/deleted`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
-**权限说明**: 仅管理员可查看已删除的商品
+**权限说明**: `admin` 与 `operator` 均可查看已删除商品
 
 **查询参数**:
 - `pageNum` (可选): 页码，默认1
@@ -542,7 +560,7 @@ GET /products/search?keyword=温度传感器&categoryId=clt123456788
 **示例请求**:
 ```
 GET /products/deleted?pageNum=1&pageSize=10&keyword=传感器
-Authorization: Bearer <admin_token>
+Authorization: Bearer <admin_or_operator_token>
 ```
 
 **响应**:
@@ -599,7 +617,7 @@ Authorization: Bearer <admin_token>
 
 **适用范围**: 以下所有商品API的返回数据中包含完整的`category`对象：
 - `GET /products` - 获取商品列表
-- `GET /products/admin/all` - 管理员获取所有商品
+- `GET /products/admin/all` - 管理端（admin/operator）获取所有商品
 - `GET /products/:id` - 获取商品详情
 - `GET /products/search` - 搜索商品
 - `GET /products/popular` - 获取热门商品
@@ -607,7 +625,7 @@ Authorization: Bearer <admin_token>
 
 **特殊说明**:
 - 商城API (`GET /products`): 默认仅返回启用分类下的商品
-- 管理员API (`GET /products/admin/all`): 返回所有分类下的商品，不受分类状态限制
+- 管理端API (`GET /products/admin/all`): 返回所有分类下的商品，不受分类状态限制
 
 **响应示例对比**:
 

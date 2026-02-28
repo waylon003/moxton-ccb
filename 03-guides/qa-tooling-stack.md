@@ -15,7 +15,8 @@ This guide defines the default QA stack used by Codex role agents.
 - Baseline commands:
   - `pnpm type-check`
   - `pnpm build`
-  - `pnpm exec playwright test <spec-or-grep>` (if tests exist)
+  - `pnpm test:e2e -- tests/e2e/smoke.spec.ts` (must-run smoke baseline)
+  - `pnpm exec playwright test <spec-or-grep>` (optional for expanded coverage)
 - Fallback:
   - targeted manual regression with explicit reproduction steps and screenshots/logs
 
@@ -27,7 +28,8 @@ This guide defines the default QA stack used by Codex role agents.
   - `pnpm typecheck`
   - `pnpm lint`
   - `pnpm build:test` (or `pnpm build` when needed)
-  - `pnpm exec playwright test <spec-or-grep>` (if tests exist)
+  - `pnpm test:e2e -- tests/e2e/smoke.spec.ts` (must-run smoke baseline)
+  - `pnpm exec playwright test <spec-or-grep>` (optional for expanded coverage)
 - Fallback:
   - targeted manual regression with reproducible evidence
 

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "route": {
+      "command": "node",
+      "args": ["E:\\moxton-ccb\\mcp\\route-server\\index.js"],
+      "env": {
+        "ROUTE_DATA_DIR": "E:\\moxton-ccb\\mcp\\route-server\\data",
+        "TASK_LOCKS_PATH": "E:\\moxton-ccb\\01-tasks\\TASK-LOCKS.json"
+      }
+    }
+  }
+}

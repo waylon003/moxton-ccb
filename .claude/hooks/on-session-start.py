@@ -2,13 +2,23 @@ import json
 import sys
 import os
 import subprocess
+import tempfile
 
 # Read stdin to prevent broken pipe
 sys.stdin.read()
 
+# Clear old bootstrap flag on session start
+flag = os.path.join(tempfile.gettempdir(), "moxton-bootstrap-done.flag")
+if os.path.exists(flag):
+    try:
+        os.remove(flag)
+        sys.stderr.write("Bootstrap flag cleared (new session).\n")
+    except Exception:
+        pass
+
 # Display welcome message to stderr
 sys.stderr.write("=" * 50 + "\n")
-sys.stderr.write("🎯 Team Lead Mode Activated\n")
+sys.stderr.write("Team Lead Mode Activated\n")
 sys.stderr.write("=" * 50 + "\n")
 
 # Get current task status
@@ -20,23 +30,21 @@ try:
         timeout=5
     )
     if result.returncode == 0:
-        # Show only active tasks
         lines = result.stdout.split('\n')
         active_tasks = [l for l in lines if 'active-task' in l and ('BACKEND' in l or 'SHOP' in l or 'ADMIN' in l)]
         if active_tasks:
-            sys.stderr.write("\n📊 当前任务状态:\n")
-            for task in active_tasks[:5]:  # Show max 5 tasks
+            sys.stderr.write("\n当前任务状态:\n")
+            for task in active_tasks[:5]:
                 sys.stderr.write(f"   {task}\n")
 except Exception:
     pass
 
-sys.stderr.write("\n✅ Team Lead 角色定义已注入\n")
-sys.stderr.write("\n💡 下一步: python scripts/assign_task.py --standard-entry\n")
+sys.stderr.write("\nTeam Lead 角色定义已注入\n")
+sys.stderr.write("\n下一步: powershell -File scripts/teamlead-control.ps1 -Action bootstrap\n")
 sys.stderr.write("=" * 50 + "\n\n")
 
-# Read team-lead.md and STARTUP-CHECKLIST.md for context injection
+# Read team-lead.md for context injection
 try:
-    # Read team-lead role definition
     team_lead_path = os.path.join('.claude', 'agents', 'team-lead.md')
     with open(team_lead_path, 'r', encoding='utf-8') as f:
         team_lead_content = f.read()
@@ -48,8 +56,20 @@ try:
         with open(checklist_path, 'r', encoding='utf-8') as f:
             startup_reminder = f"\n\n---\n\n# 启动提醒\n\n{f.read()}"
 
-    # Combine context
-    full_context = f"{team_lead_content}{startup_reminder}\n\n---\n\n**重要**: Worker 通过 WezTerm 强制回执机制与 Team Lead 通信，任务完成后会自动推送 [ROUTE] 通知。"
+    # Bootstrap instruction
+    bootstrap_instruction = (
+        "\n\n---\n\n"
+        "# 必须执行 Bootstrap\n\n"
+        "新会话启动后，你必须首先执行 bootstrap：\n\n"
+        "```bash\n"
+        'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\\moxton-ccb\\scripts\\teamlead-control.ps1" -Action bootstrap\n'
+        "```\n\n"
+        "**禁止**直接调用 start-worker.ps1、dispatch-task.ps1 等子脚本。\n"
+        "**禁止**使用 powershell -Command 执行复杂逻辑。\n"
+        "所有操作必须通过 teamlead-control.ps1 统一入口。"
+    )
+
+    full_context = f"{team_lead_content}{startup_reminder}{bootstrap_instruction}"
 
     result = {
         "hookSpecificOutput": {
@@ -63,6 +83,6 @@ except Exception as e:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": "Team Lead mode active. Worker notification via WezTerm is configured."
+            "additionalContext": "Team Lead mode active. Run: powershell -File scripts/teamlead-control.ps1 -Action bootstrap"
         }
     }))

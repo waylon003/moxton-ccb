@@ -1,7 +1,7 @@
 ﻿# 任务状态总览
 
-**更新时间**: 2026-02-27
-**活跃任务**: 6 个
+**更新时间**: 2026-02-28
+**活跃任务**: 1 个
 
 ## 项目映射
 
@@ -15,10 +15,10 @@
 
 | 角色 | backlog | active | completed | 总计 |
 |------|---------|--------|-----------|------|
-| SHOP-FE | 0 | 2 | 1 | 3 |
-| ADMIN-FE | 0 | 2 | 8 | 10 |
-| BACKEND | 0 | 2 | 13 | 15 |
-| **TOTAL** | **0** | **6** | **22** | **28** |
+| SHOP-FE | 0 | 1 | 3 | 4 |
+| ADMIN-FE | 0 | 0 | 10 | 10 |
+| BACKEND | 0 | 0 | 15 | 15 |
+| **TOTAL** | **0** | **1** | **28** | **29** |
 
 ## 目录结构
 
@@ -41,26 +41,11 @@
 
 ## 当前活跃任务
 
-### 后端 (BACKEND)
-
-| 任务ID | 标题 |
-|--------|------|
-| [BACKEND-008](./active/backend/BACKEND-008-admin-user-management-api.md) | admin user management api |
-| [BACKEND-010](./active/backend/BACKEND-010-role-system-operator.md) | role system operator |
-
-### 管理后台前端 (ADMIN-FE)
-
-| 任务ID | 标题 |
-|--------|------|
-| [ADMIN-FE-008](./active/admin-frontend/ADMIN-FE-008-user-management-page.md) | user management page |
-| [ADMIN-FE-009](./active/admin-frontend/ADMIN-FE-009-role-based-access-control.md) | role based access control |
-
 ### 独立站前端 (SHOP-FE)
 
 | 任务ID | 标题 |
 |--------|------|
-| [SHOP-FE-002](./active/shop-frontend/SHOP-FE-002-login-register-auth.md) | login register auth |
-| [SHOP-FE-003](./active/shop-frontend/SHOP-FE-003-account-center.md) | account center |
+| [SHOP-FE-004](./active/shop-frontend/SHOP-FE-004-account-center-sidebar-fix.md) | account center sidebar fix |
 
 
 ## backlog 任务
@@ -74,6 +59,8 @@
 | 任务ID | 标题 |
 |--------|------|
 | [SHOP-FE-001](./completed/shop-frontend/SHOP-FE-001-stripe-elements-integration.md) | stripe elements integration |
+| [SHOP-FE-002](./completed/shop-frontend/SHOP-FE-002-login-register-auth.md) | login register auth |
+| [SHOP-FE-003](./completed/shop-frontend/SHOP-FE-003-account-center.md) | account center |
 
 ### 管理后台前端 (ADMIN-FE)
 
@@ -87,6 +74,8 @@
 | [ADMIN-FE-005](./completed/admin-frontend/ADMIN-FE-005-supplement-shipping-info.md) | supplement shipping info |
 | [ADMIN-FE-006](./completed/admin-frontend/ADMIN-FE-006-order-detail-shipping-info-visibility-fix.md) | order detail shipping info visibility fix |
 | [ADMIN-FE-007](./completed/admin-frontend/ADMIN-FE-007-online-order-history-event-rendering-normalization.md) | online order history event rendering normalization |
+| [ADMIN-FE-008](./completed/admin-frontend/ADMIN-FE-008-user-management-page.md) | user management page |
+| [ADMIN-FE-009](./completed/admin-frontend/ADMIN-FE-009-role-based-access-control.md) | role based access control |
 
 ### 后端 (BACKEND)
 
@@ -101,7 +90,9 @@
 | [BACKEND-005](./completed/backend/BACKEND-005-keyword-search-fix.md) | keyword search fix |
 | [BACKEND-006](./completed/backend/BACKEND-006-admin-order-detail-include-metadata.md) | admin order detail include metadata |
 | [BACKEND-007](./completed/backend/BACKEND-007-online-order-history-event-contract-normalization.md) | online order history event contract normalization |
+| [BACKEND-008](./completed/backend/BACKEND-008-admin-user-management-api.md) | admin user management api |
 | [BACKEND-009](./completed/backend/BACKEND-009-auth-api-normalization.md) | auth api normalization |
+| [BACKEND-010](./completed/backend/BACKEND-010-role-system-operator.md) | role system operator |
 | [BUG-001](./completed/backend/BUG-001-order-api-500-error.md) | order api 500 error |
 | [BUG-002](./completed/backend/BUG-002-order-items-field-name.md) | order items field name |
 | [BUG-004](./completed/backend/BUG-004-stripe-payment-intent-params.md) | stripe payment intent params |

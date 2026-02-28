@@ -214,8 +214,9 @@ Authorization: Bearer <token>
 ```
 
 **Role Mapping:**
-- Admin user: `"roles": ["admin"]`
-- Regular user: `"roles": ["user"]`
+- 管理员: `"roles": ["admin"]`
+- 运营: `"roles": ["operator"]`
+- 普通用户: `"roles": ["user"]`
 
 ### Error Responses
 
@@ -515,8 +516,9 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 ### User Roles
 
-- **user**: Regular user with standard access
-- **admin**: Administrator with elevated privileges
+- **user**: 普通用户，标准前台权限
+- **operator**: 运营角色，具备商品/分类/订单/上传管理权限
+- **admin**: 管理员，具备全部管理权限（含用户管理）
 
 ### Account Status
 
@@ -545,26 +547,26 @@ All error responses follow this structure:
 
 ---
 
-## Admin User Management API
+## 管理端用户管理 API（BACKEND-008）
 
-> All admin endpoints require `Authorization: Bearer <token>` with admin role.
+> 路由前缀：`/auth/admin/users`  
+> 鉴权要求：`Authorization: Bearer <token>` 且角色必须为 `admin`（`operator` 不可访问该组接口）
 
 ### GET /auth/admin/users
 
-Get paginated user list with search and filters.
+分页查询用户列表，支持关键字与角色/状态筛选。
 
-**Query Parameters:**
+**Query 参数**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| pageNum | number | 1 | Page number |
-| pageSize | number | 20 | Items per page |
-| keyword | string | - | Search username/email/nickname |
-| status | number | - | Filter by status (1=active, 0=inactive) |
-| role | string | - | Filter by role (user/admin) |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| pageNum | number | 1 | 页码 |
+| pageSize | number | 20 | 每页数量 |
+| keyword | string | - | 模糊匹配 `username/email/nickname` |
+| status | number | - | 状态筛选：`1` 启用，`0` 停用 |
+| role | string | - | 角色筛选：`user` / `operator` / `admin` |
 
-**Success Response (200):**
-
+**成功响应（200）**
 ```json
 {
   "code": 200,
@@ -578,7 +580,7 @@ Get paginated user list with search and filters.
         "nickname": "Test",
         "phone": "+86-13800138000",
         "avatar": null,
-        "role": "user",
+        "role": "operator",
         "status": 1,
         "createdAt": "2025-12-18T10:00:00.000Z",
         "updatedAt": "2025-12-18T10:00:00.000Z"
@@ -586,82 +588,131 @@ Get paginated user list with search and filters.
     ],
     "total": 50,
     "pageNum": 1,
-    "pageSize": 20
+    "pageSize": 20,
+    "totalPages": 3
   },
   "timestamp": "2025-12-18T10:00:00.000Z",
   "success": true
 }
 ```
 
+**常见失败响应**
+- `401`：未登录或 token 无效
+- `403`：非 `admin` 角色
+
 ### GET /auth/admin/users/:id
 
-Get user detail by ID.
+根据用户 ID 查询详情。
 
-**Success Response (200):** Same user object as list item, wrapped in `{ code, data, success }`.
+**路径参数**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | string | 用户 ID |
+
+**成功响应（200）**
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "data": {
+    "id": "clt1234567890",
+    "username": "testuser",
+    "email": "test@example.com",
+    "nickname": "Test",
+    "phone": null,
+    "avatar": null,
+    "role": "user",
+    "status": 1,
+    "createdAt": "2025-12-18T10:00:00.000Z",
+    "updatedAt": "2025-12-18T10:00:00.000Z"
+  },
+  "timestamp": "2025-12-18T10:00:00.000Z",
+  "success": true
+}
+```
 
 ---
 
 ### PUT /auth/admin/users/:id/status
 
-Toggle user active/inactive status.
+更新用户状态（启用/停用）。
 
-**Request Body:**
-
+**请求体**
 ```json
 {
-  "status": 0  // 1=active, 0=inactive
+  "status": 0
 }
 ```
 
-**Business Rule:** Admin cannot deactivate their own account.
+**业务规则**
+- `status` 仅允许 `0` 或 `1`
+- 管理员不能停用自己账号（返回 `403`）
 
-**Success Response (200):** Updated user object.
+**成功响应（200）**  
+返回更新后的用户对象（不含密码）。
 
 ---
 
 ### PUT /auth/admin/users/:id/role
 
-Change user role.
+更新用户角色。
 
-**Request Body:**
-
+**请求体**
 ```json
 {
-  "role": "admin"  // "user" | "admin"
+  "role": "operator"
 }
 ```
 
-**Business Rule:** Admin cannot change their own role.
+**role 允许值**
+- `user`
+- `operator`
+- `admin`
 
-**Success Response (200):** Updated user object.
+**业务规则**
+- 管理员不能修改自己的角色（返回 `403`）
+- 非法角色值返回 `400`
+
+**成功响应（200）**  
+返回更新后的用户对象（不含密码）。
+
+**非法角色示例（400）**
+```json
+{
+  "code": 400,
+  "message": "Validation Error",
+  "data": {
+    "errors": [
+      "Role must be \"user\", \"operator\" or \"admin\""
+    ]
+  },
+  "timestamp": "2025-12-18T10:00:00.000Z",
+  "success": false
+}
+```
 
 ---
 
 ### DELETE /auth/admin/users/:id
 
-Delete a user.
+删除用户。
 
-**Business Rule:** Admin cannot delete themselves.
+**路径参数**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| id | string | 用户 ID |
 
-**Success Response (200):**
+**业务规则**
+- 管理员不能删除自己（返回 `403`）
 
+**成功响应（200）**
 ```json
 {
   "code": 200,
   "message": "User deleted successfully",
   "data": null,
+  "timestamp": "2025-12-18T10:00:00.000Z",
   "success": true
-}
-```
-
-**Error: Self-deletion (403):**
-
-```json
-{
-  "code": 403,
-  "message": "Cannot delete your own account",
-  "data": null,
-  "success": false
 }
 ```
 
@@ -675,5 +726,6 @@ Delete a user.
 | 201  | Created |
 | 400  | Bad Request (validation error) |
 | 401  | Unauthorized (invalid/missing token or credentials) |
+| 403  | Forbidden (insufficient role/permission) |
 | 404  | Not Found |
 | 409  | Conflict (username/email already exists) |

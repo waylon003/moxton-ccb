@@ -81,11 +81,12 @@ ROLE_CONFIGS: Dict[str, RoleConfig] = {
         workdir=r"E:\nuxt-moxton",
         codex_dev_prompt=".claude/agents/shop-frontend.md",
         codex_qa_prompt=".claude/agents/shop-fe-qa.md",
-        qa_tooling="Primary: @playwright/test + microsoft/playwright-mcp. Fallback: repo smoke checks + targeted manual regression.",
+        qa_tooling="Primary: @playwright/test smoke baseline + microsoft/playwright-mcp. Fallback: targeted manual regression with reproducible evidence.",
         qa_primary_commands=(
             "pnpm type-check",
             "pnpm build",
-            "pnpm exec playwright test <spec-or-grep>  # if playwright tests exist",
+            "pnpm test:e2e -- tests/e2e/smoke.spec.ts  # must-run smoke baseline",
+            "pnpm exec playwright test <spec-or-grep>  # optional expanded coverage",
         ),
         qa_fallback_commands=(
             "Execute task-focused manual browser regression and capture reproducible steps.",
@@ -102,12 +103,13 @@ ROLE_CONFIGS: Dict[str, RoleConfig] = {
         workdir=r"E:\moxton-lotadmin",
         codex_dev_prompt=".claude/agents/admin-frontend.md",
         codex_qa_prompt=".claude/agents/admin-fe-qa.md",
-        qa_tooling="Primary: @playwright/test + microsoft/playwright-mcp. Fallback: repo smoke checks + targeted manual regression.",
+        qa_tooling="Primary: @playwright/test smoke baseline + microsoft/playwright-mcp. Fallback: targeted manual regression with reproducible evidence.",
         qa_primary_commands=(
             "pnpm typecheck",
             "pnpm lint",
             "pnpm build:test",
-            "pnpm exec playwright test <spec-or-grep>  # if playwright tests exist",
+            "pnpm test:e2e -- tests/e2e/smoke.spec.ts  # must-run smoke baseline",
+            "pnpm exec playwright test <spec-or-grep>  # optional expanded coverage",
         ),
         qa_fallback_commands=(
             "Execute task-focused manual browser regression and capture reproducible steps.",

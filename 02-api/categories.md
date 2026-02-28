@@ -1,5 +1,18 @@
 # 📂 Category API
 
+## 权限更新（BACKEND-010）
+
+分类写接口已统一为 `requireRole('admin', 'operator')`。
+
+| 方法 | 路径 | 权限要求 |
+|------|------|----------|
+| POST | `/categories` | 登录 + `admin/operator` |
+| PUT | `/categories/:id` | 登录 + `admin/operator` |
+| DELETE | `/categories/:id` | 登录 + `admin/operator` |
+| DELETE | `/categories/batch` | 登录 + `admin/operator` |
+| PUT | `/categories/batch/status` | 登录 + `admin/operator` |
+| PUT | `/categories/:id/move` | 登录 + `admin/operator` |
+
 ---
 
 ## Table of Contents
@@ -187,7 +200,7 @@
 
 **POST** `/categories`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -241,7 +254,7 @@
 
 **PUT** `/categories/:id`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **路径参数**:
 - `id`: 分类ID (string, required)
@@ -298,7 +311,7 @@
 
 **DELETE** `/categories/:id`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **路径参数**:
 - `id`: 分类ID (string, required)
@@ -338,7 +351,7 @@
 
 **DELETE** `/categories/batch`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -401,7 +414,7 @@
 
 **PUT** `/categories/batch/status`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -562,7 +575,7 @@
 
 **PUT** `/categories/:id/move`
 
-**认证**: Required
+**认证**: Required + Admin/Operator
 
 **路径参数**:
 - `id`: 要移动的分类ID (string, required)
@@ -814,14 +827,14 @@ Category (1) ----< (N) Product
 | GET | `/categories/tree/active` | Optional | 获取启用分类树 |
 | GET | `/categories/with-count` | Optional | 获取分类及商品数量 |
 | GET | `/categories/:id` | Optional | 获取分类详情 |
-| POST | `/categories` | Required | 创建分类 |
-| PUT | `/categories/:id` | Required | 更新分类 |
-| DELETE | `/categories/:id` | Required | 删除分类 |
-| DELETE | `/categories/batch` | Required | 批量删除分类 |
-| PUT | `/categories/batch/status` | Required | 批量更新状态 |
+| POST | `/categories` | Required + Admin/Operator | 创建分类 |
+| PUT | `/categories/:id` | Required + Admin/Operator | 更新分类 |
+| DELETE | `/categories/:id` | Required + Admin/Operator | 删除分类 |
+| DELETE | `/categories/batch` | Required + Admin/Operator | 批量删除分类 |
+| PUT | `/categories/batch/status` | Required + Admin/Operator | 批量更新状态 |
 | GET | `/categories/:id/children` | Optional | 获取子分类 |
 | GET | `/categories/:id/path` | Optional | 获取分类路径 |
-| PUT | `/categories/:id/move` | Required | 移动分类 |
+| PUT | `/categories/:id/move` | Required + Admin/Operator | 移动分类 |
 
 ### 认证说明
 

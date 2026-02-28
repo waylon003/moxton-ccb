@@ -102,12 +102,12 @@ Worker 启动后会自动注册到 `config/worker-panels.json`，无需手动记
 
 ### 等待 Worker 回调
 
-Worker 完成后会自动推送 `[ROUTE]` 消息到 Team Lead，无需手动轮询。
+Worker 完成后会通过 MCP tool `report_route` 通知 Team Lead，无需手动轮询。
 ```
 
 ### 自动通知
 
-Worker 通过 wrapper 脚本启动，**无论任务成功、失败或超时**，都会强制发送 `[ROUTE]` 通知到 Team Lead。
+Worker 通过 MCP tool 回报，**无论任务成功、失败或阻塞**，都必须调用 `report_route` 通知 Team Lead。
 
 ---
 

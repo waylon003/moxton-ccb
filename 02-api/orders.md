@@ -13,7 +13,7 @@ Moxton Lot API 的订单系统支持**混合模式**，同时允许游客和登�
 **认证模式**:
 - `optionalAuthMiddleware`: 支持游客和登录用户
 - `authMiddleware`: 仅登录用户
-- `adminMiddleware`: 仅管理员
+- `requireRole('admin', 'operator')`: 管理端权限（admin/operator）
 
 ## 统一响应格式
 
@@ -70,8 +70,8 @@ interface OrderResponseDTO {
 |------|------|-----------|
 | `PENDING` | 待支付 | 取消、支付 |
 | `PAID` | 已支付 | - |
-| `CONFIRMED` | 已确认 | 发货（管理员） |
-| `SHIPPED` | 已发货 | 确认收货（管理员） |
+| `CONFIRMED` | 已确认 | 发货（admin/operator） |
+| `SHIPPED` | 已发货 | 确认收货（admin/operator） |
 | `DELIVERED` | 已送达 | - |
 | `CANCELLED` | 已取消 | - |
 
@@ -83,9 +83,9 @@ PENDING (待支付)
 PAID (已支付)
   ↓ (支付 Webhook 自动流转)
 CONFIRMED (已确认)
-  ↓ (管理员发货)
+  ↓ (admin/operator发货)
 SHIPPED (已发货)
-  ↓ (管理员确认收货)
+  ↓ (admin/operator确认收货)
 DELIVERED (已送达)
 
 PENDING → CANCELLED (用户取消)
@@ -553,15 +553,15 @@ GET /orders/guest/query?email=guest@example.com&phone=+86-13800138000
 
 ---
 
-## 管理员端点
+## 管理端点（admin/operator）
 
-所有管理员端点使用 `/admin` 前缀，需要管理员权限。
+所有管理端端点使用 `/admin` 前缀，需要 `admin` 或 `operator` 角色。
 
 ### 获取所有订单
 
 **GET** `/orders/admin`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **请求头**:
 ```
@@ -640,7 +640,7 @@ Authorization: Bearer <admin-token>
 
 **GET** `/orders/admin/:id`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **请求头**:
 ```
@@ -650,7 +650,7 @@ Authorization: Bearer <admin-token>
 **路径参数**:
 - `id` (必填): 订单 ID
 
-**权限**: 管理员可以查看所有订单的详情（不受用户权限限制）
+**权限**: `admin/operator` 可以查看所有订单详情（不受订单归属限制）
 
 **响应**: 返回完整的 `OrderResponseDTO` 格式
 ```json
@@ -715,8 +715,8 @@ Authorization: Bearer <admin-token>
 ```
 
 **注意**:
-- 与用户端点 `GET /orders/:id` 不同，此接口不受订单归属限制（仍需 Admin）
-- 管理员可以查看任何订单的完整详情
+- 与用户端点 `GET /orders/:id` 不同，此接口不受订单归属限制（仍需 admin/operator）
+- 管理端可查看任意订单的完整详情
 - 使用 `OrderTransformer.transform()` 标准化响应格式
 - 包含完整的订单项、地址和客户信息
 - `metadata` 为安全解析后的对象；解析失败或无值时返回空对象 `{}`
@@ -725,11 +725,11 @@ Authorization: Bearer <admin-token>
 
 ---
 
-### 管理员发货
+### 管理端发货
 
 **PUT** `/orders/admin/:id/ship`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **限制**: 只能发货 `CONFIRMED` 状态的订单
 
@@ -792,7 +792,7 @@ Authorization: Bearer <admin-token>
 
 **PATCH** `/orders/admin/:id/shipping-info`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **描述**: 更新已发货订单的物流信息（物流单号、物流公司、发货备注）。支持部分更新。
 
@@ -874,11 +874,11 @@ curl -X PATCH "http://localhost:3000/orders/admin/{id}/shipping-info" \
 
 ---
 
-### 管理员确认收货
+### 管理端确认收货
 
 **PUT** `/orders/admin/:id/deliver`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **限制**: 只能确认 `SHIPPED` 状态的订单
 
@@ -937,7 +937,7 @@ curl -X PATCH "http://localhost:3000/orders/admin/{id}/shipping-info" \
 
 **PUT** `/orders/admin/:id/status`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **请求体**:
 ```json
@@ -974,7 +974,7 @@ curl -X PATCH "http://localhost:3000/orders/admin/{id}/shipping-info" \
 
 **POST** `/orders/admin/cleanup-expired`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **描述**: 手动触发清理超过 15 天的 PENDING 状态订单（待付款过期订单）。
 
@@ -1020,7 +1020,7 @@ curl -X PATCH "http://localhost:3000/orders/admin/{id}/shipping-info" \
 
 **GET** `/orders/admin/:id/history`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **描述**: 根据订单ID获取该订单的所有操作历史记录。
 
@@ -1133,7 +1133,7 @@ curl -X PATCH "http://localhost:3000/orders/admin/{id}/shipping-info" \
 
 **GET** `/orders/admin/stats/all`
 
-**认证**: Required + Admin
+**认证**: Required + Admin/Operator
 
 **查询参数**:
 - `userId` (可选): 指定用户的统计
@@ -1180,19 +1180,19 @@ curl -X PATCH "http://localhost:3000/orders/admin/{id}/shipping-info" \
 | GET | `/orders/guest/orders/:id` | X-Guest-ID | 游客订单详情 |
 | GET | `/orders/guest/query` | None | 游客订单查询（邮箱/电话/订单号） |
 
-### 管理员端点
+### 管理端点（admin/operator）
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
-| GET | `/orders/admin` | Admin | 获取所有订单 |
-| GET | `/orders/admin/:id` | Admin | 获取订单详情 |
-| GET | `/orders/admin/:id/history` | Admin | 获取订单操作历史 |
-| POST | `/orders/admin/cleanup-expired` | Admin | 手动清理过期订单 |
-| PUT | `/orders/admin/:id/ship` | Admin | 管理员发货 |
-| PATCH | `/orders/admin/:id/shipping-info` | Admin | 补充/修改物流信息 |
-| PUT | `/orders/admin/:id/deliver` | Admin | 管理员确认收货 |
-| PUT | `/orders/admin/:id/status` | Admin | 更新订单状态 |
-| GET | `/orders/admin/stats/all` | Admin | 获取订单统计 |
+| GET | `/orders/admin` | Admin/Operator | 获取所有订单 |
+| GET | `/orders/admin/:id` | Admin/Operator | 获取订单详情 |
+| GET | `/orders/admin/:id/history` | Admin/Operator | 获取订单操作历史 |
+| POST | `/orders/admin/cleanup-expired` | Admin/Operator | 手动清理过期订单 |
+| PUT | `/orders/admin/:id/ship` | Admin/Operator | 管理端发货 |
+| PATCH | `/orders/admin/:id/shipping-info` | Admin/Operator | 补充/修改物流信息 |
+| PUT | `/orders/admin/:id/deliver` | Admin/Operator | 管理端确认收货 |
+| PUT | `/orders/admin/:id/status` | Admin/Operator | 更新订单状态 |
+| GET | `/orders/admin/stats/all` | Admin/Operator | 获取订单统计 |
 
 ---
 
@@ -1266,9 +1266,9 @@ PENDING (待支付)
 PAID (已支付)
   ↓ (支付 Webhook 自动流转)
 CONFIRMED (已确认)
-  ↓ (管理员发货)
+  ↓ (admin/operator发货)
 SHIPPED (已发货)
-  ↓ (管理员确认收货)
+  ↓ (admin/operator确认收货)
 DELIVERED (已送达)
 
 PENDING → CANCELLED (用户取消)

@@ -1,5 +1,19 @@
-{
-  "version": "1.0",
-  "updated_at": "2026-02-27T19:11:05+08:00",
-  "locks": {}
+﻿{
+    "version":  "1.0",
+    "updated_at":  "2026-02-28T13:38:04+08:00",
+    "locks":  {
+                  "SHOP-FE-004":  {
+                                      "owner":  "team-lead",
+                                      "note":  "Manual reset to assigned",
+                                      "runner":  "codex",
+                                      "state":  "qa",
+                                      "updated_by":  "teamlead-control/dispatch-qa",
+                                      "updated_at":  "2026-02-28T13:38:04+08:00",
+                                      "routeUpdate":  {
+                                                          "worker":  "shop-fe-dev",
+                                                          "timestamp":  "2026-02-28T05:31:11.239Z",
+                                                          "bodyPreview":  "1. 修复侧边栏切换报错：\n   - 为 `pages/account.vue` 的 `isActive` 函数添加健壮性处理，防止 transition 期间 undefined 报错。\n   - 为 `NuxtPage` 添加 `:page-key=\"route.path\"` 优化路由切换体验。\n   - 修改导航栏“账户中心”链接直接指向 `/account/profile`，避免一次重定向"
+                                                      }
+                                  }
+              }
 }
