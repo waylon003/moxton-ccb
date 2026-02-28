@@ -53,9 +53,10 @@ You verify storefront tasks after developer delivery.
    - 页面是否正常加载，路由是否正确
    - SSR 兼容性：是否有 hydration mismatch 错误
    - i18n：所有用户可见文本是否走了国际化（切换语言验证）
-   - 响应式：移动端/平板/桌面端布局是否正常
+   - 响应式：移动端/平板/桌面端布局是否正常（至少 390/768/1280 三档）
+   - UI 细节：间距、对齐、按钮尺寸、禁用态、错误态是否符合任务要求（必须有截图证据）
    - 功能流程：登录/注册/个人中心等核心流程是否完整
-   - API 交互：请求参数和错误处理是否正确
+   - API 交互：请求参数和错误处理是否正确（必须采集关键接口响应状态，包含 4xx/5xx 检查）
    - 边界情况：空数据、网络错误、未登录访问受保护页面
    - 回归：现有功能（购物车、结账、支付）是否受影响
 6. 执行强制运行时验证（见下方章节）。
@@ -71,6 +72,12 @@ You verify storefront tasks after developer delivery.
 - 通过 `browser_navigate` 访问目标页面，`browser_snapshot` 获取页面状态
 - 通过 `browser_console_messages` 检查浏览器控制台错误
 - 通过 `browser_take_screenshot` 截图作为证据
+- 必须补充关键接口网络证据（至少覆盖任务涉及的核心接口）：
+  - 记录接口 URL、HTTP 状态码、失败响应摘要（如有）
+  - 明确标注是否出现 `4xx/5xx`
+- 必须至少验证 1 个失败路径（如模拟或构造 500 响应）：
+  - 验证页面显示 i18n/产品化错误文案
+  - 验证不透出后端英文原始报错
 - 报告中必须包含"控制台错误检查"项，结果为 0 errors 或列出具体错误
 
 ### 报告强制字段:
@@ -81,9 +88,11 @@ You verify storefront tasks after developer delivery.
 | 浏览器验证 | playwright-mcp (browser_navigate + browser_snapshot) | <页面状态> |
 | 浏览器控制台 | playwright-mcp (browser_console_messages) | <错误数量+内容> |
 | 截图证据 | playwright-mcp (browser_take_screenshot) | <截图文件> |
+| 网络响应证据 | playwright / 测试脚本 / 代理日志 | <关键接口URL + status + 是否4xx/5xx> |
+| 失败路径验证 | playwright (500/异常场景) | <用户提示文案 + 是否透出后端原文> |
 | 组件 API 验证 | context7-mcp | <查询结果> |
 
-缺少证据时，必须标注原因并将最终决策设为 BLOCKED（而非 PASS）。
+缺少任意强制证据时，必须标注原因并将最终决策设为 BLOCKED（而非 PASS）。
 
 ## 报告模板
 
@@ -120,6 +129,17 @@ body:
 | pnpm build | <输出摘要> | regression / env_blocker / pass |
 | pnpm test:e2e -- tests/e2e/smoke.spec.ts | <输出摘要> | regression / env_blocker / pass |
 
+## 网络响应证据（强制）
+| 接口 | 方法 | 期望状态 | 实际状态 | 结果 |
+|------|------|----------|----------|------|
+| <例如 /orders/user> | GET | 200 | <status> | PASS/FAIL |
+| <例如 /addresses> | GET | 200 | <status> | PASS/FAIL |
+
+## 失败路径验证（强制）
+| 场景 | 注入/触发方式 | 预期文案 | 实际文案 | 是否透出后端原文 | 结果 |
+|------|---------------|----------|----------|------------------|------|
+| 500 错误 | <mock/拦截方式> | <i18n 文案> | <页面文案> | 是/否 | PASS/FAIL |
+
 ## 失败详情（如有）
 - 页面: <route>
 - 操作: <action>
@@ -131,9 +151,9 @@ body:
 - <现有功能是否受影响>
 
 ## 最终决策: <PASS | FAIL | BLOCKED>
-- PASS: 验收标准全部通过，基线检查通过
+- PASS: 验收标准全部通过，且基线检查+控制台+截图+网络响应+失败路径验证证据齐全
 - FAIL: 验收标准未满足（真实回归/行为不匹配）
-- BLOCKED: 功能验证通过但基线/自动化被环境限制阻塞
+- BLOCKED: 环境限制或证据不完整（包括缺少网络响应证据/失败路径验证）
 [/ROUTE]
 ```
 

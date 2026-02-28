@@ -1,18 +1,18 @@
-﻿{
+{
     "version":  "1.0",
-    "updated_at":  "2026-02-28T13:38:04+08:00",
+    "updated_at":  "2026-02-28T16:37:36+08:00",
     "locks":  {
                   "SHOP-FE-004":  {
                                       "owner":  "team-lead",
-                                      "note":  "Manual reset to assigned",
+                                      "note":  "Manual reset to waiting_qa",
                                       "runner":  "codex",
                                       "state":  "qa",
                                       "updated_by":  "teamlead-control/dispatch-qa",
-                                      "updated_at":  "2026-02-28T13:38:04+08:00",
+                                      "updated_at":  "2026-02-28T16:37:36+08:00",
                                       "routeUpdate":  {
-                                                          "worker":  "shop-fe-dev",
-                                                          "timestamp":  "2026-02-28T05:31:11.239Z",
-                                                          "bodyPreview":  "1. 修复侧边栏切换报错：\n   - 为 `pages/account.vue` 的 `isActive` 函数添加健壮性处理，防止 transition 期间 undefined 报错。\n   - 为 `NuxtPage` 添加 `:page-key=\"route.path\"` 优化路由切换体验。\n   - 修改导航栏“账户中心”链接直接指向 `/account/profile`，避免一次重定向"
+                                                          "worker":  "shop-fe-qa",
+                                                          "timestamp":  "2026-02-28T07:55:52.647Z",
+                                                          "bodyPreview":  "针对用户最新反馈完成修复并复测：\n\n问题1：订单页出现英文 `page is not defined`\n- 修复：E:\\nuxt-moxton\\pages\\account\\orders\\index.vue\n  - 失败分支不再直接展示后端 message，统一显示 i18n 文案 `account.orders.messages.loadFailed`。\n  - 重试按钮样式固定为小尺寸：`h-9"
                                                       }
                                   }
               }

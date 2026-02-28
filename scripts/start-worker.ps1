@@ -57,9 +57,23 @@ Write-Host ""
 # 构建引擎启动命令
 $ccbRoot = Split-Path -Parent $PSScriptRoot
 $engineCommand = if ($Engine -eq "codex") {
-    "codex -a never --add-dir '$ccbRoot'"
+    # dev: untrusted（只自动批准可信命令如 ls/cat/sed）
+    # qa: on-request（模型自主决策是否请求审批）
+    # 禁止子代理由 dispatch 指令层面控制
+    $approvalFlag = if ($WorkerName -like "*-qa") { "on-request" } else { "untrusted" }
+    $codexCmd = "codex -a $approvalFlag --sandbox workspace-write --add-dir '$ccbRoot'"
+    # 前端 worker 启用 js_repl，支持实时调试前端页面
+    if ($WorkerName -like "shop-fe-*" -or $WorkerName -like "admin-fe-*") {
+        $codexCmd += " --enable js_repl"
+    }
+    $codexCmd
 } else {
-    "gemini --yolo --include-directories '$ccbRoot'"
+    # Gemini: 去掉 --yolo，默认启用 auto_edit（低风险编辑自动批准）
+    $geminiCmd = "gemini --approval-mode auto_edit --include-directories '$ccbRoot'"
+    if ($env:GEMINI_ALLOWED_TOOLS) {
+        $geminiCmd += " --allowed-tools ""$($env:GEMINI_ALLOWED_TOOLS)"""
+    }
+    $geminiCmd
 }
 
 # 生成 wrapper 脚本到临时文件（避免 EncodedCommand 编码问题）

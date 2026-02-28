@@ -1,20 +1,12 @@
-﻿{
-    "updated_at":  "2026-02-28T13:38:04.2400809+08:00",
+{
+    "updated_at":  "2026-02-28T16:39:47.4578858+08:00",
     "workers":  {
-                    "shop-fe-dev":  {
-                                        "last_seen":  "2026-02-28T13:25:37.6285866+08:00",
-                                        "pane_id":  "185",
-                                        "work_dir":  "E:\\nuxt-moxton",
-                                        "status":  "active",
-                                        "registered_at":  "2026-02-28T13:25:34.5369148+08:00",
-                                        "engine":  "gemini"
-                                    },
                     "shop-fe-qa":  {
-                                       "last_seen":  "2026-02-28T13:38:04.2380336+08:00",
-                                       "pane_id":  "186",
+                                       "last_seen":  "2026-02-28T16:39:47.4568399+08:00",
+                                       "pane_id":  "6",
                                        "work_dir":  "E:\\nuxt-moxton",
                                        "status":  "active",
-                                       "registered_at":  "2026-02-28T13:38:01.1060632+08:00",
+                                       "registered_at":  "2026-02-28T16:39:47.4568399+08:00",
                                        "engine":  "codex"
                                    }
                 }

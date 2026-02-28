@@ -8,10 +8,12 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId BACKEND-009
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action status
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction reap-stale
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action approve-request -RequestId APR-20260228120000-0001
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action deny-request -RequestId APR-20260228120000-0001
 
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet("bootstrap", "dispatch", "dispatch-qa", "status", "recover", "add-lock")]
+    [ValidateSet("bootstrap", "dispatch", "dispatch-qa", "status", "recover", "add-lock", "approve-request", "deny-request")]
     [string]$Action,
 
     [Parameter(Mandatory=$false)]
@@ -28,6 +30,9 @@ param(
     [string]$TargetState,
 
     [Parameter(Mandatory=$false)]
+    [string]$RequestId,
+
+    [Parameter(Mandatory=$false)]
     [switch]$DryRun
 )
 
@@ -39,10 +44,20 @@ $workerMapPath = Join-Path $rootDir "config\worker-map.json"
 $registryPath = Join-Path $rootDir "config\worker-panels.json"
 $bootstrapFlag = Join-Path $env:TEMP "moxton-bootstrap-done.flag"
 $monitorPidFile = Join-Path $env:TEMP "moxton-route-monitor.pid"
+$approvalRequestsPath = Join-Path $rootDir "mcp\route-server\data\approval-requests.json"
 
 # ============================================================
 # Internal Functions
 # ============================================================
+
+function Write-Utf8NoBomFile([string]$path, [string]$content) {
+    $dir = Split-Path -Parent $path
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
+}
 
 function Resolve-TeamLeadPaneId {
     if ($env:TEAM_LEAD_PANE_ID) {
@@ -78,7 +93,42 @@ function Read-TaskLocks {
 
 function Write-TaskLocks($data) {
     $data.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-    $data | ConvertTo-Json -Depth 10 | Set-Content $taskLocksPath -Encoding UTF8
+    $json = ($data | ConvertTo-Json -Depth 10)
+    Write-Utf8NoBomFile -path $taskLocksPath -content $json
+}
+
+function Read-ApprovalRequests {
+    if (-not (Test-Path $approvalRequestsPath)) {
+        return @{ version = "1.0"; updated_at = (Get-Date -Format "o"); requests = @() }
+    }
+    try {
+        $raw = Get-Content $approvalRequestsPath -Raw -Encoding UTF8
+        $parsed = $raw | ConvertFrom-Json
+        if (-not $parsed.requests) {
+            $parsed | Add-Member -NotePropertyName requests -NotePropertyValue @() -Force
+        }
+        return $parsed
+    } catch {
+        Write-Host ('[FAIL] Invalid approval requests file: ' + $approvalRequestsPath) -ForegroundColor Red
+        exit 1
+    }
+}
+
+function Write-ApprovalRequests($data) {
+    $data.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+    $json = ($data | ConvertTo-Json -Depth 10)
+    Write-Utf8NoBomFile -path $approvalRequestsPath -content $json
+}
+
+function Send-ApprovalDecisionToPane($paneId, $decision) {
+    $key = if ($decision -eq 'approve') { 'y' } else { 'n' }
+    wezterm cli send-text --pane-id $paneId --no-paste $key | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ('[FAIL] Failed to send approval decision to pane ' + $paneId) -ForegroundColor Red
+        exit 1
+    }
+    Start-Sleep -Milliseconds 200
+    wezterm cli send-text --pane-id $paneId --no-paste "`r" | Out-Null
 }
 
 function Assert-TaskState($tid, [string[]]$allowedStates, $locks) {
@@ -200,6 +250,10 @@ function Invoke-Bootstrap {
         Write-Host '[INFO] Route inbox will be created on first report_route call' -ForegroundColor Yellow
     }
 
+    Write-Host ''
+    Write-Host '--- Route Monitor ---' -ForegroundColor Cyan
+    Ensure-RouteMonitor $tlPaneId
+
     Set-Content $bootstrapFlag ('bootstrapped=' + (Get-Date -Format 'o')) -Force
     Write-Host ''
     Write-Host '[OK] Bootstrap flag written' -ForegroundColor Green
@@ -223,6 +277,8 @@ function Invoke-Bootstrap {
     Write-Host '  dispatch-qa -- powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId <ID>' -ForegroundColor White
     Write-Host '  status      -- powershell -File scripts/teamlead-control.ps1 -Action status' -ForegroundColor White
     Write-Host '  recover     -- powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction <action>' -ForegroundColor White
+    Write-Host '  approve-request -- powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId <ID>' -ForegroundColor White
+    Write-Host '  deny-request    -- powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId <ID>' -ForegroundColor White
     Write-Host ''
 }
 
@@ -304,12 +360,17 @@ function Invoke-Dispatch {
     $lockData.updated_by = "teamlead-control/dispatch"
     Write-TaskLocks $locks
 
+    # Ensure route monitor is alive for auto lock/doc-updater processing
+    Ensure-RouteMonitor $tlPaneId
+
     Write-Host ''
     Write-Host ('[OK] Task ' + $TaskId + ' dispatched to ' + $devWorker + ' (pane ' + $paneId + ')') -ForegroundColor Green
     Write-Host ''
-    Write-Host '[NEXT] Start background watcher to auto-detect callback:' -ForegroundColor Cyan
+    Write-Host '[NEXT] Start background watchers:' -ForegroundColor Cyan
     $watcherCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\route-watcher.ps1" -FilterTask ' + $TaskId + ' -Timeout 600'
     Write-Host ('  Bash(run_in_background: true): ' + $watcherCmd) -ForegroundColor White
+    $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\approval-router.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $devWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -Timeout 600'
+    Write-Host ('  Bash(run_in_background: true): ' + $approvalCmd) -ForegroundColor White
     Write-Host ''
 }
 
@@ -380,12 +441,17 @@ function Invoke-DispatchQA {
     $lockData.updated_by = "teamlead-control/dispatch-qa"
     Write-TaskLocks $locks
 
+    # Ensure route monitor is alive for auto lock/doc-updater processing
+    Ensure-RouteMonitor $tlPaneId
+
     Write-Host ''
     Write-Host ('[OK] QA task ' + $TaskId + ' dispatched to ' + $qaWorker + ' (pane ' + $paneId + ')') -ForegroundColor Green
     Write-Host ''
-    Write-Host '[NEXT] Start background watcher to auto-detect callback:' -ForegroundColor Cyan
+    Write-Host '[NEXT] Start background watchers:' -ForegroundColor Cyan
     $watcherCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\route-watcher.ps1" -FilterTask ' + $TaskId + ' -Timeout 600'
     Write-Host ('  Bash(run_in_background: true): ' + $watcherCmd) -ForegroundColor White
+    $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\approval-router.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $qaWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -Timeout 600'
+    Write-Host ('  Bash(run_in_background: true): ' + $approvalCmd) -ForegroundColor White
     Write-Host ''
 }
 
@@ -446,6 +512,19 @@ function Invoke-Status {
         }
     } else {
         Write-Host '  (inbox not created yet)' -ForegroundColor Gray
+    }
+
+    # Approval requests
+    Write-Host '--- Approval Requests ---' -ForegroundColor Cyan
+    $approvals = Read-ApprovalRequests
+    $pendingApprovals = @($approvals.requests | Where-Object { $_.status -eq 'pending' })
+    if ($pendingApprovals.Count -gt 0) {
+        foreach ($req in $pendingApprovals) {
+            $reqColor = if ($req.risk -eq 'low') { 'Yellow' } else { 'Red' }
+            Write-Host ('  ' + $req.id + ' task=' + $req.task + ' worker=' + $req.worker + ' risk=' + $req.risk) -ForegroundColor $reqColor
+        }
+    } else {
+        Write-Host '  (no pending approval requests)' -ForegroundColor Gray
     }
 
     # Task locks
@@ -594,6 +673,38 @@ function Invoke-Recover {
 }
 
 # ============================================================
+# Action: approve-request / deny-request
+# ============================================================
+function Invoke-ApprovalDecision($decision) {
+    if (-not $RequestId) {
+        Write-Host ('[FAIL] ' + $Action + ' requires -RequestId') -ForegroundColor Red
+        exit 1
+    }
+
+    $approvals = Read-ApprovalRequests
+    $req = $approvals.requests | Where-Object { $_.id -eq $RequestId } | Select-Object -First 1
+    if (-not $req) {
+        Write-Host ('[FAIL] Approval request not found: ' + $RequestId) -ForegroundColor Red
+        exit 1
+    }
+    if ($req.status -ne 'pending') {
+        Write-Host ('[FAIL] Approval request is not pending: ' + $RequestId + ' (status=' + $req.status + ')') -ForegroundColor Red
+        exit 1
+    }
+
+    Send-ApprovalDecisionToPane -paneId $req.worker_pane_id -decision $decision
+
+    $req.status = 'resolved'
+    $req.decision = $decision
+    $req.resolved_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+    $req.resolved_by = 'teamlead-control/' + $Action
+    Write-ApprovalRequests $approvals
+
+    Write-Host ('[OK] Approval request ' + $RequestId + ' -> ' + $decision) -ForegroundColor Green
+    Write-Host ('     Decision sent to pane ' + $req.worker_pane_id) -ForegroundColor Gray
+}
+
+# ============================================================
 # Action: add-lock
 # ============================================================
 function Invoke-AddLock {
@@ -664,4 +775,6 @@ switch ($Action) {
     "status"      { Invoke-Status }
     "recover"     { Invoke-Recover }
     "add-lock"    { Invoke-AddLock }
+    "approve-request" { Invoke-ApprovalDecision -decision 'approve' }
+    "deny-request"    { Invoke-ApprovalDecision -decision 'deny' }
 }

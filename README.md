@@ -6,15 +6,15 @@
 
 - **Team Lead**：Claude Code 会话（本仓库）— 需求拆分、任务分派、进度监控
 - **Workers**：Codex / Gemini CLI — 在 WezTerm 多窗口中执行开发和 QA
-- **通信**：WezTerm CLI `send-text` + `[ROUTE]` 回调机制
+- **通信**：WezTerm CLI `send-text` 派遣 + MCP `report_route` 回调 + `approval-router` 审批转发
 
 ## 业务仓库
 
-| 前缀 | 仓库 | Worker 引擎 |
-|------|------|------------|
-| BACKEND | `E:\moxton-lotapi` | Codex |
-| ADMIN-FE | `E:\moxton-lotadmin` | Codex |
-| SHOP-FE | `E:\nuxt-moxton` | Gemini |
+| 前缀 | 仓库 | Dev 引擎 | QA 引擎 |
+|------|------|---------|---------|
+| BACKEND | `E:\moxton-lotapi` | Codex (`-a untrusted`) | Codex (`-a on-request`) |
+| ADMIN-FE | `E:\moxton-lotadmin` | Codex (`-a untrusted`) | Codex (`-a on-request`) |
+| SHOP-FE | `E:\nuxt-moxton` | Gemini (default) | Gemini (`auto_edit`) |
 
 ## 使用方式
 
@@ -41,6 +41,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 03-guides/         技术指南
 04-projects/       项目文档与协调关系
 05-verification/   QA 验证报告
-config/            配置（worker-map、dispatch 模板）
+config/            配置（worker-map、approval-policy）
 scripts/           控制器与工具脚本
+mcp/route-server/  MCP 路由服务（report_route / check_routes / clear_route）
 ```

@@ -43,6 +43,11 @@ description: Team Lead - 负责需求拆分、任务分派、进度监控、跨�
 
 **所有 Worker 操作必须通过 `teamlead-control.ps1`，禁止直接调用子脚本。**
 
+Codex 权限策略说明（重要）：
+- 当前环境中，Codex 子代理（如 awaiter）触发的 `Approval needed` 在 pane 内无法稳定人工确认。
+- 因此 Codex Worker 统一采用 `-a never --sandbox workspace-write`，避免审批交互卡死。
+- 高风险操作不走“现场点批准”，改为：Worker 回传 `blocked` + Team Lead 分派专门修复/运维任务。
+
 Worker 角色映射定义在 `config/worker-map.json`：
 
 | 前缀 | Dev Worker | QA Worker | 引擎 | 工作目录 |
@@ -117,12 +122,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
      Bash(run_in_background: true):
      powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\route-watcher.ps1" -FilterTask <TASK-ID> -Timeout 600
      ```
-   - watcher 检测到 route 后自动通知 → 调用 `check_routes` 获取详情 → `clear_route(route_id)` 清理
+   - 同时启动审批路由 watcher：
+     ```
+     Bash(run_in_background: true):
+     powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\approval-router.ps1" -WorkerPaneId <PANE-ID> -WorkerName <WORKER> -TaskId <TASK-ID> -TeamLeadPaneId <TEAM-LEAD-PANE-ID> -Timeout 600
+     ```
+   - route watcher 检测到回调后：调用 `check_routes` 获取详情 → `clear_route(route_id)` 清理
+   - 若回调来自 `*-qa` 且 `status=success`，必须先做证据门禁再决定是否接受：
+     - 必须包含：`控制台错误检查`、`截图证据`、`网络响应证据`、`失败路径验证（含500/异常）`
+     - 任一缺失：不得接受 success，按 `blocked` 处理并立即重新派遣 QA 补证据
+     - 禁止仅凭“已验证/已通过”口头描述放行
+   - approval watcher 检测到高风险权限请求后：执行 `status` 查看 pending request，然后用以下命令决策：
+     - `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action approve-request -RequestId <REQUEST-ID>`
+     - `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action deny-request -RequestId <REQUEST-ID>`
    - 发现跨角色依赖时由 Team Lead 中继
 
 6. **QA**：
    - Dev 完成后必须安排 QA worker 验证（`dispatch-qa`）
    - 无测试证据不得宣告完成
+   - QA `PASS` 的最小证据集：
+     - 关键页面截图（含问题点）
+     - 浏览器 console 错误统计
+     - 关键接口状态码记录（显式标记是否出现 4xx/5xx）
+     - 至少一个失败路径验证（500/异常文案不透出后端原文）
 
 7. **收口**：
    - 先向用户汇报

@@ -26,6 +26,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Write-Utf8NoBomFile([string]$path, [string]$content) {
+    $dir = Split-Path -Parent $path
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
+}
+
 # 确保配置目录存在
 $registryDir = Split-Path $RegistryPath -Parent
 if (-not (Test-Path $registryDir)) {
@@ -39,7 +48,8 @@ function Initialize-Registry {
             workers = @{}
             updated_at = (Get-Date -Format "o")
         }
-        $initialData | ConvertTo-Json -Depth 10 | Set-Content $RegistryPath -Encoding UTF8
+        $json = ($initialData | ConvertTo-Json -Depth 10)
+        Write-Utf8NoBomFile -path $RegistryPath -content $json
     }
 }
 
@@ -53,7 +63,8 @@ function Read-Registry {
 # 写入注册表
 function Write-Registry($data) {
     $data.updated_at = Get-Date -Format "o"
-    $data | ConvertTo-Json -Depth 10 | Set-Content $RegistryPath -Encoding UTF8
+    $json = ($data | ConvertTo-Json -Depth 10)
+    Write-Utf8NoBomFile -path $RegistryPath -content $json
 }
 
 # 验证 pane 是否还存在

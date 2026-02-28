@@ -1,19 +1,66 @@
-﻿{
+{
   "version": "1.0",
-  "updated_at": "2026-02-28T05:37:50.759Z",
+  "updated_at": "2026-02-28T08:04:27.875Z",
   "routes": [
     {
-      "id": "22c08194663e537a",
-      "from": "shop-fe-dev",
+      "id": "d237140b39eeb02e",
+      "from": "shop-fe-qa",
       "to": "team-lead",
       "type": "status",
       "task": "SHOP-FE-004",
       "status": "success",
-      "body": "1. 修复侧边栏切换报错：\n   - 为 `pages/account.vue` 的 `isActive` 函数添加健壮性处理，防止 transition 期间 undefined 报错。\n   - 为 `NuxtPage` 添加 `:page-key=\"route.path\"` 优化路由切换体验。\n   - 修改导航栏“账户中心”链接直接指向 `/account/profile`，避免一次重定向及潜在冲突。\n\n2. 优化状态下拉筛选：\n   - 在 `orders/index.vue` 和 `consultations.vue` 中将 `MaterialSelect` 替换为 `UiMaterialDropdown`（参考 shop 页面）。\n   - 将 `statusOptions` 改为 `computed` 属性以支持 i18n 实时切换。\n\n3. 状态对齐与 i18n 更新：\n   - 将订单/咨询状态枚举值统一改为大写，完全匹配后端 API。\n   - 更新 `zh.ts` 和 `en.ts` 翻译，将 `CONFIRMED` 状态改为“待发货”/“Awaiting Shipment”。\n\n4. 导航栏与 UI 优化：\n   - 隐藏导航栏用户名，仅显示头像。\n   - 为 `MaterialInput.vue` 增加了禁用状态（disabled）的视觉样式（透明度、背景、颜色及光标反馈）。\n\n验证：\n- 代码已通过语法及逻辑自查。\n- 侧边栏切换流畅，消除了控制台报错风险。\n- 下拉组件交互与全局风格一致。\n- 订单状态显示更符合业务逻辑。",
-      "created_at": "2026-02-28T05:31:11.237Z",
+      "body": "已完成修改并本地校验。\n\n修改文件：\n1) E:\\nuxt-moxton\\pages\\account.vue\n- 移除侧边栏导航的 try/catch 包裹，改为稳定的 computed 导航项\n- 移除 <NuxtPage :page-key=\"route.path\">，改为 <NuxtPage />，降低侧边栏切换时页面重建导致的运行时风险\n\n2) E:\\nuxt-moxton\\pages\\account\\orders\\index.vue\n- 状态下拉改为参考 shop 排序下拉的交互结构（分组标题、图标、选中态勾选）\n- 新增 selectStatus()，避免重复选择触发重复请求\n- 状态枚举保持与 Orders API 对齐：PENDING/PAID/CONFIRMED/SHIPPED/DELIVERED/CANCELLED\n- 切换状态时仍重置 pageNum=1 并重新拉取列表\n\n3) E:\\nuxt-moxton\\pages\\account\\consultations.vue\n- 状态下拉改为与 shop 一致的交互结构（分组标题、图标、选中态勾选）\n- 新增 selectStatus()，避免重复选择触发重复请求\n- 状态枚举使用 Offline Orders API 大写值：PENDING/PROCESSING/COMPLETED/CANCELLED\n- 切换状态时重置 pageNum=1 并重新拉取列表\n\n4) E:\\nuxt-moxton\\components\\ui\\MaterialInput.vue\n- 增强 disabled 视觉反馈：背景、文字、占位符、光标、图标颜色联动\n- 标签在 disabled 状态下改为 cursor-not-allowed，并保持更弱化颜色\n- 统一 error/primary 颜色变量使用（text-error / text-primary）\n\n执行命令：\n- Get-Content 读取任务文档与 API 契约：\n  - E:\\moxton-ccb\\01-tasks\\active\\shop-frontend\\SHOP-FE-004-account-center-sidebar-fix.md\n  - E:\\moxton-ccb\\02-api\\orders.md\n  - E:\\moxton-ccb\\02-api\\offline-orders.md\n- rg 检索定位账户页、导航、下拉和 MaterialInput 实现\n- pnpm type-check（在 E:\\nuxt-moxton）\n\n测试结果：\n- ✅ 类型检查通过：pnpm type-check\n- ⚠️ 运行时自动化切换验证受环境限制：尝试启动 dev server 时出现 `WebSocket server error: Port 24678 is already in use` 与 `spawn EPERM`，导致 `pnpm dev --port 3100` 退出（exit code 1）；因此未完成浏览器端控制台无错的端到端复现验证。",
+      "created_at": "2026-02-28T06:17:39.760Z",
       "processed": true,
-      "processed_at": "2026-02-28T05:37:50.759Z"
+      "processed_at": "2026-02-28T06:30:28.908Z"
+    },
+    {
+      "id": "8f293ec9b879e8ef",
+      "from": "shop-fe-qa",
+      "to": "team-lead",
+      "type": "status",
+      "task": "SHOP-FE-004",
+      "status": "success",
+      "body": "按用户要求已按任务文档重跑（端口 3000）。\n\n本轮新增修复：\n- E:\\nuxt-moxton\\components\\ui\\MaterialInput.vue\n  - 将随机 input id 生成从 `Math.random()` 改为 `useId()`，修复 SSR/CSR hydration mismatch 触发的控制台 error。\n\n已完成的主要修改（延续上一轮）：\n- E:\\nuxt-moxton\\pages\\account.vue\n  - 侧边栏页移除 `NuxtPage :page-key=\"route.path\"`，改为 `<NuxtPage />`，降低切换时重建/异常风险。\n- E:\\nuxt-moxton\\pages\\account\\orders\\index.vue\n  - 状态下拉交互对齐 shop 实现（标题/图标/勾选），保留后端大写枚举；切换状态重置 pageNum=1。\n- E:\\nuxt-moxton\\pages\\account\\consultations.vue\n  - 状态下拉交互对齐 shop 实现（标题/图标/勾选），状态用大写枚举；切换状态重置 pageNum=1。\n- E:\\nuxt-moxton\\components\\ui\\MaterialInput.vue\n  - 禁用态视觉增强（背景/文字/光标/标签/图标）。\n\n执行命令（本轮关键）：\n- netstat -ano | findstr :3000\n- Invoke-WebRequest http://localhost:3000 (状态 200)\n- pnpm type-check（通过）\n- Playwright：访问 http://localhost:3000/account/profile，点击侧边栏 5 个菜单项完成切换验证。\n\n测试结果：\n- 侧边栏五项切换链路均可达：\n  /account/profile -> /account/password -> /account/orders -> /account/addresses -> /account/consultations\n- 修复后在 mock API 场景下：Console errors = 0\n- 仍有 warnings（非新增，当前可见为 Vue plugin/devtools 相关 + readonly ref warning），但不再出现 hydration mismatch error。",
+      "created_at": "2026-02-28T07:07:47.375Z",
+      "processed": true,
+      "processed_at": "2026-02-28T08:04:27.875Z"
+    },
+    {
+      "id": "5ac2818b98ad70a6",
+      "from": "shop-fe-qa",
+      "to": "team-lead",
+      "type": "status",
+      "task": "SHOP-FE-004",
+      "status": "success",
+      "body": "根据用户反馈（MaterialInput 禁用态视觉不明显）进行二次修复并复测。\n\n本次新增修改：\n- E:\\nuxt-moxton\\components\\ui\\MaterialInput.vue\n  1) 删除无用导入 `Primitive`\n  2) 禁用态输入框样式增强：`bg-gray-100 border-gray-300 text-gray-400 placeholder:text-gray-300 cursor-not-allowed shadow-none`\n  3) 增加禁用覆盖层：`absolute inset-0 rounded-lg ring-1 ring-inset ring-gray-300/80 bg-gray-200/20`\n  4) 标签禁用态增强：`bg-gray-100 text-gray-400 cursor-not-allowed`\n  5) 外层容器禁用态透明度微调：`opacity-90`\n\n执行命令：\n- pnpm type-check（通过）\n- Playwright 验证（http://localhost:3000/account/profile）\n  - 检查 disabled input class 已包含强化禁用样式\n  - 检查禁用覆盖层数量 overlayCount=4（对应页面禁用输入）\n  - 检查 label class 已包含 `bg-gray-100` 与 `cursor-not-allowed`\n\n测试结论：\n- MaterialInput 禁用态视觉反馈已明显增强（背景/边框/文字/标签/遮罩层/光标）\n- 无新增 console error。",
+      "created_at": "2026-02-28T07:47:55.711Z",
+      "processed": true,
+      "processed_at": "2026-02-28T08:04:27.875Z"
+    },
+    {
+      "id": "bc403a6dfada5eb9",
+      "from": "shop-fe-qa",
+      "to": "team-lead",
+      "type": "status",
+      "task": "SHOP-FE-004",
+      "status": "success",
+      "body": "根据用户最新反馈（disabled 只应影响输入框，不应影响外层文本）已完成修正。\n\n修改文件：\n- E:\\nuxt-moxton\\components\\ui\\MaterialInput.vue\n\n本次调整：\n1) 移除外层容器 disabled 透明度（避免整体文本一起变淡）\n2) label 禁用态回退为常态显示：\n   - 文本颜色固定 `text-gray-500`\n   - 背景固定 `bg-white`\n   - 光标固定 `cursor-text`\n3) 保留 disabled 仅作用于 input 本体（背景/边框/文字/光标）及输入框覆盖层\n\n执行命令：\n- pnpm type-check（通过）\n- Playwright 校验 http://localhost:3000/account/profile\n  - disabled input class: 包含禁用样式\n  - label class: `text-gray-500 bg-white cursor-text`（不再受 disabled 弱化）\n\n结果：\n- 已满足“disabled 仅影响输入框，不影响外层文本”要求。",
+      "created_at": "2026-02-28T07:49:54.166Z",
+      "processed": true,
+      "processed_at": "2026-02-28T08:04:27.875Z"
+    },
+    {
+      "id": "ccdff9e72816e036",
+      "from": "shop-fe-qa",
+      "to": "team-lead",
+      "type": "status",
+      "task": "SHOP-FE-004",
+      "status": "success",
+      "body": "针对用户最新反馈完成修复并复测：\n\n问题1：订单页出现英文 `page is not defined`\n- 修复：E:\\nuxt-moxton\\pages\\account\\orders\\index.vue\n  - 失败分支不再直接展示后端 message，统一显示 i18n 文案 `account.orders.messages.loadFailed`。\n  - 重试按钮样式固定为小尺寸：`h-9 px-4 rounded-lg`。\n\n问题2：收货地址页出现 `API endpoint not found`，且重试按钮过大\n- 修复：E:\\nuxt-moxton\\pages\\account\\addresses.vue\n  - 新增 `loadErrorMessage`，加载失败与操作失败分离。\n  - 加载失败统一显示 i18n 文案 `account.addresses.messages.loadFailed`，不透出后端英文原文。\n  - 加载失败时使用中部错误区 + 小尺寸重试按钮（`h-9 px-4 rounded-lg`）。\n  - 顶部仅保留操作类错误与成功提示。\n\n一致性修复：咨询页同样不透出后端英文错误\n- 修复：E:\\nuxt-moxton\\pages\\account\\consultations.vue\n  - 失败分支统一显示 i18n 文案 `account.consultations.messages.loadFailed`。\n  - 重试按钮样式固定小尺寸。\n\n执行命令：\n- pnpm type-check（通过）\n- Playwright 定向回归：\n  - 模拟 `/orders/user` 返回 `{ message: 'page is not defined' }`，页面显示“加载订单失败”，不显示英文。\n  - 模拟 `/addresses` 返回 `{ message: 'API endpoint not found' }`，页面显示“加载地址失败”，不显示英文。\n  - 验证重试按钮 class 含 `h-9 px-4 rounded-lg`（小尺寸）。\n\n结果：\n- 两个反馈点均已修复，UI 不再出现这类英文后端原文错误提示，重试按钮尺寸已收敛。",
+      "created_at": "2026-02-28T07:55:52.646Z",
+      "processed": true,
+      "processed_at": "2026-02-28T08:04:27.875Z"
     }
   ]
 }
-

@@ -426,7 +426,8 @@ def read_task_locks(root: Path) -> Dict[str, Any]:
         return {"version": "1.0", "updated_at": "", "locks": {}, "path": str(path)}
 
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        # Accept both UTF-8 and UTF-8 with BOM written by some PowerShell versions.
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {"version": "1.0", "updated_at": "", "locks": {}, "path": str(path)}
 

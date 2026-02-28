@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "approval_prompt_patterns": [
+    "Approval needed",
+    "requires approval",
+    "permission",
+    "Allow this action",
+    "approve"
+  ],
+  "low_risk_patterns": [
+    "mcp__vitest__",
+    "mcp__playwright__",
+    "mcp__context7__",
+    "ShellTool(git status)",
+    "ShellTool(git diff)",
+    "ShellTool(rg ",
+    "ShellTool(cat ",
+    "Get-Content ",
+    "read-only"
+  ],
+  "high_risk_patterns": [
+    "rm ",
+    "Remove-Item",
+    "git reset",
+    "git clean",
+    "npm install",
+    "pnpm add",
+    "pip install",
+    "curl ",
+    "Invoke-WebRequest",
+    "dangerously-bypass"
+  ]
+}
