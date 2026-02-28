@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Worker Pane Registry Manager
 # 管理 Worker -> Pane ID 的映射关系
 

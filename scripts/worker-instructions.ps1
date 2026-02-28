@@ -1,4 +1,4 @@
-# Worker Instructions Generator
+﻿# Worker Instructions Generator
 # 生成 Codex/Gemini 启动时的强制指令
 
 param(

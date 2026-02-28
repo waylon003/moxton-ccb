@@ -1,185 +1,210 @@
 ﻿#!/usr/bin/env pwsh
 # Doc-Updater 自动触发器
-# 在检测到 Backend API 变更完成后自动更新文档
+# 支持两种触发：
+# 1) backend_qa：后端 QA 成功后实时触发
+# 2) round_complete：当前无活跃任务时兜底触发
 
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$TaskId,
 
-    [Parameter(Mandatory=$false)]
-    [string]$TeamLeadPaneId = $env:TEAM_LEAD_PANE_ID
+    [Parameter(Mandatory = $false)]
+    [string]$TeamLeadPaneId = $env:TEAM_LEAD_PANE_ID,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("backend_qa", "round_complete", "manual")]
+    [string]$Reason = "backend_qa",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
-
 $scriptDir = $PSScriptRoot
 $rootDir = Split-Path $scriptDir -Parent
+
+function Write-Utf8NoBomFile([string]$path, [string]$content) {
+    $dir = Split-Path -Parent $path
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
+}
+
+function Read-Json([string]$path) {
+    if (-not (Test-Path $path)) { return $null }
+    try {
+        return (Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Resolve-TaskFile([string]$id) {
+    $candidates = @(
+        "$rootDir\01-tasks\active\*\$id*.md",
+        "$rootDir\01-tasks\completed\*\$id*.md"
+    )
+    foreach ($pattern in $candidates) {
+        $file = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($file) { return $file }
+    }
+    return $null
+}
 
 Write-Host ""
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "      Doc-Updater 自动触发检查" -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "任务: $TaskId" -ForegroundColor White
+Write-Host "触发原因: $Reason" -ForegroundColor White
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. 检查任务是否涉及 API 变更
-$taskFile = Get-ChildItem -Path "$rootDir\01-tasks\active\*\$TaskId*.md" -ErrorAction SilentlyContinue | Select-Object -First 1
+$taskFile = Resolve-TaskFile -id $TaskId
+$taskContent = ""
+if ($taskFile) {
+    $taskContent = Get-Content -Path $taskFile.FullName -Raw -Encoding UTF8
+}
 
-if (-not $taskFile) {
-    Write-Host "⚠️ 任务文件未找到，跳过 Doc-Updater 检查" -ForegroundColor Yellow
+$requiresDocUpdate = $Force.IsPresent -or ($Reason -eq "round_complete")
+if (-not $requiresDocUpdate) {
+    $apiKeywords = @('API', '接口', 'endpoint', 'controller', 'route', 'REST', 'GraphQL')
+    foreach ($kw in $apiKeywords) {
+        if ($taskContent -match [regex]::Escape($kw)) {
+            $requiresDocUpdate = $true
+            break
+        }
+    }
+    if ($TaskId -match '^BACKEND-') { $requiresDocUpdate = $true }
+}
+
+if (-not $requiresDocUpdate) {
+    Write-Host "✅ 任务不涉及 API/文档变更，无需触发 doc-updater" -ForegroundColor Green
     exit 0
 }
 
-$taskContent = Get-Content $taskFile.FullName -Raw
+Write-Host "📝 需要触发 doc-updater" -ForegroundColor Yellow
 
-# 检查是否涉及 API 变更的标志
-$apiKeywords = @('API', '接口', 'endpoint', 'controller', 'route', 'REST', 'GraphQL')
-$involvesApi = $false
-
-foreach ($kw in $apiKeywords) {
-    if ($taskContent -match $kw) {
-        $involvesApi = $true
-        Write-Host "检测到 API 相关关键词: $kw" -ForegroundColor Gray
+# 检查后端变更（仅 backend_qa 场景，失败不阻断）
+if ($Reason -eq "backend_qa") {
+    $backendDir = if (Test-Path "$rootDir\..\moxton-lotapi") { "$rootDir\..\moxton-lotapi" } else { "E:\moxton-lotapi" }
+    if (Test-Path $backendDir) {
+        try {
+            $recentApiFiles = Get-ChildItem -Path "$backendDir\src\routes\*" -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+                $_.LastWriteTime -gt (Get-Date).AddHours(-2)
+            }
+            if ($recentApiFiles.Count -gt 0) {
+                Write-Host ("检测到最近变更的 API 文件: " + $recentApiFiles.Count) -ForegroundColor Gray
+            }
+        } catch {}
     }
 }
 
-# 检查任务标题或描述
-if ($taskContent -match 'api|接口|endpoint' -or $TaskId -match 'BACKEND') {
-    $involvesApi = $true
+# 生成 doc-updater 任务文件，走统一 dispatch-task 协议
+$safeTaskToken = ($TaskId -replace '[^A-Za-z0-9\-]', '-')
+$docTaskId = if ($Reason -eq "round_complete") {
+    "DOC-UPDATE-ROUND-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+} else {
+    "DOC-UPDATE-$safeTaskToken"
+}
+$docTaskDir = Join-Path $rootDir "01-tasks\active\doc-updater"
+$docTaskFile = Join-Path $docTaskDir "$docTaskId.md"
+$taskFileRef = if ($taskFile) { $taskFile.FullName } else { "(task file not found)" }
+
+$reasonText = switch ($Reason) {
+    "backend_qa" { "后端 QA 成功后实时同步 API 文档" }
+    "round_complete" { "当前无活跃任务，执行全量文档一致性兜底检查" }
+    default { "手动触发文档同步" }
 }
 
-if (-not $involvesApi) {
-    Write-Host "✅ 任务不涉及 API 变更，无需更新文档" -ForegroundColor Green
-    exit 0
-}
+$docContent = @"
+# $docTaskId
 
-Write-Host ""
-Write-Host "📝 任务涉及 API 变更，需要更新文档" -ForegroundColor Yellow
-Write-Host ""
+## 触发信息
+- 原任务: $TaskId
+- 触发原因: $reasonText
+- 参考任务文件: $taskFileRef
 
-# 2. 检查后端仓库是否有 API 变更
-$backendDir = "$rootDir\..\moxton-lotapi"
-if (-not (Test-Path $backendDir)) {
-    $backendDir = "E:\moxton-lotapi"  # 回退到绝对路径
-}
+## 必做事项
+1. 检查并同步 `02-api/`（接口、字段、状态码、错误示例）。
+2. 检查并同步 `04-projects/`（模块说明、依赖关系、`last_verified`）。
+3. 若发现历史遗漏，补充到对应文档并注明依据。
+4. 完成后通过 `report_route` 回传 Team Lead，列出修改文件与摘要。
 
-if (Test-Path $backendDir) {
-    Write-Host "检查后端仓库变更..." -ForegroundColor Cyan
-
-    # 检查最近的变更文件（通过 git 或其他方式）
-    Set-Location $backendDir
-
-    # 查找最近修改的 API 相关文件
-    $apiFiles = Get-ChildItem -Path "$backendDir\src\routes\*" -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
-        $_.LastWriteTime -gt (Get-Date).AddHours(-1)  # 最近1小时修改
-    }
-
-    if ($apiFiles) {
-        Write-Host "发现 $($apiFiles.Count) 个最近修改的 API 文件:" -ForegroundColor Yellow
-        $apiFiles | ForEach-Object { Write-Host "  - $($_.Name)" -ForegroundColor Gray }
-    }
-}
-
-# 3. 触发 Doc-Updater
-Write-Host ""
-Write-Host "准备触发 Doc-Updater..." -ForegroundColor Green
-Write-Host ""
-
-# 构建 doc-updater 任务内容
-$docUpdateContent = @"
-## Doc-Updater 任务
-
-触发原因: 任务 $TaskId 涉及 API 变更，需要同步更新文档。
-
-### 需要执行的操作
-
-1. 检查后端 API 变更
-   - 查看最近修改的路由文件
-   - 确认新增/修改的接口
-
-2. 更新 02-api/ 文档
-   - 如果是新接口：创建新的 API 文档
-   - 如果是修改：更新现有文档
-   - 确保文档与代码一致
-
-3. 验证文档完整性
-   - 检查参数列表
-   - 检查响应示例
-   - 检查错误码
-
-### 参考
-
-任务文件: $taskFile
-后端目录: $backendDir
-
-开始执行文档更新。
+## 参考
+- Agent 规则: `E:\moxton-ccb\.claude\agents\doc-updater.md`
+- 文档根目录: `E:\moxton-ccb`
 "@
 
-# 查找 doc-updater worker
-$registryScript = "$scriptDir\worker-registry.ps1"
+Write-Utf8NoBomFile -path $docTaskFile -content $docContent
+Write-Host "已生成 doc-updater 任务文件: $docTaskFile" -ForegroundColor Gray
+
+# 获取/启动 doc-updater worker
+$registryScript = Join-Path $scriptDir "worker-registry.ps1"
+$startWorkerScript = Join-Path $scriptDir "start-worker.ps1"
 $docUpdaterPane = & $registryScript -Action get -WorkerName "doc-updater" 2>$null
 
 if (-not $docUpdaterPane) {
-    Write-Host "⚠️  doc-updater worker 未启动" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "建议操作:" -ForegroundColor Cyan
-    Write-Host "1. 启动 doc-updater worker:" -ForegroundColor White
-    Write-Host "   .\scripts\start-worker.ps1 -WorkDir 'E:\moxton-ccb' -WorkerName 'doc-updater' -Engine codex" -ForegroundColor White
-    Write-Host ""
-    Write-Host "2. 然后手动分派文档更新任务" -ForegroundColor White
-    Write-Host ""
+    Write-Host "doc-updater worker 未在线，尝试自动启动..." -ForegroundColor Yellow
+    if (-not $TeamLeadPaneId) {
+        try {
+            $panes = wezterm cli list --format json 2>$null | ConvertFrom-Json
+            $tlPane = $panes | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1
+            if ($tlPane) { $TeamLeadPaneId = $tlPane.pane_id.ToString() }
+        } catch {}
+    }
+    if ($TeamLeadPaneId -and (Test-Path $startWorkerScript)) {
+        try {
+            & $startWorkerScript -WorkDir $rootDir -WorkerName "doc-updater" -Engine codex -TeamLeadPaneId $TeamLeadPaneId | Out-Null
+            Start-Sleep -Seconds 3
+            $docUpdaterPane = & $registryScript -Action get -WorkerName "doc-updater" 2>$null
+        } catch {}
+    }
+}
 
-    # 记录待处理的文档更新
-    $pendingDocUpdate = @{
+if (-not $docUpdaterPane) {
+    Write-Host "⚠️ 无法获取 doc-updater worker，记录待处理队列" -ForegroundColor Yellow
+    $pendingFile = Join-Path $rootDir "config\pending-doc-updates.json"
+    $pending = Read-Json -path $pendingFile
+    $pendingList = if ($pending) { @($pending) } else { @() }
+    $pendingList += @{
         taskId = $TaskId
-        triggeredAt = Get-Date -Format "o"
+        docTaskId = $docTaskId
+        taskFile = $docTaskFile
+        reason = $Reason
         status = "pending"
-        reason = "doc-updater worker not available"
+        triggeredAt = (Get-Date -Format "o")
     }
-
-    $pendingFile = "$rootDir\config\pending-doc-updates.json"
-    $pendingUpdates = @()
-    if (Test-Path $pendingFile) {
-        $existing = Get-Content $pendingFile -Raw | ConvertFrom-Json
-        if ($existing) { $pendingUpdates = @($existing) }
-    }
-    $pendingUpdates += $pendingDocUpdate
-    ConvertTo-Json $pendingUpdates -Depth 10 | Set-Content $pendingFile -Encoding UTF8
-
-    Write-Host "已记录到待处理队列: config\pending-doc-updates.json" -ForegroundColor Gray
+    Write-Utf8NoBomFile -path $pendingFile -content ($pendingList | ConvertTo-Json -Depth 10)
     exit 0
 }
 
-# 分派 doc-updater 任务
-Write-Host "发送文档更新任务到 doc-updater (pane $docUpdaterPane)..." -ForegroundColor Green
-
-& "$scriptDir\dispatch-task.ps1" `
+# 分派任务
+$dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
+& $dispatchScript `
     -WorkerPaneId $docUpdaterPane `
     -WorkerName "doc-updater" `
-    -TaskId "DOC-UPDATE-$TaskId" `
-    -TaskContent $docUpdateContent `
+    -TaskId $docTaskId `
+    -TaskFilePath $docTaskFile `
+    -Engine codex `
     -TeamLeadPaneId $TeamLeadPaneId
 
-Write-Host ""
-Write-Host "✅ Doc-Updater 任务已分派" -ForegroundColor Green
-Write-Host ""
+Write-Host "✅ Doc-Updater 任务已分派: $docTaskId (pane $docUpdaterPane)" -ForegroundColor Green
 
 # 记录触发历史
-$triggerRecord = @{
+$historyFile = Join-Path $rootDir "config\doc-update-history.json"
+$history = Read-Json -path $historyFile
+$historyList = if ($history) { @($history) } else { @() }
+$historyList += @{
     taskId = $TaskId
-    triggeredAt = Get-Date -Format "o"
+    docTaskId = $docTaskId
+    reason = $Reason
     docUpdaterPane = $docUpdaterPane
     status = "dispatched"
+    triggeredAt = (Get-Date -Format "o")
 }
-
-$historyFile = "$rootDir\config\doc-update-history.json"
-$history = @()
-if (Test-Path $historyFile) {
-    $existing = Get-Content $historyFile -Raw | ConvertFrom-Json
-    if ($existing) { $history = @($existing) }
-}
-$history += $triggerRecord
-ConvertTo-Json $history -Depth 10 | Set-Content $historyFile -Encoding UTF8
+Write-Utf8NoBomFile -path $historyFile -content ($historyList | ConvertTo-Json -Depth 10)
 
 exit 0

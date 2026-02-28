@@ -44,9 +44,13 @@ description: Team Lead - 负责需求拆分、任务分派、进度监控、跨�
 **所有 Worker 操作必须通过 `teamlead-control.ps1`，禁止直接调用子脚本。**
 
 Codex 权限策略说明（重要）：
-- 当前环境中，Codex 子代理（如 awaiter）触发的 `Approval needed` 在 pane 内无法稳定人工确认。
-- 因此 Codex Worker 统一采用 `-a never --sandbox workspace-write`，避免审批交互卡死。
-- 高风险操作不走“现场点批准”，改为：Worker 回传 `blocked` + Team Lead 分派专门修复/运维任务。
+- dev worker：`-a untrusted --sandbox workspace-write`（只自动批准可信命令）
+- qa worker：`-a on-request --sandbox workspace-write`（模型自主决策是否请求审批）
+- committer worker：`-a never --sandbox workspace-write`（避免 git 提交流程卡在交互审批）
+- 前端 Codex worker（shop-fe-*/admin-fe-*）额外启用 `--enable js_repl`
+- Gemini worker：`--approval-mode auto_edit`（低风险编辑自动批准）
+- 高风险审批请求由 `approval-router.ps1` 自动分类，低风险自动批准，高风险转发 Team Lead
+- 所有 Worker 禁止使用子代理（由 dispatch 指令层面控制）
 
 Worker 角色映射定义在 `config/worker-map.json`：
 
@@ -145,6 +149,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
      - 浏览器 console 错误统计
      - 关键接口状态码记录（显式标记是否出现 4xx/5xx）
      - 至少一个失败路径验证（500/异常文案不透出后端原文）
+   - QA 通过后触发 `repo-committer` 自动提交代码（默认仅 commit，不自动 push）
 
 7. **收口**：
    - 先向用户汇报

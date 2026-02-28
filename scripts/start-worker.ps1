@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # 启动 Worker - Pane 直接模型（修复版）
 # 用法: .\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex
 #
@@ -57,10 +57,16 @@ Write-Host ""
 # 构建引擎启动命令
 $ccbRoot = Split-Path -Parent $PSScriptRoot
 $engineCommand = if ($Engine -eq "codex") {
-    # dev: untrusted（只自动批准可信命令如 ls/cat/sed）
     # qa: on-request（模型自主决策是否请求审批）
-    # 禁止子代理由 dispatch 指令层面控制
-    $approvalFlag = if ($WorkerName -like "*-qa") { "on-request" } else { "untrusted" }
+    # committer: never（避免 git 提交流程卡在交互审批）
+    # 其他 dev: untrusted（只自动批准可信命令）
+    $approvalFlag = if ($WorkerName -like "*-qa") {
+        "on-request"
+    } elseif ($WorkerName -like "*-committer") {
+        "never"
+    } else {
+        "untrusted"
+    }
     $codexCmd = "codex -a $approvalFlag --sandbox workspace-write --add-dir '$ccbRoot'"
     # 前端 worker 启用 js_repl，支持实时调试前端页面
     if ($WorkerName -like "shop-fe-*" -or $WorkerName -like "admin-fe-*") {

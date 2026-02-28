@@ -10,9 +10,9 @@
                                       "updated_by":  "teamlead-control/dispatch-qa",
                                       "updated_at":  "2026-02-28T16:37:36+08:00",
                                       "routeUpdate":  {
-                                                          "worker":  "shop-fe-qa",
                                                           "timestamp":  "2026-02-28T07:55:52.647Z",
-                                                          "bodyPreview":  "针对用户最新反馈完成修复并复测：\n\n问题1：订单页出现英文 `page is not defined`\n- 修复：E:\\nuxt-moxton\\pages\\account\\orders\\index.vue\n  - 失败分支不再直接展示后端 message，统一显示 i18n 文案 `account.orders.messages.loadFailed`。\n  - 重试按钮样式固定为小尺寸：`h-9"
+                                                          "bodyPreview":  "针对用户最新反馈完成修复并复测：\n\n问题1：订单页出现英文 `page is not defined`\n- 修复：E:\\nuxt-moxton\\pages\\account\\orders\\index.vue\n  - 失败分支不再直接展示后端 message，统一显示 i18n 文案 `account.orders.messages.loadFailed`。\n  - 重试按钮样式固定为小尺寸：`h-9",
+                                                          "worker":  "shop-fe-qa"
                                                       }
                                   }
               }

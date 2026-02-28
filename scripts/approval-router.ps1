@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # approval-router.ps1 - 监听 Worker 权限提示，低风险自动批准，高风险转发 Team Lead
 # Exit codes: 0=handled, 1=timeout/no approval, 2=script error
 param(

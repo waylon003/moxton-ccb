@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # teamlead-control.ps1 - Team Lead Unified Controller
 # Single entry point, hard gates, minimal freedom
 #
