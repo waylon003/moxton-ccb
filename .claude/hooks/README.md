@@ -65,7 +65,11 @@ Claude Code 实例获得 Team Lead 角色上下文
     ↓
 Team Lead 分析并拆分任务
     ↓
-.\scripts\dispatch-task.ps1 分派给 Worker
+规划阶段先走 `assign_task.py --split-preview`，确认后再正式写入任务文件
+    ↓
+teamlead-control.ps1 dispatch / dispatch-qa 分派给 Worker
+    ↓
+控制器自动确保 route-monitor + approval-router 常驻
     ↓
 Worker 完成后返回 [ROUTE] 回执
     ↓
@@ -92,3 +96,25 @@ echo '{}' | python .claude/hooks/on-session-start.py
 - Hook 使用 Python 脚本（非 bash），无需 Git Bash 或 WSL
 - Hook 通过 stdout 输出 JSON 注入上下文，通过 stderr 显示用户可见信息
 - `hookSpecificOutput.additionalContext` 字段用于向 Claude 注入角色定义
+- UserPromptSubmit hook 会追加“规划阶段禁止在 `01-tasks/active` 批量 rm/del”约束，避免任务文件重写清理循环
+
+## PreToolUse 硬拦截
+
+`pre-tool-guard.py` 已接入 `PreToolUse`，在工具执行前做强约束：
+
+- 拦截直接派遣绕过：
+  - `dispatch-task.ps1`
+  - `start-worker.ps1`
+  - `wezterm cli send-text`（任务文本）
+- 放行最小审批按键：
+  - `wezterm cli send-text --no-paste "y"` / `"n"` / ``"`r"``
+- 拦截直接写任务锁：
+  - 对 `01-tasks/TASK-LOCKS.json` 的 `Write/Edit/MultiEdit`
+- 拦截“先睡眠后审批”：
+  - 当存在 pending approval request 时，禁止直接执行 `sleep` / `Start-Sleep` / `timeout /t`
+
+被拦截后必须改走统一入口：
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action <dispatch|dispatch-qa|recover|add-lock>
+```

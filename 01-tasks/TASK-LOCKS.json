@@ -1,19 +1,43 @@
 {
     "version":  "1.0",
-    "updated_at":  "2026-02-28T16:37:36+08:00",
+    "updated_at":  "2026-03-02T09:10:34.703Z",
     "locks":  {
-                  "SHOP-FE-004":  {
-                                      "owner":  "team-lead",
-                                      "note":  "Manual reset to waiting_qa",
+                  "SHOP-FE-005":  {
                                       "runner":  "codex",
-                                      "state":  "qa",
-                                      "updated_by":  "teamlead-control/dispatch-qa",
-                                      "updated_at":  "2026-02-28T16:37:36+08:00",
+                                      "owner":  "team-lead",
+                                      "state":  "completed",
+                                      "updated_at":  "2026-03-02T12:52:10+08:00",
+                                      "updated_by":  "teamlead-control/archive",
+                                      "note":  "Archived by team lead"
+                                  },
+                  "BACKEND-012":  {
+                                      "runner":  "codex",
+                                      "owner":  "team-lead",
+                                      "state":  "blocked",
+                                      "updated_at":  "2026-03-02T17:36:16+08:00",
+                                      "updated_by":  "approval-router",
+                                      "note":  "Approval required: APR-20260302173616-4044",
                                       "routeUpdate":  {
-                                                          "timestamp":  "2026-02-28T07:55:52.647Z",
-                                                          "bodyPreview":  "针对用户最新反馈完成修复并复测：\n\n问题1：订单页出现英文 `page is not defined`\n- 修复：E:\\nuxt-moxton\\pages\\account\\orders\\index.vue\n  - 失败分支不再直接展示后端 message，统一显示 i18n 文案 `account.orders.messages.loadFailed`。\n  - 重试按钮样式固定为小尺寸：`h-9",
-                                                          "worker":  "shop-fe-qa"
+                                                          "worker":  "backend-qa",
+                                                          "timestamp":  "2026-03-02T09:10:34.703Z",
+                                                          "bodyPreview":  "stage=qa_execution; progress=build_and_vitest_done; next=runtime_curl_and_contract_evidence"
                                                       }
+                                  },
+                  "BACKEND-011":  {
+                                      "runner":  "codex",
+                                      "owner":  "team-lead",
+                                      "state":  "completed",
+                                      "updated_at":  "2026-03-02T12:52:11+08:00",
+                                      "updated_by":  "teamlead-control/archive",
+                                      "note":  "Archived by team lead"
+                                  },
+                  "SHOP-FE-006":  {
+                                      "runner":  "gemini",
+                                      "owner":  "team-lead",
+                                      "state":  "completed",
+                                      "updated_at":  "2026-03-02T16:10:04+08:00",
+                                      "updated_by":  "teamlead-control/recover",
+                                      "note":  "Manual reset to completed"
                                   }
               }
 }

@@ -1,62 +1,95 @@
 # Multi-agent Relay Protocol
 
-Use this protocol to emulate Agent Teams communication with Team Lead as the message bus.
+使用本协议统一 Team Lead 与各 Worker 的通信链路。主通道为 MCP `report_route`，禁止把 `[ROUTE]...[/ROUTE]` 当作必需协议。
 
-## Envelope
+## 短派遣兼容（重要）
 
-Every cross-agent message must be wrapped as:
+- Team Lead 可能只发送短派遣消息（仅包含 `task_id` 和 `task_file`）。
+- Worker 收到后必须立即读取 `task_file`，并以任务文件作为唯一执行输入源。
+- 不得因为派遣消息较短而等待补充指令；如任务文件缺失信息，按阻塞协议上报。
+
+## 主协议
+
+所有跨角色消息都必须通过 `report_route` 上报：
 
 ```text
-[ROUTE]
-from: <agent-name>
-to: <target-agent|team-lead>
-type: <status|question|blocker|handoff|review>
-task: <TASK-ID>
-body: <message body>
-[/ROUTE]
+report_route(
+  from: "<agent-name>",
+  task: "<TASK-ID>",
+  status: "in_progress" | "blocked" | "success" | "fail",
+  body: "<结构化消息体>"
+)
 ```
 
-## Routing Rules
+`body` 推荐使用 `key=value;` 结构，便于 Team Lead 自动解析。例如：
 
-1. `to: team-lead`
-- Team Lead handles it directly.
+```text
+stage=qa_running; progress=smoke_done; next=runtime_check
+```
 
-2. `to: <other-agent>`
-- Team Lead relays to target agent.
-- Team Lead returns relay acknowledgement to sender.
+## 路由规则
 
-3. Missing envelope
-- Team Lead asks sender to reformat using `[ROUTE]`.
+1. 直接发给 Team Lead  
+所有消息默认由 Team Lead 处理，不需要手写 `to: team-lead` 信封。
 
-4. Team Lead boundary violation attempt
-- If any message asks Team Lead to code directly, Team Lead must refuse and delegate to role dev agent.
-- Team Lead response should include:
-  - refusal reason (`coordination-only role`)
-  - delegated target agent
-  - delegated task reference
+2. 需要跨角色协作  
+由发送方使用 `status=blocked` 报告需求，`body` 中写明 `target_role=<role>; question=<...>; next_action_needed=<...>`，再由 Team Lead 决定是否派遣/转发。
 
-5. Permission request routing
-- Downstream agents send permission requests to Team Lead (not user).
-- Team Lead auto-approves low-risk normal development actions.
-- Team Lead escalates only high-risk/destructive/uncertain actions to user.
+3. 权限请求  
+Worker 遇到审批卡点时必须发 `status=blocked` 给 Team Lead；Team Lead 审批低风险请求，高风险再升级给用户。
 
-## Lifecycle
+4. Team Lead 角色边界  
+Team Lead 负责协调、派遣、审批、归档，不直接承担开发实现任务。
 
-1. Developer agent works task and emits status envelopes.
-2. If dependency on another role exists, send `type: question` or `type: blocker`.
-3. Team Lead relays to target role agent and returns response.
-4. On completion, developer sends `type: handoff` to Team Lead.
-5. Team Lead assigns QA agent and awaits `PASS/FAIL/BLOCKED`.
+## 生命周期
 
-## QA Result Contract
-- QA `type: review` messages must include:
-  - commands run
-  - reproducible steps
-  - evidence summary (logs/screenshots/request-response)
-  - failure classification for each failed command (`regression` or `env_blocker`)
-  - final decision (`PASS` or `FAIL` or `BLOCKED`)
+1. Developer/QA 接任务后先回传一次 `status=in_progress`（开始心跳）。
+2. 执行期间每 90~120 秒发送一次 `status=in_progress`。
+3. 遇到阻塞在 2 分钟内发送 `status=blocked`。
+4. 完成后发送 `status=success` 或 `status=fail`，并附证据摘要。
+5. Team Lead 基于回传结果继续 `dispatch / dispatch-qa / archive`。
 
-## Compliance Check (Team Lead)
-- Team Lead may only perform `assign`, `relay`, `status`, `approval-request`, `close`.
-- Team Lead must not perform `implement-code` or `repo-test-run` in code repos.
-- Team Lead may perform `read-only-inspect` in code repos for coordination.
+## 阻塞上报（强制）
+
+阻塞消息必须包含以下字段：
+
+```text
+blocker_type=<approval|api|env|dependency|unknown>;
+question=<需要 Team Lead 决策/补充的信息>;
+attempted=<已尝试动作>;
+next_action_needed=<希望 Team Lead 执行的动作>
+```
+
+禁止在 pane 里提问后静默等待；需要决策时只能走 `report_route(status=blocked, ...)`。
+
+## QA 回传合同
+
+当 QA 回传 `status=success` 时，`body` 必须是 JSON，最小结构如下：
+
+```json
+{
+  "task_id": "SHOP-FE-004",
+  "worker": "shop-fe-qa",
+  "verdict": "PASS",
+  "summary": "一句话结论",
+  "checks": {
+    "network": { "pass": true, "has_5xx": false, "evidence": ["05-verification/SHOP-FE-004/network.json"] },
+    "failure_path": { "pass": true, "scenario": "500 异常提示验证", "evidence": ["05-verification/SHOP-FE-004/failure-path.png"] }
+  },
+  "commands": ["pnpm test:e2e -- tests/e2e/smoke.spec.ts"],
+  "changed_files": []
+}
+```
+
+约束：
+- `status=success` 时 `verdict` 必须为 `PASS`。
+- 前端 QA 必须包含并通过：`checks.ui`、`checks.console`、`checks.network`、`checks.failure_path`。
+- 后端 QA 必须包含并通过：`checks.contract`、`checks.network`、`checks.failure_path`。
+- 每个检查项都必须带 `evidence` 文件路径且文件可访问。
+- `checks.network.has_5xx=true` 时禁止回传 `success`。
+
+不满足以上条件时，route-monitor 会自动把该条 success 降级为 `blocked`，并要求补证据后重跑 QA。
+
+## 兼容说明
+
+历史文档中的 `[ROUTE]...[/ROUTE]` 仅视为消息体格式示例，不再作为通信协议要求。

@@ -25,6 +25,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$RegistryPath = if ([System.IO.Path]::IsPathRooted($RegistryPath)) {
+    [System.IO.Path]::GetFullPath($RegistryPath)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $RegistryPath))
+}
 
 function Write-Utf8NoBomFile([string]$path, [string]$content) {
     $dir = Split-Path -Parent $path
@@ -67,10 +72,21 @@ function Write-Registry($data) {
     Write-Utf8NoBomFile -path $RegistryPath -content $json
 }
 
-# 验证 pane 是否还存在
-function Test-PaneExists($testPaneId) {
+# 获取 WezTerm pane 列表；失败时返回 $null
+function Get-WeztermPanes {
     try {
-        $panes = wezterm cli list --format json 2>$null | ConvertFrom-Json
+        $raw = wezterm cli list --format json 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
+        return ($raw | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+# 验证 pane 是否还存在
+function Test-PaneExists($testPaneId, $panes) {
+    if (-not $panes) { return $null }
+    try {
         return $panes | Where-Object { $_.pane_id -eq $testPaneId }
     }
     catch {
@@ -159,8 +175,16 @@ switch ($Action) {
         }
 
         if ($worker) {
+            $panes = Get-WeztermPanes
+            if (-not $panes) {
+                # WezTerm 不可用时不破坏注册表，直接返回缓存 pane_id
+                Write-Host "WARN WezTerm unavailable, return cached pane for $WorkerName" -ForegroundColor Yellow
+                Write-Output $worker.pane_id
+                exit 0
+            }
+
             # 验证 pane 是否还存在
-            $paneInfo = Test-PaneExists $worker.pane_id
+            $paneInfo = Test-PaneExists $worker.pane_id $panes
             if ($paneInfo) {
                 $worker.status = "active"
                 $worker.last_seen = Get-Date -Format "o"
@@ -202,14 +226,14 @@ switch ($Action) {
                 $w = $_.Value
                 $name = $_.Name.PadRight(15)
                 $pane = $w.pane_id.ToString().PadRight(6)
-                $engine = ($w.engine).PadRight(8)
+                $engineLabel = ([string]$w.engine).PadRight(8)
                 $status = $w.status
 
                 if ($status -eq "active") {
-                    Write-Host "  $name pane=$pane engine=$engine status=$status" -ForegroundColor White
+                    Write-Host "  $name pane=$pane engine=$engineLabel status=$status" -ForegroundColor White
                 }
                 else {
-                    Write-Host "  $name pane=$pane engine=$engine status=$status" -ForegroundColor DarkGray
+                    Write-Host "  $name pane=$pane engine=$engineLabel status=$status" -ForegroundColor DarkGray
                 }
             }
         }
@@ -227,12 +251,17 @@ switch ($Action) {
         $registry = Read-Registry
         $updated = $false
         $workers = @{}
+        $panes = Get-WeztermPanes
+        if (-not $panes) {
+            Write-Host "WARN WezTerm unavailable, skip health-check cleanup" -ForegroundColor Yellow
+            exit 0
+        }
 
         if ($registry.workers) {
             $registry.workers.PSObject.Properties | ForEach-Object {
                 $name = $_.Name
                 $w = $_.Value
-                $paneInfo = Test-PaneExists $w.pane_id
+                $paneInfo = Test-PaneExists $w.pane_id $panes
 
                 if ($paneInfo) {
                     $w.status = "active"

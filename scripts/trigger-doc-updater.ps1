@@ -1,8 +1,9 @@
 ﻿#!/usr/bin/env pwsh
 # Doc-Updater 自动触发器
-# 支持两种触发：
+# 支持三种触发：
 # 1) backend_qa：后端 QA 成功后实时触发
-# 2) round_complete：当前无活跃任务时兜底触发
+# 2) archive_move：任务从 active -> completed 归档时触发
+# 3) round_complete：保留兼容（历史兜底触发）
 
 param(
     [Parameter(Mandatory = $true)]
@@ -12,16 +13,36 @@ param(
     [string]$TeamLeadPaneId = $env:TEAM_LEAD_PANE_ID,
 
     [Parameter(Mandatory = $false)]
-    [ValidateSet("backend_qa", "round_complete", "manual")]
+    [ValidateSet("backend_qa", "archive_move", "round_complete", "manual")]
     [string]$Reason = "backend_qa",
 
     [Parameter(Mandatory = $false)]
-    [switch]$Force
+    [switch]$Force,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$EmitJson
 )
 
 $ErrorActionPreference = "Stop"
 $scriptDir = $PSScriptRoot
 $rootDir = Split-Path $scriptDir -Parent
+
+function Exit-WithResult([int]$Code, [string]$Status, [string]$Message, [hashtable]$Extra = @{}) {
+    if ($EmitJson.IsPresent) {
+        $payload = @{
+            status = $Status
+            message = $Message
+            taskId = $TaskId
+            reason = $Reason
+            timestamp = (Get-Date -Format "o")
+        }
+        foreach ($k in $Extra.Keys) {
+            $payload[$k] = $Extra[$k]
+        }
+        Write-Output ($payload | ConvertTo-Json -Compress)
+    }
+    exit $Code
+}
 
 function Write-Utf8NoBomFile([string]$path, [string]$content) {
     $dir = Split-Path -Parent $path
@@ -68,7 +89,7 @@ if ($taskFile) {
     $taskContent = Get-Content -Path $taskFile.FullName -Raw -Encoding UTF8
 }
 
-$requiresDocUpdate = $Force.IsPresent -or ($Reason -eq "round_complete")
+$requiresDocUpdate = $Force.IsPresent -or ($Reason -eq "round_complete") -or ($Reason -eq "archive_move")
 if (-not $requiresDocUpdate) {
     $apiKeywords = @('API', '接口', 'endpoint', 'controller', 'route', 'REST', 'GraphQL')
     foreach ($kw in $apiKeywords) {
@@ -82,7 +103,7 @@ if (-not $requiresDocUpdate) {
 
 if (-not $requiresDocUpdate) {
     Write-Host "✅ 任务不涉及 API/文档变更，无需触发 doc-updater" -ForegroundColor Green
-    exit 0
+    Exit-WithResult -Code 0 -Status "noop" -Message "no_doc_update_needed"
 }
 
 Write-Host "📝 需要触发 doc-updater" -ForegroundColor Yellow
@@ -112,20 +133,24 @@ $docTaskId = if ($Reason -eq "round_complete") {
 $docTaskDir = Join-Path $rootDir "01-tasks\active\doc-updater"
 $docTaskFile = Join-Path $docTaskDir "$docTaskId.md"
 $taskFileRef = if ($taskFile) { $taskFile.FullName } else { "(task file not found)" }
+$historyFile = Join-Path $rootDir "config\doc-update-history.json"
+$history = Read-Json -path $historyFile
+$historyList = if ($history) { @($history) } else { @() }
 
 $reasonText = switch ($Reason) {
     "backend_qa" { "后端 QA 成功后实时同步 API 文档" }
+    "archive_move" { "开发任务归档（active -> completed）后触发文档一致性同步" }
     "round_complete" { "当前无活跃任务，执行全量文档一致性兜底检查" }
     default { "手动触发文档同步" }
 }
 
-$docContent = @"
-# $docTaskId
+$docContentTemplate = @'
+# {DOC_TASK_ID}
 
 ## 触发信息
-- 原任务: $TaskId
-- 触发原因: $reasonText
-- 参考任务文件: $taskFileRef
+- 原任务: {TASK_ID}
+- 触发原因: {REASON_TEXT}
+- 参考任务文件: {TASK_FILE_REF}
 
 ## 必做事项
 1. 检查并同步 `02-api/`（接口、字段、状态码、错误示例）。
@@ -136,7 +161,31 @@ $docContent = @"
 ## 参考
 - Agent 规则: `E:\moxton-ccb\.claude\agents\doc-updater.md`
 - 文档根目录: `E:\moxton-ccb`
-"@
+'@
+$docContent = $docContentTemplate.
+    Replace('{DOC_TASK_ID}', $docTaskId).
+    Replace('{TASK_ID}', $TaskId).
+    Replace('{REASON_TEXT}', $reasonText).
+    Replace('{TASK_FILE_REF}', $taskFileRef)
+
+# 去重：同一 docTaskId 在短时间内已派发，直接复用，避免 archive + route-monitor 双触发重复分派
+$recentExisting = $historyList | Where-Object {
+    $_.docTaskId -eq $docTaskId -and $_.status -in @("dispatched", "in_progress", "success")
+} | Sort-Object triggeredAt -Descending | Select-Object -First 1
+if ($recentExisting) {
+    $recentAt = $null
+    try { $recentAt = [DateTimeOffset]::Parse([string]$recentExisting.triggeredAt) } catch {}
+    if ($recentAt) {
+        $ageSec = ([DateTimeOffset]::Now - $recentAt).TotalSeconds
+        if ($ageSec -lt 120) {
+            Write-Host ("跳过重复触发 doc-updater: " + $docTaskId + " (age=" + [int]$ageSec + "s)") -ForegroundColor Yellow
+            Exit-WithResult -Code 0 -Status "already_dispatched" -Message "doc_updater_recently_dispatched" -Extra @{
+                docTaskId = $docTaskId
+                docTaskFile = $docTaskFile
+            }
+        }
+    }
+}
 
 Write-Utf8NoBomFile -path $docTaskFile -content $docContent
 Write-Host "已生成 doc-updater 任务文件: $docTaskFile" -ForegroundColor Gray
@@ -178,7 +227,11 @@ if (-not $docUpdaterPane) {
         triggeredAt = (Get-Date -Format "o")
     }
     Write-Utf8NoBomFile -path $pendingFile -content ($pendingList | ConvertTo-Json -Depth 10)
-    exit 0
+    Exit-WithResult -Code 0 -Status "queued_pending_worker" -Message "doc_updater_worker_unavailable" -Extra @{
+        docTaskId = $docTaskId
+        docTaskFile = $docTaskFile
+        queueFile = $pendingFile
+    }
 }
 
 # 分派任务
@@ -191,12 +244,19 @@ $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
     -Engine codex `
     -TeamLeadPaneId $TeamLeadPaneId
 
+$dispatchExit = $LASTEXITCODE
+if ($dispatchExit -ne 0) {
+    Write-Host ("❌ Doc-Updater 派遣失败: exit=" + $dispatchExit) -ForegroundColor Red
+    Exit-WithResult -Code 1 -Status "dispatch_failed" -Message ("dispatch_exit_" + $dispatchExit) -Extra @{
+        docTaskId = $docTaskId
+        docTaskFile = $docTaskFile
+        workerPane = [string]$docUpdaterPane
+    }
+}
+
 Write-Host "✅ Doc-Updater 任务已分派: $docTaskId (pane $docUpdaterPane)" -ForegroundColor Green
 
 # 记录触发历史
-$historyFile = Join-Path $rootDir "config\doc-update-history.json"
-$history = Read-Json -path $historyFile
-$historyList = if ($history) { @($history) } else { @() }
 $historyList += @{
     taskId = $TaskId
     docTaskId = $docTaskId
@@ -207,4 +267,8 @@ $historyList += @{
 }
 Write-Utf8NoBomFile -path $historyFile -content ($historyList | ConvertTo-Json -Depth 10)
 
-exit 0
+Exit-WithResult -Code 0 -Status "dispatched" -Message "doc_updater_dispatched" -Extra @{
+    docTaskId = $docTaskId
+    docTaskFile = $docTaskFile
+    workerPane = [string]$docUpdaterPane
+}

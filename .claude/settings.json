@@ -31,6 +31,28 @@
                     }
                 ]
             }
+        ],
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/pre-tool-guard.py",
+                        "timeout": 5
+                    }
+                ]
+            },
+            {
+                "matcher": "Write|Edit|MultiEdit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/pre-tool-guard.py",
+                        "timeout": 5
+                    }
+                ]
+            }
         ]
     }
 }

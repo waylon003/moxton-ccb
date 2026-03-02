@@ -1,10 +1,13 @@
 ﻿#!/usr/bin/env pwsh
 # route-watcher.ps1 - 监听 route inbox，检测到新 route 后输出并退出
 # 供 Claude Code background task 使用
+# Timeout:
+#   >0  : 指定秒数后超时
+#   <=0 : 永不超时（持续等待）
 # Exit codes: 0=route found, 1=timeout, 2=script error
 param(
     [int]$PollInterval = 5,
-    [int]$Timeout = 600,
+    [int]$Timeout = 0,
     [string]$FilterTask
 )
 
@@ -13,7 +16,7 @@ $elapsed = 0
 $parseFailCount = 0
 
 try {
-    while ($elapsed -lt $Timeout) {
+    while (($Timeout -le 0) -or ($elapsed -lt $Timeout)) {
         if (Test-Path $inboxPath) {
             $inbox = $null
             for ($retry = 0; $retry -lt 3; $retry++) {

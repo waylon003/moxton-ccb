@@ -77,48 +77,27 @@ You validate backend/API tasks and bug fixes.
 
 ## 报告模板
 
-```
-[ROUTE]
-from: backend-qa
-to: team-lead
-type: review
-task: <TASK-ID>
-body:
-
-## 验收标准 Checklist
-- [ ] <标准1>: <PASS/FAIL> — <证据摘要>
-- [ ] <标准2>: <PASS/FAIL> — <证据摘要>
-...
-
-## 测试矩阵
-| 端点 | 场景 | 预期 | 实际 | 结果 |
-|------|------|------|------|------|
-| ... | ... | ... | ... | PASS/FAIL |
-
-## 基线检查
-| 命令 | 结果 | 分类 |
-|------|------|------|
-| npm run build | <输出摘要> | regression / env_blocker / pass |
-
-## 失败详情（如有）
-- 端点: <endpoint>
-- 输入: <request>
-- 预期: <expected>
-- 实际: <actual>
-
-## 下游影响
-- <对前端/管理后台的影响说明>
-
-## 最终决策: <PASS | FAIL | BLOCKED>
-- PASS: 验收标准全部通过，基线检查通过
-- FAIL: 验收标准未满足（真实回归/契约不匹配）
-- BLOCKED: 功能契约通过但基线/自动化被环境限制阻塞
-[/ROUTE]
+```text
+report_route(
+  from: "backend-qa",
+  task: "<TASK-ID>",
+  status: "success" | "blocked" | "fail",
+  body: "{\"task_id\":\"<TASK-ID>\",\"worker\":\"backend-qa\",\"verdict\":\"PASS|FAIL|BLOCKED\",\"summary\":\"<一句话结论>\",\"checks\":{\"contract\":{\"pass\":true,\"evidence\":[\"05-verification/<TASK-ID>/contract-check.json\"]},\"network\":{\"pass\":true,\"has_5xx\":false,\"evidence\":[\"05-verification/<TASK-ID>/network.json\"]},\"failure_path\":{\"pass\":true,\"scenario\":\"异常路径验证\",\"evidence\":[\"05-verification/<TASK-ID>/failure-path.json\"]}},\"commands\":[\"npm run build\"],\"changed_files\":[]}"
+)
 ```
 
 ## Rules
+- `status=success` 时，`body` 必须是合法 JSON（禁止 Markdown 文本），且 `verdict` 必须是 `PASS`。
+- `checks.contract/network/failure_path` 必须全部 `pass=true`，并且每项都要有可访问的证据文件路径。
+- `checks.network.has_5xx` 必须是 `false`；若出现 5xx，只能回传 `blocked` 或 `fail`。
 - 每个失败命令必须分类为 `regression` 或 `env_blocker`。
 - 不要因为单个测试账号的数据问题就判定 FAIL，先换账号重试。
-- 跨角色问题必须通过 `[ROUTE]` 信封发给 Team Lead。
+- 跨角色问题必须通过 `report_route(status="blocked", ...)` 发给 Team Lead，禁止自建私有信封协议。
+- 若被阻塞（权限审批、环境、依赖、契约不明），必须在 2 分钟内调用 `report_route`：
+  - `status: "blocked"`
+  - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+- 长任务建议周期性调用 `report_route`：`status: "in_progress"` 同步验证进展。
+- 禁止在 pane 中提问后停滞等待；需要决策时直接走 `report_route(status="blocked")`。
+- 若仓库存在大量既有未提交改动：先采集 `git status --porcelain` 和 `git diff --name-only`，再继续验证，并在报告中单列 `pre-existing changes`。
 - 可以按需读取 `E:\moxton-ccb` 中的历史文档。
 - 不要移动任务文件。

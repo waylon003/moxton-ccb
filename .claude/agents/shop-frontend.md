@@ -66,45 +66,15 @@ You implement tasks for the Nuxt storefront project.
 
 ## 报告模板
 
-完成任务后，使用以下格式报告：
+完成任务后，必须通过 MCP `report_route` 报告：
 
-```
-[ROUTE]
-from: shop-fe-dev
-to: team-lead
-type: handoff
-task: <TASK-ID>
-body:
-
-## 变更文件
-- <file-path>: <变更说明>
-
-## 新增/修改的页面
-| 路由 | 页面 | 说明 |
-|------|------|------|
-| ... | ... | ... |
-
-## 新增/修改的 Store
-| Store | 变更说明 |
-|-------|---------|
-| ... | ... |
-
-## 调用的 API 端点
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| ... | ... | ... |
-
-## i18n Keys 新增
-- <key>: <en> / <zh>
-
-## 验证结果
-- pnpm dev: <页面是否正常加载>
-- SSR 兼容性: <是否有 hydration mismatch>
-- 功能验证: <各功能点验证结果>
-
-## 风险/阻塞
-- <如有>
-[/ROUTE]
+```text
+report_route(
+  from: "shop-fe-dev",
+  task: "<TASK-ID>",
+  status: "success" | "blocked" | "fail",
+  body: "## 变更文件\n- <file-path>: <变更说明>\n\n## 新增/修改的页面\n| 路由 | 页面 | 说明 |\n|------|------|------|\n| ... | ... | ... |\n\n## 新增/修改的 Store\n| Store | 变更说明 |\n|-------|---------|\n| ... | ... |\n\n## 调用的 API 端点\n| 方法 | 端点 | 说明 |\n|------|------|------|\n| ... | ... | ... |\n\n## i18n Keys 新增\n- <key>: <en> / <zh>\n\n## 验证结果\n- pnpm dev: <页面是否正常加载>\n- SSR 兼容性: <是否有 hydration mismatch>\n- 功能验证: <各功能点验证结果>\n\n## 风险/阻塞\n- <如有>"
+)
 ```
 
 ## Rules
@@ -112,6 +82,11 @@ body:
 - 所有组件使用 `<script setup lang="ts">`，Composition API。
 - 所有用户可见文本必须走 i18n，不要硬编码。
 - 注意 SSR 兼容性，浏览器 API 必须在 `onMounted` 或 `process.client` 中使用。
-- 如果被阻塞（后端 API 未就绪/缺少上下文），发 `type: blocker` 给 Team Lead。
+- 如果被阻塞（权限审批、后端 API 未就绪、缺少上下文、环境异常），必须在 2 分钟内调用 `report_route`：
+  - `status: "blocked"`
+  - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+- 长任务建议周期性调用 `report_route`：`status: "in_progress"` 同步当前进展与下一步。
+- 禁止在 pane 中提问后停滞等待；需要决策时直接走 `report_route(status="blocked")`。
+- 若仓库存在大量既有未提交改动：先采集 `git status --porcelain` 和 `git diff --name-only`，再继续执行，并在报告中单列 `pre-existing changes`。
 - 不要移动任务文件（backlog/active/completed 之间）。
 - 不要标记任务完成，等待 Team Lead/用户确认。

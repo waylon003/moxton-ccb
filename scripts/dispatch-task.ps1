@@ -29,6 +29,154 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+function Normalize-PaneId([string]$value) {
+    if (-not $value) { return $null }
+    $trimmed = $value.Trim()
+    if ($trimmed -match '(\d+)') {
+        return $Matches[1]
+    }
+    return $null
+}
+
+function Invoke-WezTermSendText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PaneId,
+        [Parameter(Mandatory = $true)]
+        [string]$Text,
+        [int]$Retries = 2
+    )
+
+    $lastError = ""
+    $preferPaste = ($Text.Length -gt 180 -or $Text.Contains("`n") -or $Text.Contains("`r"))
+    $modes = if ($preferPaste) {
+        @(
+            @{ noPaste = $false; label = "plain" },
+            @{ noPaste = $true; label = "no-paste" }
+        )
+    } else {
+        @(
+            @{ noPaste = $true; label = "no-paste" },
+            @{ noPaste = $false; label = "plain" }
+        )
+    }
+
+    foreach ($mode in $modes) {
+        for ($i = 1; $i -le $Retries; $i++) {
+            try {
+                if ($mode.noPaste) {
+                    $output = wezterm cli send-text --pane-id $PaneId --no-paste $Text 2>&1
+                } else {
+                    $output = wezterm cli send-text --pane-id $PaneId $Text 2>&1
+                }
+                if ($LASTEXITCODE -eq 0) {
+                    return
+                }
+                $lastError = ($output | Out-String).Trim()
+            } catch {
+                $lastError = $_.Exception.Message
+            }
+            Start-Sleep -Milliseconds 120
+        }
+    }
+
+    throw ("wezterm send-text failed (pane=" + $PaneId + "): " + $lastError)
+}
+
+function Send-PayloadInChunks {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PaneId,
+        [Parameter(Mandatory = $true)]
+        [string]$Payload
+    )
+
+    # 小消息一次发送，避免无意义分块
+    if ($Payload.Length -le 1800) {
+        Invoke-WezTermSendText -PaneId $PaneId -Text $Payload
+        return
+    }
+
+    # 长消息分块发送，避免一次参数过长导致 send-text 失败
+    $chunkSize = 1500
+    for ($offset = 0; $offset -lt $Payload.Length; $offset += $chunkSize) {
+        $len = [Math]::Min($chunkSize, $Payload.Length - $offset)
+        $chunk = $Payload.Substring($offset, $len)
+        Invoke-WezTermSendText -PaneId $PaneId -Text $chunk
+        Start-Sleep -Milliseconds 40
+    }
+}
+
+function Get-PaneTextSafe([string]$PaneId) {
+    try {
+        return (wezterm cli get-text --pane-id $PaneId 2>$null)
+    } catch {
+        return ""
+    }
+}
+
+function Get-LatestWorkerReadyName([string]$paneText) {
+    if (-not $paneText) { return $null }
+    $matches = [regex]::Matches($paneText, 'Worker ready:\s*([^\(\r\n]+)')
+    if ($matches.Count -eq 0) { return $null }
+    $latest = $matches[$matches.Count - 1].Groups[1].Value
+    if (-not $latest) { return $null }
+    return $latest.Trim()
+}
+
+function Get-PaneFingerprint([string]$paneText) {
+    if (-not $paneText) { return "" }
+    $tail = (($paneText -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 20) -join "`n")
+    return $tail
+}
+
+function Ensure-SubmittedAfterPaste {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PaneId,
+        [Parameter(Mandatory = $true)]
+        [string]$Engine
+    )
+
+    # Gemini 对“粘贴后立刻回车”较敏感：若仍停留在 [Pasted Text: ...]，补发回车
+    $maxRetry = if ($Engine -eq "gemini") { 6 } else { 2 }
+    for ($i = 0; $i -lt $maxRetry; $i++) {
+        $pane = Get-PaneTextSafe -PaneId $PaneId
+        $hasPastedMarker = $pane -match '\[Pasted Text:\s*\d+\s*lines\]'
+        if (-not $hasPastedMarker) {
+            return
+        }
+
+        Start-Sleep -Milliseconds 200
+        # 先 no-paste 回车
+        Invoke-WezTermSendText -PaneId $PaneId -Text "`r"
+        Start-Sleep -Milliseconds 180
+        # 再 plain 回车兜底
+        wezterm cli send-text --pane-id $PaneId "`r" 2>$null | Out-Null
+        Start-Sleep -Milliseconds 220
+    }
+}
+
+function Resolve-RoleDefinitionPath([string]$workerName, [string]$ccbRoot) {
+    if (-not $workerName) { return $null }
+    $agentsDir = Join-Path $ccbRoot ".claude\agents"
+    $roleFile = switch -Regex ($workerName) {
+        '^backend-dev$' { 'backend.md'; break }
+        '^backend-qa$' { 'backend-qa.md'; break }
+        '^shop-fe-dev$' { 'shop-frontend.md'; break }
+        '^shop-fe-qa$' { 'shop-fe-qa.md'; break }
+        '^admin-fe-dev$' { 'admin-frontend.md'; break }
+        '^admin-fe-qa$' { 'admin-fe-qa.md'; break }
+        '^repo-committer$' { 'repo-committer.md'; break }
+        '^doc-updater$' { 'doc-updater.md'; break }
+        default { $null }
+    }
+    if (-not $roleFile) { return $null }
+    $full = Join-Path $agentsDir $roleFile
+    if (Test-Path $full) { return $full }
+    return $null
+}
+
 # 验证环境
 if (-not $TeamLeadPaneId) {
     Write-Error "TEAM_LEAD_PANE_ID 未设置。请先运行: `$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { `$_.title -like '*claude*' } | Select-Object -First 1).pane_id"
@@ -52,11 +200,20 @@ if (-not $WorkerPaneId) {
         exit 1
     }
 
-    $WorkerPaneId = $foundPaneId
+    $WorkerPaneId = Normalize-PaneId ([string]$foundPaneId)
+    if (-not $WorkerPaneId) {
+        Write-Error "无法解析 Worker pane id。worker-registry 返回: $foundPaneId"
+        exit 1
+    }
     Write-Host "✅ 找到 Worker: $WorkerName -> pane $WorkerPaneId" -ForegroundColor Green
 }
 else {
     # 直接提供了 PaneId，如果也提供了 WorkerName，用于显示
+    $WorkerPaneId = Normalize-PaneId $WorkerPaneId
+    if (-not $WorkerPaneId) {
+        Write-Error "无效的 WorkerPaneId: $WorkerPaneId"
+        exit 1
+    }
     if (-not $WorkerName) {
         $WorkerName = "unknown"
     }
@@ -68,73 +225,53 @@ if (-not (Test-Path $TaskFilePath)) {
     exit 1
 }
 
-# 构建派遣指令（短内容：协议头 + 文件路径引用 + 完成提醒）
-$qaGateSection = ""
+# 构建派遣指令（尽量短，优先保证送达稳定）
+$ccbRoot = Split-Path -Parent $PSScriptRoot
+$roleDefinitionPath = Resolve-RoleDefinitionPath -workerName $WorkerName -ccbRoot $ccbRoot
+$protocolPath = Join-Path $ccbRoot ".claude\agents\protocol.md"
+if (-not $roleDefinitionPath) {
+    Write-Host ('[WARN] Role definition file not mapped for worker=' + $WorkerName + '. Continue with protocol + task file only.') -ForegroundColor Yellow
+}
+if (-not (Test-Path $protocolPath)) {
+    Write-Host ('[WARN] Protocol file missing: ' + $protocolPath) -ForegroundColor Yellow
+}
+
+$qaHint = ""
 if ($WorkerName -like "*-qa") {
-    $qaGateSection = @"
-===================================================================
-  QA HARD GATE
-===================================================================
-
-你是 QA Worker。本次回传若 status=success，必须在 body 中提供以下证据：
-1) 控制台错误检查（0 errors 或错误详情）
-2) 截图证据（关键页面/问题点）
-3) 网络响应证据（关键接口 URL + status + 是否4xx/5xx）
-4) 失败路径验证（至少一个 500/异常，且不透出后端原文）
-
-缺少任一项 -> 只能 report_route status=blocked，禁止填写 success。
-
-===================================================================
+    $qaHint = @"
+QA 注意：success 回传必须满足 protocol.md 的 QA 回传合同（JSON + checks + evidence）。
 "@
 }
 
 $fullTask = @"
-===================================================================
-  PROTOCOL REMINDER
-===================================================================
+[TASK-DISPATCH]
+task_id: $TaskId
+worker: $WorkerName
+task_file: $TaskFilePath
+role_definition: $(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" })
+protocol: $protocolPath
 
-你在接受任务前必须确认：
-
-1. 任务完成后，必须调用 MCP tool report_route 通知 Team Lead
-2. 禁止不调用 report_route 就声明完成！
-3. 文档规则：
-   - 项目 API 契约：按任务文件中引用的 02-api/*.md 路径查阅
-   - 外部框架/库：优先用 context7 MCP 查询；不可用时查官方文档并注明来源
-   - 禁止凭记忆假设任何 API 行为
-4. 禁止使用子代理（sub-agent / background agent）！所有工作必须在主进程完成。
-   子代理的审批交互在 pane 中不稳定，会导致任务卡死。
-
-当前任务ID: $TaskId
-Worker: $WorkerName
-
-===================================================================
-  TASK CONTENT
-===================================================================
-
-请读取以下文件获取完整任务内容，严格按照文件中的要求执行：
-
-$TaskFilePath
-
-===================================================================
-  COMPLETION REMINDER
-===================================================================
-
-任务完成后，必须调用 MCP tool report_route，参数如下：
-
-  from: "$WorkerName"
-  task: "$TaskId"
-  status: success（或 fail / blocked）
-  body: <填写：修改的文件、执行的命令、测试结果>
-
-这是强制要求。不调用 report_route 就声明完成视为违规。
-
-===================================================================
-$qaGateSection
+执行要求：
+1) 先读取 role_definition（若提供）并遵循角色约束
+2) 再读取 protocol 并遵循通信/回传协议
+3) 最后读取 task_file 并开始执行
+4) 生命周期按 protocol 执行（in_progress 心跳 / blocked 上报 / 完成回传）
+5) 禁止子代理（sub-agent/background agent），仅主进程执行
+$qaHint
+收到后请先回复：ACK $TaskId + first_step
 "@
 
-$fullTask += @"
-===================================================================
+if ($Engine -eq "gemini") {
+    # Gemini 输入框对多行粘贴更敏感，进一步压缩为短消息
+    $fullTask = @"
+[TASK-DISPATCH] task_id=$TaskId
+role_definition=$(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" })
+protocol=$protocolPath
+task_file=$TaskFilePath
+顺序：先读 role_definition -> protocol -> task_file；按 protocol 生命周期回传；禁止子代理。
+先回复：ACK $TaskId + first_step
 "@
+}
 
 # 发送到 Worker
 Write-Host ""
@@ -145,11 +282,20 @@ Write-Host "   Engine: $Engine"
 Write-Host "   Task file: $TaskFilePath"
 Write-Host ""
 
+# 派遣前快速校验 pane 归属，避免发到错误 pane
+$initialPaneText = Get-PaneTextSafe -PaneId $WorkerPaneId
+$latestWorkerReady = Get-LatestWorkerReadyName -paneText $initialPaneText
+if ($WorkerName -and $latestWorkerReady -and $latestWorkerReady -ne $WorkerName) {
+    Write-Host ('[FAIL] Pane ownership mismatch: expected worker=' + $WorkerName + ', pane=' + $WorkerPaneId + ', actual=' + $latestWorkerReady) -ForegroundColor Red
+    Write-Host '       Refuse to dispatch. Please restart worker / refresh registry first.' -ForegroundColor Yellow
+    exit 1
+}
+
 # 等待 Worker CLI 就绪（避免 CLI 未加载完就发送导致内容丢失）
 $readyPatterns = if ($Engine -eq "gemini") {
-    @("Type your message", "? for shortcuts")
+    @("Type your message", "? for shortcuts", "Gemini", "Press /")
 } else {
-    @("codex>", "Codex is ready", "full-auto", "OpenAI Codex")
+    @("codex>", "Codex is ready", "full-auto", "OpenAI Codex", "model:", "directory:", "/model to change", "gpt-5.3-codex", "Build faster with Codex")
 }
 
 $maxWait = 60
@@ -159,7 +305,7 @@ $ready = $false
 Write-Host "Waiting for $Engine CLI to be ready..." -ForegroundColor Yellow
 while ($waited -lt $maxWait) {
     try {
-        $paneText = wezterm cli get-text --pane-id $WorkerPaneId 2>$null
+        $paneText = Get-PaneTextSafe -PaneId $WorkerPaneId
         foreach ($pattern in $readyPatterns) {
             if ($paneText -match [regex]::Escape($pattern)) {
                 Write-Host ('[OK] Worker CLI ready (matched: ' + $pattern + ')') -ForegroundColor Green
@@ -178,19 +324,49 @@ while ($waited -lt $maxWait) {
 }
 
 if (-not $ready) {
+    $tail = if ($paneText) { ($paneText -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 8) -join " | " } else { "(empty)" }
     Write-Host ('[FAIL] Worker CLI not ready after ' + $maxWait + 's, aborting dispatch') -ForegroundColor Red
+    Write-Host ('       Pane tail: ' + $tail) -ForegroundColor Yellow
     exit 1
 }
 
 # 发送任务指令，然后单独发回车确保提交
-wezterm cli send-text --pane-id $WorkerPaneId --no-paste "$fullTask"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host '[FAIL] wezterm send-text failed' -ForegroundColor Red
+try {
+    Send-PayloadInChunks -PaneId $WorkerPaneId -Payload $fullTask
+    Start-Sleep -Milliseconds 400
+    Invoke-WezTermSendText -PaneId $WorkerPaneId -Text "`r"
+    Ensure-SubmittedAfterPaste -PaneId $WorkerPaneId -Engine $Engine
+} catch {
+    Write-Host ('[FAIL] ' + $_.Exception.Message) -ForegroundColor Red
     exit 1
 }
 
-# 短暂延迟后单独发回车，确保 CLI 正确接收提交
-Start-Sleep -Milliseconds 500
-wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r"
+# 送达确认：必须在 pane 中看到任务标识，防止“发送成功但未入 CLI 输入”
+$deliveryConfirmed = $false
+$deliveryWait = 0
+$deliveryMaxWait = 40
+$taskFileName = [System.IO.Path]::GetFileName($TaskFilePath)
+while ($deliveryWait -lt $deliveryMaxWait) {
+    $paneAfterDispatch = Get-PaneTextSafe -PaneId $WorkerPaneId
+    if (
+        $paneAfterDispatch -match [regex]::Escape($TaskId) -or
+        $paneAfterDispatch -match [regex]::Escape("当前任务ID: $TaskId") -or
+        $paneAfterDispatch -match [regex]::Escape($taskFileName) -or
+        $paneAfterDispatch -match [regex]::Escape("ACK $TaskId")
+    ) {
+        $deliveryConfirmed = $true
+        break
+    }
+    Start-Sleep -Seconds 2
+    $deliveryWait += 2
+}
+
+if (-not $deliveryConfirmed) {
+    $tail = (($paneAfterDispatch -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 8) -join " | ")
+    Write-Host ('[FAIL] Dispatch delivery not confirmed for task ' + $TaskId + ' (pane=' + $WorkerPaneId + ')') -ForegroundColor Red
+    Write-Host ('       Pane tail: ' + $tail) -ForegroundColor Yellow
+    Write-Host '       Do not update task lock. Retry dispatch or restart worker.' -ForegroundColor Yellow
+    exit 1
+}
 
 Write-Host "Task dispatched." -ForegroundColor Green

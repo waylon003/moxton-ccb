@@ -95,62 +95,27 @@ You validate admin frontend changes and return release confidence.
 
 ## 报告模板
 
-```
-[ROUTE]
-from: admin-fe-qa
-to: team-lead
-type: review
-task: <TASK-ID>
-body:
-
-## 验收标准 Checklist
-- [ ] <标准1>: <PASS/FAIL> — <证据摘要>
-- [ ] <标准2>: <PASS/FAIL> — <证据摘要>
-...
-
-## 场景测试矩阵
-| 场景 | 操作步骤 | 预期 | 实际 | 结果 |
-|------|---------|------|------|------|
-| ... | ... | ... | ... | PASS/FAIL |
-
-## 基线检查
-| 命令 | 结果 | 分类 |
-|------|------|------|
-| pnpm typecheck | <输出摘要> | regression / env_blocker / pass |
-| pnpm build:test | <输出摘要> | regression / env_blocker / pass |
-| pnpm test:e2e -- tests/e2e/smoke.spec.ts | <输出摘要> | regression / env_blocker / pass |
-
-## 网络响应证据（强制）
-| 接口 | 方法 | 期望状态 | 实际状态 | 结果 |
-|------|------|----------|----------|------|
-| <例如 /admin/products> | GET | 200 | <status> | PASS/FAIL |
-| <例如 /admin/orders> | GET | 200 | <status> | PASS/FAIL |
-
-## 失败路径验证（强制）
-| 场景 | 注入/触发方式 | 预期文案 | 实际文案 | 是否透出后端原文 | 结果 |
-|------|---------------|----------|----------|------------------|------|
-| 500 错误 | <mock/拦截方式> | <产品化文案> | <页面文案> | 是/否 | PASS/FAIL |
-
-## 失败详情（如有）
-- 页面: <route>
-- 操作: <action>
-- 预期: <expected>
-- 实际: <actual>
-- 截图/日志: <evidence>
-
-## 回归影响
-- <现有功能是否受影响>
-
-## 最终决策: <PASS | FAIL | BLOCKED>
-- PASS: 验收标准全部通过，且基线检查+控制台+截图+网络响应+失败路径验证证据齐全
-- FAIL: 验收标准未满足（真实回归/行为不匹配）
-- BLOCKED: 环境限制或证据不完整（包括缺少网络响应证据/失败路径验证）
-[/ROUTE]
+```text
+report_route(
+  from: "admin-fe-qa",
+  task: "<TASK-ID>",
+  status: "success" | "blocked" | "fail",
+  body: "{\"task_id\":\"<TASK-ID>\",\"worker\":\"admin-fe-qa\",\"verdict\":\"PASS|FAIL|BLOCKED\",\"summary\":\"<一句话结论>\",\"checks\":{\"ui\":{\"pass\":true,\"evidence\":[\"05-verification/<TASK-ID>/ui.png\"]},\"console\":{\"pass\":true,\"error_count\":0,\"evidence\":[\"05-verification/<TASK-ID>/console.log\"]},\"network\":{\"pass\":true,\"has_5xx\":false,\"evidence\":[\"05-verification/<TASK-ID>/network.json\"]},\"failure_path\":{\"pass\":true,\"scenario\":\"500异常提示验证\",\"evidence\":[\"05-verification/<TASK-ID>/failure-path.png\"]}},\"commands\":[\"pnpm typecheck\",\"pnpm build:test\",\"pnpm test:e2e -- tests/e2e/smoke.spec.ts\"],\"changed_files\":[]}"
+)
 ```
 
 ## Rules
+- `status=success` 时，`body` 必须是合法 JSON（禁止 Markdown 文本），且 `verdict` 必须是 `PASS`。
+- `checks.ui/console/network/failure_path` 必须全部 `pass=true`，并且每项都要有可访问的证据文件路径。
+- `checks.network.has_5xx` 必须是 `false`；若出现 5xx，只能回传 `blocked` 或 `fail`。
 - 每个失败命令必须分类为 `regression` 或 `env_blocker`。
 - 不要因为单个测试账号的数据问题就判定 FAIL，先换账号重试。
-- 跨角色问题必须通过 `[ROUTE]` 信封发给 Team Lead。
+- 跨角色问题必须通过 `report_route(status="blocked", ...)` 发给 Team Lead，禁止自建私有信封协议。
+- 若被阻塞（权限审批、环境、依赖、契约不明），必须在 2 分钟内调用 `report_route`：
+  - `status: "blocked"`
+  - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+- 长任务建议周期性调用 `report_route`：`status: "in_progress"` 同步验证进展。
+- 禁止在 pane 中提问后停滞等待；需要决策时直接走 `report_route(status="blocked")`。
+- 若仓库存在大量既有未提交改动：先采集 `git status --porcelain` 和 `git diff --name-only`，再继续验证，并在报告中单列 `pre-existing changes`。
 - 可以按需读取 `E:\moxton-ccb` 中的历史文档。
 - 不要移动任务文件。

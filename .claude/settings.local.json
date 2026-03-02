@@ -74,7 +74,17 @@
       "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File:*)",
       "mcp__route__check_routes",
       "mcp__route__report_route",
-      "mcp__route__clear_route"
+      "mcp__route__clear_route",
+      "Bash(mcp route:*)",
+      "Bash(Start-Sleep -Seconds 30)",
+      "Bash(Start-Sleep -Seconds 5)",
+      "Bash(python3:*)",
+      "Bash(powershell -NoProfile -Command:*)",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -Command:*)",
+      "Bash(for i in 1 2 3 4 5)",
+      "Bash(do sleep:*)",
+      "Bash(done)",
+      "Bash(for:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

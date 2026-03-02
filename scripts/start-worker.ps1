@@ -30,6 +30,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Normalize-PaneId([string]$value) {
+    if (-not $value) { return $null }
+    $trimmed = $value.Trim()
+    if ($trimmed -match '(\d+)') {
+        return $Matches[1]
+    }
+    return $null
+}
+
 # 验证 TeamLeadPaneId
 if (-not $TeamLeadPaneId) {
     Write-Error "TEAM_LEAD_PANE_ID 未设置。请先设置环境变量。`n示例: `$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { `$_.title -like '*claude*' } | Select-Object -First 1).pane_id"
@@ -129,6 +138,7 @@ try {
 
         Write-Host "执行: wezterm $($splitArgs -join ' ')" -ForegroundColor DarkGray
         $newPaneId = & wezterm @splitArgs 2>&1
+        $newPaneId = Normalize-PaneId ([string]$newPaneId)
 
         if ($LASTEXITCODE -ne 0 -or -not $newPaneId) {
             Write-Error "创建 pane 失败。Exit code: $LASTEXITCODE"
@@ -148,6 +158,7 @@ try {
 
         Write-Host "执行: wezterm $($spawnArgs -join ' ')" -ForegroundColor DarkGray
         $newPaneId = & wezterm @spawnArgs 2>&1
+        $newPaneId = Normalize-PaneId ([string]$newPaneId)
 
         if ($LASTEXITCODE -ne 0 -or -not $newPaneId) {
             Write-Error "创建窗口失败。Exit code: $LASTEXITCODE"
@@ -162,6 +173,16 @@ try {
     $registryScript = Join-Path $PSScriptRoot "worker-registry.ps1"
     if (Test-Path $registryScript) {
         & $registryScript -Action register -WorkerName $WorkerName -PaneId $newPaneId -WorkDir $WorkDir -Engine $Engine
+    }
+
+    # 设置 WezTerm 标签和窗口标题，避免显示 cmd.exe/system32
+    $workerTitle = "$WorkerName ($Engine)"
+    try {
+        wezterm cli set-tab-title --pane-id $newPaneId $workerTitle | Out-Null
+        wezterm cli set-window-title --pane-id $newPaneId $workerTitle | Out-Null
+        Write-Host "✅ 已设置窗口标题: $workerTitle" -ForegroundColor Green
+    } catch {
+        Write-Host "⚠️ 设置窗口标题失败（不影响派遣）" -ForegroundColor Yellow
     }
 
     Write-Host ""

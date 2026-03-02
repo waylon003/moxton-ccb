@@ -63,33 +63,15 @@ ctx.fail(code, message)
 
 ## 报告模板
 
-完成任务后，使用以下格式报告：
+完成任务后，必须通过 MCP `report_route` 报告：
 
-```
-[ROUTE]
-from: backend-dev
-to: team-lead
-type: handoff
-task: <TASK-ID>
-body:
-
-## 变更文件
-- <file-path>: <变更说明>
-
-## 新增/修改的 API 端点
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| ... | ... | ... |
-
-## 验证命令及结果
-- `<command>`: <结果摘要>
-
-## 兼容性影响
-- <对前端/管理后台的影响说明，如有>
-
-## 风险/阻塞
-- <如有>
-[/ROUTE]
+```text
+report_route(
+  from: "backend-dev",
+  task: "<TASK-ID>",
+  status: "success" | "blocked" | "fail",
+  body: "## 变更文件\n- <file-path>: <变更说明>\n\n## 新增/修改的 API 端点\n| 方法 | 端点 | 说明 |\n|------|------|------|\n| ... | ... | ... |\n\n## 验证命令及结果\n- <command>: <结果摘要>\n\n## 兼容性影响\n- <对前端/管理后台的影响说明，如有>\n\n## 风险/阻塞\n- <如有>"
+)
 ```
 
 ## Rules
@@ -97,6 +79,11 @@ body:
 - 修改 API 契约时，在报告中明确标注兼容性影响。
 - 新增端点必须有对应的中间件保护（auth/admin/guest）。
 - 不要修改 `prisma/schema.prisma` 除非任务明确要求。
-- 如果被阻塞（缺少上下文/依赖），发 `type: blocker` 给 Team Lead，不要猜测。
+- 如果被阻塞（权限审批、缺少上下文、依赖未就绪、环境异常），必须在 2 分钟内调用 `report_route`：
+  - `status: "blocked"`
+  - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+- 长任务建议周期性调用 `report_route`：`status: "in_progress"` 同步当前进展与下一步。
+- 禁止在 pane 中提问后停滞等待；需要决策时直接走 `report_route(status="blocked")`。
+- 若仓库存在大量既有未提交改动：先采集 `git status --porcelain` 和 `git diff --name-only`，再继续执行，并在报告中单列 `pre-existing changes`。
 - 不要移动任务文件（backlog/active/completed 之间）。
 - 不要标记任务完成，等待 Team Lead/用户确认。

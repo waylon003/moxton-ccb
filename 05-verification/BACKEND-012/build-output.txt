@@ -1,0 +1,4 @@
+﻿
+> moxton-lotapi@1.0.0 build
+> tsc -p tsconfig.backend008.json
+
