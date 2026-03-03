@@ -26,12 +26,16 @@ param(
     [int]$ReplayApproveWindowSeconds = 0,
     [int]$EscalationCooldownSeconds = 12,
     [int]$DecisionCooldownSeconds = 8,
+    [int]$WakeCooldownSeconds = 12,
 
     [switch]$Continuous,
     [int]$MaxHandled = 0
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Split-Path -Parent $scriptDir
 $inboxPath = Join-Path $rootDir "mcp\route-server\data\route-inbox.json"
@@ -52,6 +56,41 @@ function Read-JsonRetry($path, $maxRetry = 3) {
         }
     }
     return $null
+}
+
+function Get-WeztermPanes {
+    try {
+        $raw = wezterm cli list --format json 2>$null
+        if (-not $raw) { return @() }
+        $parsed = $raw | ConvertFrom-Json
+        return @($parsed)
+    } catch {
+        return @()
+    }
+}
+
+function Resolve-TeamLeadPaneId([string]$preferredPaneId) {
+    $panes = Get-WeztermPanes
+    if ($preferredPaneId) {
+        $matched = $panes | Where-Object { ([string]$_.pane_id) -eq ([string]$preferredPaneId) } | Select-Object -First 1
+        if ($matched) { return [string]$matched.pane_id }
+    }
+    $fallback = $panes | Where-Object { $_.title -like '*claude*' -or $_.title -like '* Claude*' } | Select-Object -First 1
+    if ($fallback) { return [string]$fallback.pane_id }
+    return $null
+}
+
+function Notify-TeamLeadWake([string]$message) {
+    $targetPane = Resolve-TeamLeadPaneId -preferredPaneId $TeamLeadPaneId
+    if (-not $targetPane) { return $false }
+    try {
+        wezterm cli send-text --pane-id $targetPane --no-paste $message | Out-Null
+        Start-Sleep -Milliseconds 80
+        wezterm cli send-text --pane-id $targetPane --no-paste "`r" | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
 }
 
 function Write-JsonUtf8($path, $data) {
@@ -110,6 +149,17 @@ function Get-ShortHash([string]$text) {
     }
 }
 
+function To-AsciiPreview([string]$text, [int]$maxLen = 180) {
+    if (-not $text) { return "" }
+    # 仅保留可打印 ASCII，避免 TUI 控制字符/边框字符污染日志与 route body
+    $ascii = ($text -replace '[^\x20-\x7E]', ' ')
+    $ascii = ($ascii -replace '\s+', ' ').Trim()
+    if ($ascii.Length -gt $maxLen) {
+        return $ascii.Substring(0, $maxLen)
+    }
+    return $ascii
+}
+
 function Contains-Any([string]$text, $patterns) {
     if (-not $text -or -not $patterns) { return $false }
     foreach ($pat in $patterns) {
@@ -130,6 +180,9 @@ function Is-ApprovalPrompt([string]$tail, $policyPatterns) {
         "Do you want to run the following command?",
         "Do you want to proceed?",
         "Run this command?",
+        "Would you like to make the following edits?",
+        "Press enter to confirm or esc to cancel",
+        "Yes, proceed",
         "[y/N]",
         "(y/n)",
         "press y",
@@ -152,6 +205,9 @@ function Get-ApprovalPatterns($policyPatterns) {
         "Do you want to run the following command?",
         "Do you want to proceed?",
         "Run this command?",
+        "Would you like to make the following edits?",
+        "Press enter to confirm or esc to cancel",
+        "Yes, proceed",
         "[y/N]",
         "(y/n)",
         "press y",
@@ -414,7 +470,29 @@ function Mark-TaskBlocked([string]$note) {
     Write-JsonUtf8 -path $locksPath -data $locks
 }
 
-function Send-DecisionToWorker([string]$decisionKey) {
+function Get-ApprovalPromptType([string]$analysisText) {
+    if (-not $analysisText) { return "command_approval" }
+    $text = [string]$analysisText
+    if (
+        $text.IndexOf("Would you like to make the following edits?", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $text.IndexOf("Press enter to confirm or esc to cancel", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $text.IndexOf("Yes, proceed", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    ) {
+        return "edit_confirm"
+    }
+    return "command_approval"
+}
+
+function Send-DecisionToWorker([string]$decisionKey, [string]$promptType = "command_approval") {
+    if ($promptType -eq "edit_confirm") {
+        if ($decisionKey -eq "y") {
+            wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r" | Out-Null
+            return
+        }
+        wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`e" | Out-Null
+        return
+    }
+
     wezterm cli send-text --pane-id $WorkerPaneId --no-paste $decisionKey | Out-Null
     Start-Sleep -Milliseconds 150
     wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r" | Out-Null
@@ -438,6 +516,8 @@ try {
     $lastDecisionAt = [DateTime]::MinValue
     $lastEscalatedFingerprint = ""
     $lastEscalatedAt = [DateTime]::MinValue
+    $lastWakeFingerprint = ""
+    $lastWakeAt = [DateTime]::MinValue
     $lastCleanupAt = [DateTime]::MinValue
     while ($true) {
         # 周期性自动清理：pending 超时过期 + 已处理历史裁剪
@@ -498,17 +578,21 @@ try {
                     continue
                 }
 
-                $analysisLines = @($snippetLines + @($tailLines | Select-Object -Last 20))
-                $analysisText = ($analysisLines -join "`n")
+                # 风险判定仅使用审批片段本身，避免被聊天上下文中的无关关键词（如 curl）污染。
+                $analysisText = ($snippetLines -join "`n")
+                $promptType = Get-ApprovalPromptType -analysisText $analysisText
                 $risk = "unknown"
-                if (Contains-Any -text $analysisText -patterns $policy.high_risk_patterns) {
+                # route 回调是协作主链路，默认自动批准，避免 Team Lead 被无效审批打断。
+                if ($analysisText.IndexOf("report_route", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    $risk = "low"
+                } elseif (Contains-Any -text $analysisText -patterns $policy.high_risk_patterns) {
                     $risk = "high"
                 } elseif (Contains-Any -text $analysisText -patterns $policy.low_risk_patterns) {
                     $risk = "low"
                 }
 
                 if ($risk -eq "low") {
-                    Send-DecisionToWorker -decisionKey "y"
+                    Send-DecisionToWorker -decisionKey "y" -promptType $promptType
                     Write-Output ("[APPROVAL-AUTO] task=" + $TaskId + " worker=" + $WorkerName + " risk=low")
                     $lastDecisionFingerprint = $fingerprint
                     $lastDecisionAt = Get-Date
@@ -531,7 +615,7 @@ try {
                     if ($RequestTtlSeconds -gt 0 -and $ageSec -ge $RequestTtlSeconds) {
                         $denySent = $false
                         try {
-                            Send-DecisionToWorker -decisionKey "n"
+                            Send-DecisionToWorker -decisionKey "n" -promptType $promptType
                             $denySent = $true
                         } catch {}
 
@@ -567,7 +651,8 @@ try {
                 if ($ReplayApproveWindowSeconds -gt 0) {
                     $recentApproved = Get-RecentResolvedApproval -fingerprint $fingerprint -withinSeconds $ReplayApproveWindowSeconds
                     if ($recentApproved) {
-                        Send-DecisionToWorker -decisionKey "y"
+                        $recentPromptType = if ($recentApproved.prompt_type) { [string]$recentApproved.prompt_type } else { $promptType }
+                        Send-DecisionToWorker -decisionKey "y" -promptType $recentPromptType
                         Write-Output ("[APPROVAL-REPLAY-AUTO] task=" + $TaskId + " worker=" + $WorkerName + " request_id=" + [string]$recentApproved.id)
                         $lastDecisionFingerprint = $fingerprint
                         $lastDecisionAt = Get-Date
@@ -592,6 +677,7 @@ try {
                 }
 
                 $requestId = "APR-" + (Get-Date -Format "yyyyMMddHHmmss") + "-" + (Get-Random -Minimum 1000 -Maximum 9999)
+                $snippetPreview = To-AsciiPreview -text $snippet -maxLen 180
                 $request = @{
                     id = $requestId
                     task = $TaskId
@@ -599,8 +685,9 @@ try {
                     worker_pane_id = $WorkerPaneId
                     team_lead_pane_id = $TeamLeadPaneId
                     risk = if ($risk -eq "unknown") { "high" } else { $risk }
-                    snippet = $snippet
+                    snippet_preview = $snippetPreview
                     snippet_fingerprint = $fingerprint
+                    prompt_type = $promptType
                     status = "pending"
                     created_at = Get-Date -Format "o"
                     resolved_at = $null
@@ -609,9 +696,24 @@ try {
                 }
                 Save-ApprovalRequest -request $request
 
-                $body = "[APPROVAL_REQUEST] request_id=$requestId worker=$WorkerName pane=$WorkerPaneId risk=$($request.risk) snippet=$snippet"
+                # route body 只保留结构化字段，禁止拼接原始 snippet，避免中文/控制字符乱码
+                $body = "[APPROVAL_REQUEST] request_id=$requestId worker=$WorkerName pane=$WorkerPaneId risk=$($request.risk) fp=$fingerprint"
                 $routeId = Append-RouteInbox -status "blocked" -body $body
                 Mark-TaskBlocked -note ("Approval required: " + $requestId)
+
+                $nowWake = Get-Date
+                $shouldWake = $true
+                if ($WakeCooldownSeconds -gt 0 -and $fingerprint -eq $lastWakeFingerprint -and ((($nowWake) - $lastWakeAt).TotalSeconds -lt $WakeCooldownSeconds)) {
+                    $shouldWake = $false
+                }
+                if ($shouldWake) {
+                    $wakeMessage = "[APR] id=$requestId task=$TaskId worker=$WorkerName risk=$($request.risk) action=approve-request"
+                    $wakeSent = Notify-TeamLeadWake -message $wakeMessage
+                    if ($wakeSent) {
+                        $lastWakeFingerprint = $fingerprint
+                        $lastWakeAt = $nowWake
+                    }
+                }
 
                 $lastEscalatedFingerprint = $fingerprint
                 $lastEscalatedAt = Get-Date

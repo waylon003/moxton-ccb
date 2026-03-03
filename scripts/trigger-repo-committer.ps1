@@ -63,6 +63,12 @@ function Read-Json([string]$path) {
     }
 }
 
+function Normalize-ToList($value) {
+    if ($null -eq $value) { return @() }
+    if ($value -is [System.Array]) { return $value }
+    return @($value)
+}
+
 function Resolve-TaskPrefix([string]$tid) {
     foreach ($p in @("BACKEND", "SHOP-FE", "ADMIN-FE")) {
         if ($tid.StartsWith($p + "-", [System.StringComparison]::OrdinalIgnoreCase)) { return $p }
@@ -107,7 +113,7 @@ if (-not (Test-Path $repoPath)) {
 }
 
 $history = Read-Json -path $historyFile
-$historyList = if ($history) { @($history) } else { @() }
+$historyList = @(Normalize-ToList -value $history)
 $mode = if ($Push.IsPresent) { "ship" } else { "commit" }
 if (-not $Force.IsPresent) {
     $existing = $historyList | Where-Object {
@@ -142,9 +148,14 @@ if (-not $paneId) {
         Exit-WithResult -Code 0 -Status "queued_pending_worker" -Message "team_lead_pane_missing"
     }
     Write-Host ("Committer worker offline, starting: " + $commitWorker) -ForegroundColor Yellow
-    & (Join-Path $scriptDir "start-worker.ps1") -WorkDir $repoPath -WorkerName $commitWorker -Engine $engine -TeamLeadPaneId $resolvedTeamLeadPaneId | Out-Null
-    Start-Sleep -Seconds 3
-    $paneId = & (Join-Path $scriptDir "worker-registry.ps1") -Action get -WorkerName $commitWorker 2>$null
+    try {
+        & (Join-Path $scriptDir "start-worker.ps1") -WorkDir $repoPath -WorkerName $commitWorker -Engine $engine -TeamLeadPaneId $resolvedTeamLeadPaneId | Out-Null
+        Start-Sleep -Seconds 3
+        $paneId = & (Join-Path $scriptDir "worker-registry.ps1") -Action get -WorkerName $commitWorker 2>$null
+    } catch {
+        Write-Host ("WARN: start-worker failed for " + $commitWorker + ": " + $_.Exception.Message) -ForegroundColor Yellow
+        $paneId = $null
+    }
 }
 
 if (-not $paneId) {
@@ -154,8 +165,6 @@ if (-not $paneId) {
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $commitTaskId = (if ($Push.IsPresent) { "SHIP-" } else { "COMMIT-" }) + $TaskId + "-" + $timestamp
-$taskDir = Join-Path $rootDir "01-tasks\active\repo-committer"
-$taskPath = Join-Path $taskDir ($commitTaskId + ".md")
 $resolvedCommitMessage = if ($CommitMessage) { $CommitMessage } else { "chore(" + $TaskId.ToLower() + "): apply qa-verified changes" }
 
 $taskLines = @(
@@ -184,13 +193,11 @@ $taskLines = @(
 )
 $taskContent = $taskLines -join "`n"
 
-Write-Utf8NoBomFile -path $taskPath -content $taskContent
-
 & (Join-Path $scriptDir "dispatch-task.ps1") `
     -WorkerPaneId $paneId `
     -WorkerName $commitWorker `
     -TaskId $commitTaskId `
-    -TaskFilePath $taskPath `
+    -InlineTaskBody $taskContent `
     -Engine $engine `
     -TeamLeadPaneId $resolvedTeamLeadPaneId
 

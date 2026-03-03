@@ -53,10 +53,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 
 - 禁止 Team Lead 使用子代理（`Task(...)` / `Backgrounded agent`）执行派遣。
 - 禁止直接调用控制器子脚本（如 `dispatch-task.ps1` / `start-worker.ps1`）。
+- 禁止 Team Lead 直接使用 `assign_task.py` 执行写入动作（建任务/改锁/拆分）；仅允许只读诊断参数。
 - Worker 遇阻塞必须 `report_route(status=blocked, ...)`，不得静默等待。
 - QA 回传 `status=success` 时，`body` 必须是 JSON 结构化证据；不合规会被 route-monitor 自动降级为 `blocked`。
 - QA 通过不自动提交；仅在 `archive` 成功迁移 `active -> completed` 后触发提交发布流程。
 - Team Lead 监控 Worker 时禁止无限轮询：同一 `get-text/check_routes` 无变化最多 3 轮，随后必须转 `status/recover`。
+- 高风险审批会由 `approval-router` 主动发送短唤醒消息到 Team Lead：`[APR] id=... task=... worker=... risk=...`。
 
 ## 目录结构
 

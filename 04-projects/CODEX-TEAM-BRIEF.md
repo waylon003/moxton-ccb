@@ -12,22 +12,6 @@ Use it in codex-cli to bootstrap a Team Lead + parallel sub-agent workflow.
 - Rule: coordinate only; ask user before moving tasks to `completed/`
 
 ## Active Roles
-### SHOP-FE - Shop Frontend
-- Repo: `E:\nuxt-moxton`
-- Dev prompt: `.claude/agents/shop-frontend.md`
-- QA prompt: `.claude/agents/shop-fe-qa.md`
-- QA tooling: `Primary: @playwright/test smoke baseline + microsoft/playwright-mcp. Fallback: targeted manual regression with reproducible evidence.`
-- QA primary commands:
-  - `pnpm type-check`
-  - `pnpm build`
-  - `pnpm test:e2e -- tests/e2e/smoke.spec.ts  # must-run smoke baseline`
-  - `pnpm exec playwright test <spec-or-grep>  # optional expanded coverage`
-- QA fallback commands:
-  - `Execute task-focused manual browser regression and capture reproducible steps.`
-- Tasks:
-  - `01-tasks\active\shop-frontend\SHOP-FE-005-backend-fix-1-fix-order-get-orders-user-500-2.md` (SHOP-FE-005)
-  - `01-tasks\active\shop-frontend\SHOP-FE-006-layout.md` (SHOP-FE-006)
-
 ### BACKEND - Backend
 - Repo: `E:\moxton-lotapi`
 - Dev prompt: `.claude/agents/backend.md`
@@ -40,7 +24,6 @@ Use it in codex-cli to bootstrap a Team Lead + parallel sub-agent workflow.
   - `Run targeted legacy scripts: node test-*.js`
   - `Capture request/response evidence for PASS/FAIL.`
 - Tasks:
-  - `01-tasks\active\backend\BACKEND-011-backend-fix-1-fix-order-get-orders-user-500-2.md` (BACKEND-011)
   - `01-tasks\active\backend\BACKEND-012-pagination.md` (BACKEND-012)
 
 ## Codex Starter Prompt
@@ -93,32 +76,6 @@ D) keep processing until all role tasks are QA PASS or blocked
 E) when backend contract changes, assign doc-updater before final closure
 
 Role assignments:
-- SHOP-FE (Shop Frontend)
-  repo: E:\nuxt-moxton
-  dev prompt: .claude/agents/shop-frontend.md
-  qa prompt: .claude/agents/shop-fe-qa.md
-  qa tooling: Primary: @playwright/test smoke baseline + microsoft/playwright-mcp. Fallback: targeted manual regression with reproducible evidence.
-  qa primary commands:
-    - pnpm type-check
-    - pnpm build
-    - pnpm test:e2e -- tests/e2e/smoke.spec.ts  # must-run smoke baseline
-    - pnpm exec playwright test <spec-or-grep>  # optional expanded coverage
-  qa fallback commands:
-    - Execute task-focused manual browser regression and capture reproducible steps.
-  task files:
-    - 01-tasks\active\shop-frontend\SHOP-FE-005-backend-fix-1-fix-order-get-orders-user-500-2.md
-    - 01-tasks\active\shop-frontend\SHOP-FE-006-layout.md
-  optional context references:
-    - E:\moxton-ccb\01-tasks\STATUS.md
-    - E:\moxton-ccb\04-projects\COORDINATION.md
-    - E:\moxton-ccb\04-projects\DEPENDENCIES.md
-    - E:\moxton-ccb\04-projects\nuxt-moxton.md
-    - E:\moxton-ccb\03-guides\README.md
-    - E:\moxton-ccb\03-guides\stripe-elements.md
-    - E:\moxton-ccb\03-guides\qa-tooling-stack.md
-    - E:\moxton-ccb\02-api\payments.md
-    - E:\nuxt-moxton\AGENTS.md
-
 - BACKEND (Backend)
   repo: E:\moxton-lotapi
   dev prompt: .claude/agents/backend.md
@@ -131,7 +88,6 @@ Role assignments:
     - Run targeted legacy scripts: node test-*.js
     - Capture request/response evidence for PASS/FAIL.
   task files:
-    - 01-tasks\active\backend\BACKEND-011-backend-fix-1-fix-order-get-orders-user-500-2.md
     - 01-tasks\active\backend\BACKEND-012-pagination.md
   optional context references:
     - E:\moxton-ccb\01-tasks\STATUS.md

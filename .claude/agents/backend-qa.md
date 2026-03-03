@@ -33,8 +33,14 @@ You validate backend/API tasks and bug fixes.
 ## Workflow
 
 1. 阅读任务文档，逐条列出验收标准 checklist。
-2. 从 `05-verification/QA-IDENTITY-POOL.md` 加载测试身份。
-3. 如果某个账号登录失败，先换同角色的其他账号重试；全部失败才记为数据问题。
+2. 从 `05-verification/QA-IDENTITY-POOL.md` 加载测试身份与固定凭据（优先）：
+   - 管理员：`admin / admin123`
+   - 普通用户：`waylon / qwe123456`
+3. 登录策略（强制）：
+   - 先用固定凭据直接登录拿 token；
+   - 固定凭据失败，再换同角色候选账号；
+   - 固定凭据 + 候选账号都失败，才记为数据/环境问题并 `blocked`；
+   - 禁止无限循环 register/login 重试。
 4. 运行环境预检：
    ```
    node -e "const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,['-v']);console.log(r.error?.code||'OK')"
@@ -92,6 +98,7 @@ report_route(
 - `checks.network.has_5xx` 必须是 `false`；若出现 5xx，只能回传 `blocked` 或 `fail`。
 - 每个失败命令必须分类为 `regression` 或 `env_blocker`。
 - 不要因为单个测试账号的数据问题就判定 FAIL，先换账号重试。
+- 禁止把“注册新账号”作为默认拿 token 路径；优先使用固定测试凭据直接登录。
 - 跨角色问题必须通过 `report_route(status="blocked", ...)` 发给 Team Lead，禁止自建私有信封协议。
 - 若被阻塞（权限审批、环境、依赖、契约不明），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`

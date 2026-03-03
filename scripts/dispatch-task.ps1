@@ -11,8 +11,11 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$TaskId,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [string]$TaskFilePath,
+
+    [Parameter(Mandatory=$false)]
+    [string]$InlineTaskBody,
 
     [Parameter(Mandatory=$false)]
     [string]$WorkerName,
@@ -157,6 +160,33 @@ function Ensure-SubmittedAfterPaste {
     }
 }
 
+function Invoke-WezTermSubmit {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PaneId,
+        [Parameter(Mandatory = $true)]
+        [string]$Engine
+    )
+
+    # 某些 CLI（尤其 Gemini）对回车序列比较敏感：按 CR/LF/CRLF 多次尝试提交。
+    $sequences = if ($Engine -eq "gemini") {
+        @("`r", "`n", "`r`n")
+    } else {
+        @("`r", "`r`n")
+    }
+
+    foreach ($seq in $sequences) {
+        try {
+            wezterm cli send-text --pane-id $PaneId --no-paste $seq 2>$null | Out-Null
+        } catch {}
+        Start-Sleep -Milliseconds 120
+        try {
+            wezterm cli send-text --pane-id $PaneId $seq 2>$null | Out-Null
+        } catch {}
+        Start-Sleep -Milliseconds 180
+    }
+}
+
 function Resolve-RoleDefinitionPath([string]$workerName, [string]$ccbRoot) {
     if (-not $workerName) { return $null }
     $agentsDir = Join-Path $ccbRoot ".claude\agents"
@@ -220,7 +250,13 @@ else {
 }
 
 # 验证任务文件存在
-if (-not (Test-Path $TaskFilePath)) {
+$hasTaskFile = -not [string]::IsNullOrWhiteSpace($TaskFilePath)
+$hasInlineBody = -not [string]::IsNullOrWhiteSpace($InlineTaskBody)
+if (-not $hasTaskFile -and -not $hasInlineBody) {
+    Write-Error "必须提供 -TaskFilePath 或 -InlineTaskBody。"
+    exit 1
+}
+if ($hasTaskFile -and -not (Test-Path $TaskFilePath)) {
     Write-Error "任务文件不存在: $TaskFilePath"
     exit 1
 }
@@ -242,35 +278,40 @@ if ($WorkerName -like "*-qa") {
 QA 注意：success 回传必须满足 protocol.md 的 QA 回传合同（JSON + checks + evidence）。
 "@
 }
+$taskSource = if ($hasTaskFile) { $TaskFilePath } else { "<inline-task-body>" }
+$inlineSection = if ($hasInlineBody) {
+@"
+
+inline_task_body:
+$InlineTaskBody
+"@
+} else {
+    ""
+}
 
 $fullTask = @"
 [TASK-DISPATCH]
 task_id: $TaskId
 worker: $WorkerName
-task_file: $TaskFilePath
+task_file: $taskSource
 role_definition: $(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" })
 protocol: $protocolPath
 
 执行要求：
 1) 先读取 role_definition（若提供）并遵循角色约束
 2) 再读取 protocol 并遵循通信/回传协议
-3) 最后读取 task_file 并开始执行
+3) $(if ($hasTaskFile) { "最后读取 task_file 并开始执行" } else { "按 inline_task_body 执行，不需要再读任务文件" })
 4) 生命周期按 protocol 执行（in_progress 心跳 / blocked 上报 / 完成回传）
 5) 禁止子代理（sub-agent/background agent），仅主进程执行
 $qaHint
+$inlineSection
 收到后请先回复：ACK $TaskId + first_step
 "@
 
 if ($Engine -eq "gemini") {
-    # Gemini 输入框对多行粘贴更敏感，进一步压缩为短消息
-    $fullTask = @"
-[TASK-DISPATCH] task_id=$TaskId
-role_definition=$(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" })
-protocol=$protocolPath
-task_file=$TaskFilePath
-顺序：先读 role_definition -> protocol -> task_file；按 protocol 生命周期回传；禁止子代理。
-先回复：ACK $TaskId + first_step
-"@
+    # Gemini 对多行粘贴提交不稳定：改为单行派遣，降低“文本留在输入框”概率。
+    $inlineHint = if ($hasInlineBody) { " inline_task_body_present=true" } else { "" }
+    $fullTask = "[TASK-DISPATCH] task_id=$TaskId role_definition=$(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" }) protocol=$protocolPath task_file=$taskSource$inlineHint; 按顺序读取 role_definition -> protocol -> $(if ($hasTaskFile) { "task_file" } else { "inline_task_body" }); 按 protocol 生命周期回传; 禁止子代理; 先回复 ACK $TaskId + first_step"
 }
 
 # 发送到 Worker
@@ -279,7 +320,7 @@ Write-Host "派遣任务 $TaskId 到 Worker..."
 Write-Host "   Worker: $WorkerName"
 Write-Host "   Worker Pane: $WorkerPaneId"
 Write-Host "   Engine: $Engine"
-Write-Host "   Task file: $TaskFilePath"
+Write-Host "   Task file: $taskSource"
 Write-Host ""
 
 # 派遣前快速校验 pane 归属，避免发到错误 pane
@@ -334,7 +375,7 @@ if (-not $ready) {
 try {
     Send-PayloadInChunks -PaneId $WorkerPaneId -Payload $fullTask
     Start-Sleep -Milliseconds 400
-    Invoke-WezTermSendText -PaneId $WorkerPaneId -Text "`r"
+    Invoke-WezTermSubmit -PaneId $WorkerPaneId -Engine $Engine
     Ensure-SubmittedAfterPaste -PaneId $WorkerPaneId -Engine $Engine
 } catch {
     Write-Host ('[FAIL] ' + $_.Exception.Message) -ForegroundColor Red
@@ -345,13 +386,13 @@ try {
 $deliveryConfirmed = $false
 $deliveryWait = 0
 $deliveryMaxWait = 40
-$taskFileName = [System.IO.Path]::GetFileName($TaskFilePath)
+$taskFileName = if ($hasTaskFile) { [System.IO.Path]::GetFileName($TaskFilePath) } else { "" }
 while ($deliveryWait -lt $deliveryMaxWait) {
     $paneAfterDispatch = Get-PaneTextSafe -PaneId $WorkerPaneId
     if (
         $paneAfterDispatch -match [regex]::Escape($TaskId) -or
         $paneAfterDispatch -match [regex]::Escape("当前任务ID: $TaskId") -or
-        $paneAfterDispatch -match [regex]::Escape($taskFileName) -or
+        ($taskFileName -and $paneAfterDispatch -match [regex]::Escape($taskFileName)) -or
         $paneAfterDispatch -match [regex]::Escape("ACK $TaskId")
     ) {
         $deliveryConfirmed = $true

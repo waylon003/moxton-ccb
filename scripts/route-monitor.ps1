@@ -147,6 +147,9 @@ function Update-DocSyncStateFromRoute {
             $state.backend[$backendTask] = @{}
         }
         $entry = $state.backend[$backendTask]
+        if (-not ($entry -is [System.Collections.IDictionary])) {
+            $entry = Convert-ObjectToHashtable $entry
+        }
         $entry.last_doc_task_id = $taskUpper
         $entry.last_doc_route_status = $statusLower
         if ($statusLower -eq "success") {
@@ -599,20 +602,53 @@ function Process-InboxRoutes {
     $inbox = Read-Json -path $inboxFile
     if (-not $inbox -or -not $inbox.routes) { return }
     $routes = @($inbox.routes | Where-Object { $_.task -and $_.from -and $_.status -and -not $_.processed })
+    $inboxChanged = $false
+    $newProcessed = @{}
+
     foreach ($r in $routes) {
         $routeId = if ($r.id) { $r.id } else { Get-ShortHash("$($r.task)|$($r.from)|$($r.status)|$($r.created_at)") }
-        if ($processedRoutes.ContainsKey($routeId)) { continue }
-        $processedRoutes[$routeId] = Get-Date -Format "o"
-        Save-ProcessedRoutes
-        $gate = Apply-QaSuccessGate -Route $r
-        $effectiveRoute = $gate.route
-        if ($gate.downgraded) {
-            Write-Host ("  [QA GATE] success -> blocked: " + $gate.reason) -ForegroundColor Yellow
+        if ($processedRoutes.ContainsKey($routeId)) {
+            # 补偿回写：历史已处理但 inbox 未标记 processed 的记录直接收口，避免 status 假 pending。
+            if (-not $r.processed) {
+                $r.processed = $true
+                $r.processed_at = Get-Date -Format "o"
+                $inboxChanged = $true
+            }
+            continue
         }
-        Show-RouteNotification -route $effectiveRoute
-        Update-DocSyncStateFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body
-        Update-ArchiveJobsFromRoute -RouteTaskId ([string]$effectiveRoute.task) -RouteStatus ([string]$effectiveRoute.status) -WorkerName ([string]$effectiveRoute.from) -Body ([string]$effectiveRoute.body)
-        Update-TaskLockFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body
+
+        try {
+            $gate = Apply-QaSuccessGate -Route $r
+            $effectiveRoute = $gate.route
+            if ($gate.downgraded) {
+                Write-Host ("  [QA GATE] success -> blocked: " + $gate.reason) -ForegroundColor Yellow
+            }
+            Show-RouteNotification -route $effectiveRoute
+            Update-DocSyncStateFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body
+            Update-ArchiveJobsFromRoute -RouteTaskId ([string]$effectiveRoute.task) -RouteStatus ([string]$effectiveRoute.status) -WorkerName ([string]$effectiveRoute.from) -Body ([string]$effectiveRoute.body)
+            Update-TaskLockFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body
+
+            $processedAt = Get-Date -Format "o"
+            $newProcessed[$routeId] = $processedAt
+            $r.processed = $true
+            $r.processed_at = $processedAt
+            $inboxChanged = $true
+        } catch {
+            Write-Host ("  [ROUTE-ERROR] route_id=" + $routeId + " task=" + [string]$r.task + " err=" + $_.Exception.Message) -ForegroundColor Yellow
+            continue
+        }
+    }
+
+    if ($inboxChanged) {
+        $inbox.updated_at = Get-Date -Format "o"
+        Write-Utf8NoBomFile -path $inboxFile -content ($inbox | ConvertTo-Json -Depth 20)
+    }
+
+    if ($newProcessed.Count -gt 0) {
+        foreach ($k in $newProcessed.Keys) {
+            $processedRoutes[$k] = $newProcessed[$k]
+        }
+        Save-ProcessedRoutes
     }
 }
 

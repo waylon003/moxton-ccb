@@ -62,6 +62,15 @@ function Read-Json([string]$path) {
     }
 }
 
+function Normalize-ToList($value) {
+    if ($null -eq $value) { return @() }
+    if ($value -is [System.Array]) { return $value }
+    if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string]) -and -not ($value -is [hashtable])) {
+        return @($value)
+    }
+    return @($value)
+}
+
 function Resolve-TaskFile([string]$id) {
     $candidates = @(
         "$rootDir\01-tasks\active\*\$id*.md",
@@ -123,19 +132,18 @@ if ($Reason -eq "backend_qa") {
     }
 }
 
-# 生成 doc-updater 任务文件，走统一 dispatch-task 协议
+# 生成 doc-updater 任务内容（内联派遣，不落地 active 任务文件）
 $safeTaskToken = ($TaskId -replace '[^A-Za-z0-9\-]', '-')
 $docTaskId = if ($Reason -eq "round_complete") {
     "DOC-UPDATE-ROUND-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 } else {
     "DOC-UPDATE-$safeTaskToken"
 }
-$docTaskDir = Join-Path $rootDir "01-tasks\active\doc-updater"
-$docTaskFile = Join-Path $docTaskDir "$docTaskId.md"
+$docTaskFile = ""
 $taskFileRef = if ($taskFile) { $taskFile.FullName } else { "(task file not found)" }
 $historyFile = Join-Path $rootDir "config\doc-update-history.json"
 $history = Read-Json -path $historyFile
-$historyList = if ($history) { @($history) } else { @() }
+$historyList = @(Normalize-ToList -value $history)
 
 $reasonText = switch ($Reason) {
     "backend_qa" { "后端 QA 成功后实时同步 API 文档" }
@@ -181,14 +189,13 @@ if ($recentExisting) {
             Write-Host ("跳过重复触发 doc-updater: " + $docTaskId + " (age=" + [int]$ageSec + "s)") -ForegroundColor Yellow
             Exit-WithResult -Code 0 -Status "already_dispatched" -Message "doc_updater_recently_dispatched" -Extra @{
                 docTaskId = $docTaskId
-                docTaskFile = $docTaskFile
+                dispatchMode = "inline"
             }
         }
     }
 }
 
-Write-Utf8NoBomFile -path $docTaskFile -content $docContent
-Write-Host "已生成 doc-updater 任务文件: $docTaskFile" -ForegroundColor Gray
+Write-Host "使用 inline 派遣 doc-updater（不写入 active 任务文件）" -ForegroundColor Gray
 
 # 获取/启动 doc-updater worker
 $registryScript = Join-Path $scriptDir "worker-registry.ps1"
@@ -217,11 +224,12 @@ if (-not $docUpdaterPane) {
     Write-Host "⚠️ 无法获取 doc-updater worker，记录待处理队列" -ForegroundColor Yellow
     $pendingFile = Join-Path $rootDir "config\pending-doc-updates.json"
     $pending = Read-Json -path $pendingFile
-    $pendingList = if ($pending) { @($pending) } else { @() }
+    $pendingList = @(Normalize-ToList -value $pending)
     $pendingList += @{
         taskId = $TaskId
         docTaskId = $docTaskId
-        taskFile = $docTaskFile
+        taskFile = ""
+        dispatchMode = "inline"
         reason = $Reason
         status = "pending"
         triggeredAt = (Get-Date -Format "o")
@@ -229,7 +237,7 @@ if (-not $docUpdaterPane) {
     Write-Utf8NoBomFile -path $pendingFile -content ($pendingList | ConvertTo-Json -Depth 10)
     Exit-WithResult -Code 0 -Status "queued_pending_worker" -Message "doc_updater_worker_unavailable" -Extra @{
         docTaskId = $docTaskId
-        docTaskFile = $docTaskFile
+        dispatchMode = "inline"
         queueFile = $pendingFile
     }
 }
@@ -240,7 +248,7 @@ $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
     -WorkerPaneId $docUpdaterPane `
     -WorkerName "doc-updater" `
     -TaskId $docTaskId `
-    -TaskFilePath $docTaskFile `
+    -InlineTaskBody $docContent `
     -Engine codex `
     -TeamLeadPaneId $TeamLeadPaneId
 
@@ -249,7 +257,7 @@ if ($dispatchExit -ne 0) {
     Write-Host ("❌ Doc-Updater 派遣失败: exit=" + $dispatchExit) -ForegroundColor Red
     Exit-WithResult -Code 1 -Status "dispatch_failed" -Message ("dispatch_exit_" + $dispatchExit) -Extra @{
         docTaskId = $docTaskId
-        docTaskFile = $docTaskFile
+        dispatchMode = "inline"
         workerPane = [string]$docUpdaterPane
     }
 }
@@ -262,6 +270,7 @@ $historyList += @{
     docTaskId = $docTaskId
     reason = $Reason
     docUpdaterPane = $docUpdaterPane
+    dispatchMode = "inline"
     status = "dispatched"
     triggeredAt = (Get-Date -Format "o")
 }
@@ -269,6 +278,6 @@ Write-Utf8NoBomFile -path $historyFile -content ($historyList | ConvertTo-Json -
 
 Exit-WithResult -Code 0 -Status "dispatched" -Message "doc_updater_dispatched" -Extra @{
     docTaskId = $docTaskId
-    docTaskFile = $docTaskFile
+    dispatchMode = "inline"
     workerPane = [string]$docUpdaterPane
 }

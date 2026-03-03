@@ -49,7 +49,7 @@ interface OrderResponseDTO {
     product: {
       id: string
       name: string
-      image?: string           // 商品主图
+      images: string[]         // 商品图片数组
     }
     quantity: number           // 购买数量
     unitPrice: number         // 商品单价
@@ -163,7 +163,9 @@ X-Guest-ID: <guest-session-id>  // 游客必填
         "product": {
           "id": "clx1234567892",
           "name": "iPhone 15",
-          "image": "https://example.com/image1.jpg"
+          "images": [
+            "https://example.com/image1.jpg"
+          ]
         },
         "quantity": 2,
         "unitPrice": 1299.00,
@@ -265,7 +267,9 @@ X-Guest-ID: <guest-session-id>  // 游客必填
         "product": {
           "id": "clx1234567892",
           "name": "iPhone 15",
-          "image": "https://example.com/image1.jpg"
+          "images": [
+            "https://example.com/image1.jpg"
+          ]
         },
         "quantity": 2,
         "unitPrice": 1299.00,
@@ -307,6 +311,10 @@ Authorization: Bearer <token>
 - `pageNum` (可选): 页码，默认 1
 - `pageSize` (可选): 每页数量，默认 10
 - `status` (可选): 订单状态筛选
+
+**分页参数行为说明（2026-03-02）**:
+- 依据 `05-verification/BACKEND-012/contract-check.json`，当前服务对非法分页参数（如 `pageNum=-1`、`pageNum=abc`、`pageSize=0`、`pageSize=9999`）仍返回 `200`。
+- 当前实现未在该接口对上述参数返回 `400`；如需严格拦截，请在客户端先做参数校验。
 
 **响应**:
 ```json
@@ -610,7 +618,9 @@ Authorization: Bearer <admin-token>
             "product": {
               "id": "clx1234567892",
               "name": "iPhone 15",
-              "image": "https://example.com/image1.jpg"
+              "images": [
+                "https://example.com/image1.jpg"
+              ]
             },
             "quantity": 2,
             "unitPrice": 1299.00,
@@ -687,7 +697,9 @@ Authorization: Bearer <admin-token>
         "product": {
           "id": "clx1234567892",
           "name": "iPhone 15",
-          "image": "https://example.com/image1.jpg"
+          "images": [
+            "https://example.com/image1.jpg"
+          ]
         },
         "quantity": 2,
         "unitPrice": 1299.00,

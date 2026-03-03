@@ -440,7 +440,17 @@ function Cleanup-ExpiredApprovalRequests {
     }
 }
 
-function Send-ApprovalDecisionToPane($paneId, $decision) {
+function Send-ApprovalDecisionToPane($paneId, $decision, $promptType) {
+    $ptype = if ($promptType) { [string]$promptType } else { "command_approval" }
+    if ($ptype -eq "edit_confirm") {
+        if ($decision -eq 'approve') {
+            wezterm cli send-text --pane-id $paneId --no-paste "`r" | Out-Null
+            return ($LASTEXITCODE -eq 0)
+        }
+        wezterm cli send-text --pane-id $paneId --no-paste "`e" | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    }
+
     $key = if ($decision -eq 'approve') { 'y' } else { 'n' }
     wezterm cli send-text --pane-id $paneId --no-paste $key | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -638,6 +648,81 @@ function Write-ApprovalRouterPidStore($data) {
     Write-Utf8NoBomFile -path $approvalRouterPidFile -content $json
 }
 
+function Get-LivePaneIdSet {
+    $set = New-Object 'System.Collections.Generic.HashSet[string]'
+    $panes = Get-WeztermPanes
+    if (-not $panes) { return $set }
+    foreach ($pane in $panes) {
+        $pid = if ($pane.pane_id) { [string]$pane.pane_id } else { "" }
+        if ($pid) { [void]$set.Add($pid) }
+    }
+    return $set
+}
+
+function Cleanup-StaleApprovalRouters([string]$KeepTaskId = "", [string]$KeepWorkerName = "", [switch]$Verbose) {
+    $store = Read-ApprovalRouterPidStore
+    $routers = Convert-ToRouterEntryMap $store.routers
+    if ($routers.Keys.Count -eq 0) {
+        return @{ removed = 0; killed = 0; kept = 0 }
+    }
+
+    $livePanes = Get-LivePaneIdSet
+    $keepKey = ""
+    if ($KeepTaskId -and $KeepWorkerName) {
+        $keepKey = ($KeepTaskId + "|" + $KeepWorkerName).ToUpper()
+    }
+    $keepWorkerUpper = if ($KeepWorkerName) { $KeepWorkerName.ToUpper() } else { "" }
+
+    $nextRouters = @{}
+    $removed = 0
+    $killed = 0
+    $kept = 0
+
+    foreach ($name in $routers.Keys) {
+        $entry = $routers[$name]
+        $pid = 0
+        $pidStr = if ($entry.pid) { [string]$entry.pid } else { "" }
+        $proc = $null
+        $alive = $false
+        if ([int]::TryParse($pidStr, [ref]$pid) -and $pid -gt 0) {
+            $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $alive = ($null -ne $proc)
+        }
+
+        $paneId = if ($entry.worker_pane_id) { [string]$entry.worker_pane_id } else { "" }
+        $paneAlive = ($paneId -and $livePanes.Contains($paneId))
+        $entryWorkerUpper = if ($entry.worker) { ([string]$entry.worker).ToUpper() } else { "" }
+        $sameWorkerDifferentTask = ($keepWorkerUpper -and $entryWorkerUpper -eq $keepWorkerUpper -and $name -ne $keepKey)
+
+        $drop = (-not $alive) -or (-not $paneAlive) -or $sameWorkerDifferentTask
+        if ($drop) {
+            if ($alive -and $pid -gt 0) {
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                $killed++
+            }
+            $removed++
+            if ($Verbose) {
+                Write-Host ('[INFO] Removed stale approval-router: ' + $name + ' pid=' + $pidStr + ' pane=' + $paneId) -ForegroundColor DarkGray
+            }
+            continue
+        }
+
+        $nextRouters[$name] = $entry
+        $kept++
+    }
+
+    if ($removed -gt 0) {
+        $store.routers = $nextRouters
+        Write-ApprovalRouterPidStore $store
+    }
+
+    return @{
+        removed = $removed
+        killed = $killed
+        kept = $kept
+    }
+}
+
 function Ensure-ApprovalRouter([string]$TaskId, [string]$WorkerName, [string]$WorkerPaneId, [string]$TeamLeadPaneId) {
     $routerScript = Join-Path $scriptDir "approval-router.ps1"
     if (-not (Test-Path $routerScript)) {
@@ -747,6 +832,24 @@ function Ensure-WorkerRunning($wName, $wConfig, $tlPaneId, [switch]$ForceRestart
     if ($ForceRestart) {
         if ($existingPane) {
             Write-Host ('[INFO] Worker ' + $wName + ' force restart for fresh context (old pane ' + $existingPane + ')') -ForegroundColor Yellow
+            try {
+                wezterm cli kill-pane --pane-id $existingPane 2>$null | Out-Null
+                Start-Sleep -Milliseconds 300
+                $paneStillAlive = $false
+                try {
+                    $panes = Get-WeztermPanes
+                    if ($panes) {
+                        $paneStillAlive = @($panes | Where-Object { ([string]$_.pane_id) -eq ([string]$existingPane) }).Count -gt 0
+                    }
+                } catch {}
+                if ($paneStillAlive) {
+                    Write-Host ('[WARN] Failed to close old pane ' + $existingPane + ' for ' + $wName + ', continue with unregister/start.') -ForegroundColor Yellow
+                } else {
+                    Write-Host ('[OK] Closed old pane ' + $existingPane + ' for ' + $wName) -ForegroundColor Green
+                }
+            } catch {
+                Write-Host ('[WARN] kill-pane error for old pane ' + $existingPane + ' (' + $_.Exception.Message + ')') -ForegroundColor Yellow
+            }
         } else {
             Write-Host ('[INFO] Worker ' + $wName + ' fresh context requested, starting new session...') -ForegroundColor Yellow
         }
@@ -1012,6 +1115,10 @@ function Invoke-Dispatch {
     $devConfig = @{ workdir = $wConfig.workdir; engine = $devEngine }
     $paneId = Ensure-WorkerRunning $devWorker $devConfig $tlPaneId
 
+    # 先确保监控已启动，避免 dispatch 阶段出现审批提示但无人接管
+    Ensure-RouteMonitor $tlPaneId
+    Ensure-ApprovalRouter -TaskId $TaskId -WorkerName $devWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId
+
     # Dispatch task (BEFORE updating lock)
     $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
     & $dispatchScript -WorkerPaneId $paneId -WorkerName $devWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $devEngine -TeamLeadPaneId $tlPaneId
@@ -1113,6 +1220,10 @@ function Invoke-DispatchQA {
         Write-Host '[INFO] QA dispatch uses fresh worker context (set TEAMLEAD_QA_REUSE_CONTEXT=1 to reuse existing QA session).' -ForegroundColor Cyan
     }
     $paneId = Ensure-WorkerRunning $qaWorker $qaConfig $tlPaneId -ForceRestart:$forceFreshQaContext
+
+    # 先确保监控已启动，避免 dispatch 阶段出现审批提示但无人接管
+    Ensure-RouteMonitor $tlPaneId
+    Ensure-ApprovalRouter -TaskId $TaskId -WorkerName $qaWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId
 
     # Dispatch FIRST, then update lock
     $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
@@ -1427,6 +1538,7 @@ function Invoke-BaselineClean {
         routes_marked_processed = 0
         lock_keys_removed = 0
         blocked_to_assigned = 0
+        router_entries_removed = 0
     }
 
     # 1) Worker registry reconcile/health-check
@@ -1435,6 +1547,8 @@ function Invoke-BaselineClean {
     if (Test-Path $regScript) {
         try { & $regScript -Action health-check *> $null } catch {}
     }
+    $routerCleanup = Cleanup-StaleApprovalRouters
+    $summary.router_entries_removed = $routerCleanup.removed
 
     # 2) Resolve all pending approval requests (deny)
     $approvals = Read-ApprovalRequests
@@ -1444,15 +1558,16 @@ function Invoke-BaselineClean {
     foreach ($req in $pendingApprovals) {
         $sent = $false
         $targetPane = if ($req.worker_pane_id) { [string]$req.worker_pane_id } else { "" }
+        $promptType = if ($req.prompt_type) { [string]$req.prompt_type } else { "command_approval" }
         if ($targetPane) {
-            try { $sent = Send-ApprovalDecisionToPane -paneId $targetPane -decision 'deny' } catch { $sent = $false }
+            try { $sent = Send-ApprovalDecisionToPane -paneId $targetPane -decision 'deny' -promptType $promptType } catch { $sent = $false }
         }
         if (-not $sent) {
             $reqWorkerName = if ($req.worker) { [string]$req.worker } elseif ($req.worker_name) { [string]$req.worker_name } else { "" }
             $resolvedPane = Resolve-WorkerPaneByName -workerName $reqWorkerName
             if ($resolvedPane) {
                 try {
-                    $sent = Send-ApprovalDecisionToPane -paneId $resolvedPane -decision 'deny'
+                    $sent = Send-ApprovalDecisionToPane -paneId $resolvedPane -decision 'deny' -promptType $promptType
                     if ($sent) { $req.worker_pane_id = $resolvedPane }
                 } catch {
                     $sent = $false
@@ -1563,6 +1678,7 @@ function Invoke-BaselineClean {
     Write-Host ('  routes_marked_processed: ' + $summary.routes_marked_processed) -ForegroundColor Gray
     Write-Host ('  lock_keys_removed: ' + $summary.lock_keys_removed) -ForegroundColor Gray
     Write-Host ('  blocked_to_assigned: ' + $summary.blocked_to_assigned) -ForegroundColor Gray
+    Write-Host ('  router_entries_removed: ' + $summary.router_entries_removed) -ForegroundColor Gray
 }
 
 function Invoke-PreDispatchBaselineClean {
@@ -1609,26 +1725,12 @@ function Invoke-Recover {
                 }
             }
 
-            if (Test-Path $approvalRouterPidFile) {
-                try {
-                    $store = Read-ApprovalRouterPidStore
-                    $routers = @{}
-                    $routerMap = Convert-ToRouterEntryMap $store.routers
-                    foreach ($name in $routerMap.Keys) {
-                        $entry = $routerMap[$name]
-                        $pid = 0
-                        $pidStr = if ($entry.pid) { [string]$entry.pid } else { "" }
-                        if ([int]::TryParse($pidStr, [ref]$pid) -and $pid -gt 0) {
-                            $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-                            if ($proc) {
-                                $routers[$name] = $entry
-                            }
-                        }
-                    }
-                    $store.routers = $routers
-                    Write-ApprovalRouterPidStore $store
-                } catch {}
-            }
+            try {
+                $clean = Cleanup-StaleApprovalRouters -Verbose
+                if ($clean.removed -gt 0) {
+                    Write-Host ('[OK] cleaned stale approval-router entries: removed=' + $clean.removed + ', killed=' + $clean.killed) -ForegroundColor Green
+                }
+            } catch {}
             Write-Host '[OK] reap-stale done' -ForegroundColor Green
         }
 
@@ -1737,13 +1839,14 @@ function Invoke-ApprovalDecision($decision) {
     }
 
     $targetPane = [string]$req.worker_pane_id
-    $sent = Send-ApprovalDecisionToPane -paneId $targetPane -decision $decision
+    $promptType = if ($req.prompt_type) { [string]$req.prompt_type } else { "command_approval" }
+    $sent = Send-ApprovalDecisionToPane -paneId $targetPane -decision $decision -promptType $promptType
     if (-not $sent) {
         $reqWorkerName = if ($req.worker) { [string]$req.worker } elseif ($req.worker_name) { [string]$req.worker_name } else { "" }
         $resolvedPane = Resolve-WorkerPaneByName -workerName $reqWorkerName
         if ($resolvedPane -and $resolvedPane -ne $targetPane) {
             Write-Host ('[WARN] Pane drift detected. Retry approval decision via registry pane ' + $resolvedPane) -ForegroundColor Yellow
-            $sent = Send-ApprovalDecisionToPane -paneId $resolvedPane -decision $decision
+            $sent = Send-ApprovalDecisionToPane -paneId $resolvedPane -decision $decision -promptType $promptType
             if ($sent) {
                 $req.worker_pane_id = $resolvedPane
             }
@@ -1916,53 +2019,97 @@ function Invoke-Archive {
         exit 1
     }
 
+    $jobId = "ARCHIVE-" + $TaskId
+    $docTaskId = ""
+    $commitTaskId = ""
+    $upsertArchiveJob = {
+        param(
+            [string]$status,
+            [string]$docId,
+            [string]$commitId,
+            [string]$docStatus,
+            [string]$commitStatus,
+            [string]$note,
+            [string]$blockedReason
+        )
+        try {
+            $jobsLocal = Read-ArchiveJobs
+            $jobsHashLocal = @{}
+            if ($jobsLocal.jobs) {
+                foreach ($p in $jobsLocal.jobs.PSObject.Properties) { $jobsHashLocal[$p.Name] = $p.Value }
+            }
+            $entry = if ($jobsHashLocal.ContainsKey($jobId)) { $jobsHashLocal[$jobId] } else { @{} }
+            $entry.job_id = $jobId
+            $entry.task_id = $TaskId
+            $entry.domain = $domain
+            $entry.archived_file = $archivedFile
+            $entry.moved_to_completed = $movedToCompletedNow
+            $entry.status = $status
+            $entry.doc_task_id = if ($docId) { $docId } elseif ($entry.doc_task_id) { $entry.doc_task_id } else { "" }
+            $entry.doc_status = if ($docStatus) { $docStatus } elseif ($entry.doc_status) { $entry.doc_status } else { "pending" }
+            $entry.commit_task_id = if ($commitId) { $commitId } elseif ($entry.commit_task_id) { $entry.commit_task_id } else { "" }
+            $entry.commit_status = if ($commitStatus) { $commitStatus } elseif ($entry.commit_status) { $entry.commit_status } else { "pending" }
+            $entry.push_required = (-not $NoPush.IsPresent)
+            if (-not $entry.started_at) { $entry.started_at = Get-Date -Format "o" }
+            $entry.updated_at = Get-Date -Format "o"
+            $entry.updated_by = "teamlead-control/archive"
+            if ($note) { $entry.note = $note }
+            if ($blockedReason) { $entry.blocked_reason = $blockedReason }
+            $jobsHashLocal[$jobId] = $entry
+            $jobsLocal.jobs = $jobsHashLocal
+            Write-ArchiveJobs $jobsLocal
+        } catch {}
+    }
+    $markArchiveBlocked = {
+        param([string]$lockNote, [string]$jobReason)
+        $locksLocal = Read-TaskLocks
+        if ($locksLocal.locks.PSObject.Properties.Name -contains $TaskId) {
+            $locksLocal.locks.$TaskId.state = "blocked"
+            $locksLocal.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+            $locksLocal.locks.$TaskId.updated_by = "teamlead-control/archive"
+            Set-NoteField -obj $locksLocal.locks.$TaskId -value $lockNote
+            Write-TaskLocks $locksLocal
+        }
+        & $upsertArchiveJob -status "blocked" -docId $docTaskId -commitId $commitTaskId -docStatus "blocked" -commitStatus "blocked" -note $lockNote -blockedReason $jobReason
+    }
+
+    # 先落一条 archive job，避免中途异常导致锁在 archiving 但无 job 可追踪
+    & $upsertArchiveJob -status "starting" -docId "" -commitId "" -docStatus "pending" -commitStatus "pending" -note "Archive initializing" -blockedReason ""
+
     # 先进入 archiving 中间态，等待 doc-updater + repo-committer 回传收口
     $locks.locks.$TaskId.state = "archiving"
     $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
     $locks.locks.$TaskId.updated_by = "teamlead-control/archive"
     Set-NoteField -obj $locks.locks.$TaskId -value "Archive started: waiting doc-updater + repo-committer"
     Write-TaskLocks $locks
+    & $upsertArchiveJob -status "running" -docId "" -commitId "" -docStatus "pending" -commitStatus "pending" -note "Archive started: waiting doc-updater + repo-committer" -blockedReason ""
 
     # Trigger doc-updater（归档一致性）
-    $docRaw = & $docTriggerScript -TaskId $TaskId -TeamLeadPaneId $tlPaneId -Reason archive_move -Force -EmitJson
-    $docResp = Convert-CommandOutputToJson -output $docRaw
+    try {
+        $docRaw = & $docTriggerScript -TaskId $TaskId -TeamLeadPaneId $tlPaneId -Reason archive_move -Force -EmitJson
+        $docResp = Convert-CommandOutputToJson -output $docRaw
+    } catch {
+        Write-Host ('[FAIL] trigger-doc-updater exception: ' + $_.Exception.Message) -ForegroundColor Red
+        & $markArchiveBlocked -lockNote "Archive blocked: doc-updater exception" -jobReason ("doc_updater_exception: " + $_.Exception.Message)
+        exit 1
+    }
     if (-not $docResp) {
         Write-Host '[FAIL] trigger-doc-updater did not return machine-readable result.' -ForegroundColor Red
-        $locks = Read-TaskLocks
-        if ($locks.locks.PSObject.Properties.Name -contains $TaskId) {
-            $locks.locks.$TaskId.state = "blocked"
-            $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $locks.locks.$TaskId.updated_by = "teamlead-control/archive"
-            Set-NoteField -obj $locks.locks.$TaskId -value "Archive blocked: doc-updater response invalid"
-            Write-TaskLocks $locks
-        }
+        & $markArchiveBlocked -lockNote "Archive blocked: doc-updater response invalid" -jobReason "doc_updater_response_invalid"
         exit 1
     }
     if ($docResp.status -notin @("dispatched", "already_dispatched")) {
         Write-Host ('[FAIL] doc-updater dispatch failed: status=' + [string]$docResp.status + ' message=' + [string]$docResp.message) -ForegroundColor Red
-        $locks = Read-TaskLocks
-        if ($locks.locks.PSObject.Properties.Name -contains $TaskId) {
-            $locks.locks.$TaskId.state = "blocked"
-            $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $locks.locks.$TaskId.updated_by = "teamlead-control/archive"
-            Set-NoteField -obj $locks.locks.$TaskId -value "Archive blocked: doc-updater dispatch failed"
-            Write-TaskLocks $locks
-        }
+        & $markArchiveBlocked -lockNote "Archive blocked: doc-updater dispatch failed" -jobReason ("doc_updater_dispatch_failed: " + [string]$docResp.status)
         exit 1
     }
     $docTaskId = [string]$docResp.docTaskId
     if (-not $docTaskId) {
         Write-Host '[FAIL] doc-updater response missing docTaskId.' -ForegroundColor Red
-        $locks = Read-TaskLocks
-        if ($locks.locks.PSObject.Properties.Name -contains $TaskId) {
-            $locks.locks.$TaskId.state = "blocked"
-            $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $locks.locks.$TaskId.updated_by = "teamlead-control/archive"
-            Set-NoteField -obj $locks.locks.$TaskId -value "Archive blocked: doc-updater missing docTaskId"
-            Write-TaskLocks $locks
-        }
+        & $markArchiveBlocked -lockNote "Archive blocked: doc-updater missing docTaskId" -jobReason "doc_updater_missing_doc_task_id"
         exit 1
     }
+    & $upsertArchiveJob -status "running" -docId $docTaskId -commitId "" -docStatus "pending" -commitStatus "pending" -note "Doc updater dispatched" -blockedReason ""
 
     # Trigger repo-committer（默认 push）
     $commitArgs = @("-TaskId", $TaskId, "-TeamLeadPaneId", $tlPaneId, "-Force", "-EmitJson")
@@ -1972,71 +2119,33 @@ function Invoke-Archive {
     if ($CommitMessage) {
         $commitArgs += @("-CommitMessage", $CommitMessage)
     }
-    $commitRaw = & $commitTriggerScript @commitArgs
-    $commitResp = Convert-CommandOutputToJson -output $commitRaw
+    try {
+        $commitRaw = & $commitTriggerScript @commitArgs
+        $commitResp = Convert-CommandOutputToJson -output $commitRaw
+    } catch {
+        Write-Host ('[FAIL] trigger-repo-committer exception: ' + $_.Exception.Message) -ForegroundColor Red
+        & $markArchiveBlocked -lockNote "Archive blocked: repo-committer exception" -jobReason ("repo_committer_exception: " + $_.Exception.Message)
+        exit 1
+    }
     if (-not $commitResp) {
         Write-Host '[FAIL] trigger-repo-committer did not return machine-readable result.' -ForegroundColor Red
-        $locks = Read-TaskLocks
-        if ($locks.locks.PSObject.Properties.Name -contains $TaskId) {
-            $locks.locks.$TaskId.state = "blocked"
-            $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $locks.locks.$TaskId.updated_by = "teamlead-control/archive"
-            Set-NoteField -obj $locks.locks.$TaskId -value "Archive blocked: repo-committer response invalid"
-            Write-TaskLocks $locks
-        }
+        & $markArchiveBlocked -lockNote "Archive blocked: repo-committer response invalid" -jobReason "repo_committer_response_invalid"
         exit 1
     }
     if ($commitResp.status -notin @("dispatched", "already_dispatched")) {
         Write-Host ('[FAIL] repo-committer dispatch failed: status=' + [string]$commitResp.status + ' message=' + [string]$commitResp.message) -ForegroundColor Red
-        $locks = Read-TaskLocks
-        if ($locks.locks.PSObject.Properties.Name -contains $TaskId) {
-            $locks.locks.$TaskId.state = "blocked"
-            $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $locks.locks.$TaskId.updated_by = "teamlead-control/archive"
-            Set-NoteField -obj $locks.locks.$TaskId -value "Archive blocked: repo-committer dispatch failed"
-            Write-TaskLocks $locks
-        }
+        & $markArchiveBlocked -lockNote "Archive blocked: repo-committer dispatch failed" -jobReason ("repo_committer_dispatch_failed: " + [string]$commitResp.status)
         exit 1
     }
     $commitTaskId = [string]$commitResp.commitTaskId
     if (-not $commitTaskId) {
         Write-Host '[FAIL] repo-committer response missing commitTaskId.' -ForegroundColor Red
-        $locks = Read-TaskLocks
-        if ($locks.locks.PSObject.Properties.Name -contains $TaskId) {
-            $locks.locks.$TaskId.state = "blocked"
-            $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $locks.locks.$TaskId.updated_by = "teamlead-control/archive"
-            Set-NoteField -obj $locks.locks.$TaskId -value "Archive blocked: repo-committer missing commitTaskId"
-            Write-TaskLocks $locks
-        }
+        & $markArchiveBlocked -lockNote "Archive blocked: repo-committer missing commitTaskId" -jobReason "repo_committer_missing_commit_task_id"
         exit 1
     }
 
     # 记录 archive job，交给 route-monitor 根据回调推进到 completed/blocked
-    $jobs = Read-ArchiveJobs
-    $jobsHash = @{}
-    if ($jobs.jobs) {
-        foreach ($p in $jobs.jobs.PSObject.Properties) { $jobsHash[$p.Name] = $p.Value }
-    }
-    $jobId = "ARCHIVE-" + $TaskId
-    $jobsHash[$jobId] = @{
-        job_id = $jobId
-        task_id = $TaskId
-        domain = $domain
-        archived_file = $archivedFile
-        moved_to_completed = $movedToCompletedNow
-        status = "running"
-        doc_task_id = $docTaskId
-        doc_status = "pending"
-        commit_task_id = $commitTaskId
-        commit_status = "pending"
-        push_required = (-not $NoPush.IsPresent)
-        started_at = Get-Date -Format "o"
-        updated_at = Get-Date -Format "o"
-        updated_by = "teamlead-control/archive"
-    }
-    $jobs.jobs = $jobsHash
-    Write-ArchiveJobs $jobs
+    & $upsertArchiveJob -status "running" -docId $docTaskId -commitId $commitTaskId -docStatus "pending" -commitStatus "pending" -note "Archive running: waiting doc-updater + repo-committer success" -blockedReason ""
 
     Write-Host ('[OK] Archive flow started: ' + $TaskId) -ForegroundColor Green
     if ($archivedFile) {

@@ -2,6 +2,14 @@
 
 ## [未发布]
 
+### 2026-03-02
+
+#### 更新 (Changed)
+- **订单管理 / 咨询订单** - 同步用户分页接口的已验证行为（BACKEND-012）
+  - `GET /orders/user` 与 `GET /offline-orders/user` 增加分页参数行为说明
+  - 按 `05-verification/BACKEND-012/contract-check.json` 记录：非法 `pageNum/pageSize` 当前仍返回 `200`（尚未返回 `400`）
+- **咨询订单** - 修复 `GET /offline-orders/user` 段落的标题与查询参数说明残缺
+
 ### 2026-02-25
 
 #### 更新 (Changed)

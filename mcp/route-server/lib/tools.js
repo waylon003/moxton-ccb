@@ -5,6 +5,11 @@ function routeId(from, task, status, body) {
   return createHash('sha256').update(`${from}|${task}|${status}|${body}`).digest('hex').slice(0, 16);
 }
 
+function isAuxiliaryTask(task) {
+  if (!task) return false;
+  return /^(DOC-UPDATE-|COMMIT-|COMMIT-PUSH-|ARCHIVE-)/i.test(task);
+}
+
 export function registerTools(server, z, store) {
   server.registerTool('report_route', {
     description: 'Report task completion status to Team Lead. Workers MUST call this after finishing a task.',
@@ -42,7 +47,7 @@ export function registerTools(server, z, store) {
           locks.locks[task].updated_by = 'mcp-route-server/report_route';
           locks.locks[task].routeUpdate = { worker: from, timestamp: new Date().toISOString(), bodyPreview: (body || '').slice(0, 200) };
           await store.writeLocks(locks);
-        } else {
+        } else if (!isAuxiliaryTask(task)) {
           lockWarning = `Task '${task}' not found in TASK-LOCKS.json. Route saved to inbox but lock not updated.`;
         }
       });

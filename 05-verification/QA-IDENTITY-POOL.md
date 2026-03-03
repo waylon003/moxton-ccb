@@ -39,3 +39,16 @@
 2. If login fails for one account, try another same-role candidate before marking FAIL.
 3. If all same-role candidates fail login, mark as `data/env blocker` (not immediate feature regression).
 4. Record the exact identity used in QA report evidence.
+
+## 固定测试凭据（优先使用）
+
+为避免 QA 在运行期反复走 register/login 试探，后端与前端 QA 优先使用以下固定账号：
+
+- 管理员：`admin` / `admin123`
+- 普通用户：`waylon` / `qwe123456`
+
+使用规则：
+
+1. 先尝试固定账号登录获取 token，再执行接口验证。
+2. 固定账号登录失败时，再回退到候选账号池轮询（同角色至少再试 1 个）。
+3. 仅当“固定账号 + 候选账号”均失败时，回传 `blocked`（`blocker_type=env|data`），不要无限重试。
