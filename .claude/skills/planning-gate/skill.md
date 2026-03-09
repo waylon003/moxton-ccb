@@ -104,13 +104,11 @@ triggers:
 - `01-tasks/active/shop-frontend/`
 - `01-tasks/active/admin-frontend/`
 
-任务文件落地必须走“原子流程”（禁止手写临时文件）：
-1. 先 preview，不落盘：
-   - `python scripts/assign_task.py --split-request "<需求文本>" --split-title "<标题>" --split-roles <ROLE1,ROLE2> --split-preview`
-2. 向用户确认后再一次性正式落盘：
-   - `python scripts/assign_task.py --split-request "<需求文本>" --split-title "<标题>" --split-roles <ROLE1,ROLE2>`
-3. 正式落盘后，仅允许“就地编辑内容”；禁止先创建临时任务文件再删除/重命名。
-4. 若命名或内容不符合预期，优先重新执行 split 命令生成正确文件；禁止在 `01-tasks/active/*` 批量 `rm/del` 清理。
+任务文件落地流程（Team Lead）：
+1. 基于对应模板创建任务文件到 `01-tasks/active/<domain>/<TASK-ID>-<slug>.md`。
+2. 向用户确认任务拆分与命名后，再进行就地编辑完善内容。
+3. 禁止使用 `assign_task.py` 写入任务（`--intake/--split-request/--lock-task`）；`assign_task.py` 仅用于只读诊断。
+4. 命名或内容不符合预期时，直接就地修正文件；禁止在 `01-tasks/active/*` 批量 `rm/del` 清理。
 
 ### 步骤 7：任务质量门槛（写文档时强制）
 

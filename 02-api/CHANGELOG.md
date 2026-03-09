@@ -2,6 +2,24 @@
 
 ## [未发布]
 
+### 2026-03-03
+
+#### 更新 (Changed)
+- **订单管理** - 补齐 `GET /orders/guest/query` 响应示例中的历史遗漏字段
+  - `items[].product` 示例补充 `images: string[]`，与 `OrderResponseDTO` 一致
+  - 依据：`01-tasks/completed/backend/BACKEND-013-order-images-format.md`、`01-tasks/completed/shop-frontend/SHOP-FE-008.md`
+- **前端归档一致性复核** - `SHOP-FE-009` 仅涉及页面布局调整，无 API 契约变更
+  - 已复核 `orders` 与 `offline-orders` 相关接口：字段、状态码、错误示例无需改动
+  - 依据：`01-tasks/completed/shop-frontend/SHOP-FE-009.md`
+- **认证** - 前端归档一致性复核（`SHOP-FE-010`）
+  - 已复核 `POST /auth/login`：请求/响应字段、状态码、错误结构无新增变更
+  - 在 `auth.md` 补充说明：`401` 可能返回后端英文 `message`（如 `Invalid credentials`），前端需做本地化提示映射
+  - 依据：`01-tasks/completed/shop-frontend/SHOP-FE-010-mobile-nav-refactor.md`、`mcp/route-server/data/route-inbox.json`（`SHOP-FE-010` QA `PASS` 回传）
+- **收货地址（前端地址管理页）** - 前端归档一致性复核（`SHOP-FE-011`）
+  - 已复核地址相关调用：未新增 API 端点，现有地址契约字段与状态码无变更
+  - 在 `addresses.md` 补充说明：地址相关失败路径（如 `500`）前端应展示本地化产品文案，避免直接透传后端原始错误信息
+  - 依据：`01-tasks/completed/shop-frontend/SHOP-FE-011-mobile-address-fix.md`、`mcp/route-server/data/route-inbox.json`（`SHOP-FE-011` QA `PASS` 回传）
+
 ### 2026-03-02
 
 #### 更新 (Changed)

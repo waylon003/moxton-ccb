@@ -17,9 +17,14 @@ report_route(
   from: "<agent-name>",
   task: "<TASK-ID>",
   status: "in_progress" | "blocked" | "success" | "fail",
-  body: "<结构化消息体>"
+  body: "<结构化消息体>",
+  run_id: "<派遣消息中的 route_run_id>"
 )
 ```
+
+约束：
+- 若派遣消息中出现 `route_run_id`，Worker 每次 `report_route` 都必须原样带回同一个 `run_id`。
+- 不得自行生成新的 `run_id`，也不得省略已提供的 `run_id`。
 
 `body` 推荐使用 `key=value;` 结构，便于 Team Lead 自动解析。例如：
 

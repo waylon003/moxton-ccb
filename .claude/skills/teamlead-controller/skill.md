@@ -31,7 +31,7 @@ triggers:
 | 查看状态 | status | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status` |
 | 清理僵尸 Worker | recover | `... -Action recover -RecoverAction reap-stale` |
 | 重启 Worker | recover | `... -Action recover -RecoverAction restart-worker -WorkerName <name>` |
-| 重置任务状态 | recover | `... -Action recover -RecoverAction reset-task -TaskId <ID> -TargetState assigned` |
+| 重置任务状态 | recover | `... -Action recover -RecoverAction reset-task -TaskId <ID> -TargetState <assigned\|waiting_qa>` |
 | 补建任务锁 | add-lock | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId <ID>` |
 
 ## 意图识别
@@ -69,6 +69,15 @@ triggers:
    - 同一 pane 的 `get-text` 连续 3 次无变化必须停止
    - 同一 task 的 `check_routes` 连续 3 次无 pending 必须停止
    - 停止后转 `status -> recover`，不得继续同样轮询
+
+## 常见状态修复（强推荐）
+
+- 开发完成需转 QA：  
+  `... -Action recover -RecoverAction reset-task -TaskId <ID> -TargetState waiting_qa`  
+  然后：`... -Action dispatch-qa -TaskId <ID>`
+- QA 失败需回到开发：  
+  `... -Action recover -RecoverAction reset-task -TaskId <ID> -TargetState assigned`  
+  然后：`... -Action dispatch -TaskId <ID>`
 
 ## 结构化输出模板
 

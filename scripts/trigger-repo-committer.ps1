@@ -164,7 +164,7 @@ if (-not $paneId) {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$commitTaskId = (if ($Push.IsPresent) { "SHIP-" } else { "COMMIT-" }) + $TaskId + "-" + $timestamp
+$commitTaskId = ($(if ($Push.IsPresent) { "SHIP-" } else { "COMMIT-" })) + $TaskId + "-" + $timestamp
 $resolvedCommitMessage = if ($CommitMessage) { $CommitMessage } else { "chore(" + $TaskId.ToLower() + "): apply qa-verified changes" }
 
 $taskLines = @(
@@ -188,7 +188,7 @@ $taskLines = @(
     "",
     "## Constraints",
     "- No sub-agent usage.",
-    (if ($Push.IsPresent) { "- Push is REQUIRED for this task." } else { "- Do not run git push unless Team Lead explicitly asks." }),
+    ($(if ($Push.IsPresent) { "- Push is REQUIRED for this task." } else { "- Do not run git push unless Team Lead explicitly asks." })),
     "- No destructive git commands (reset/clean/force checkout)."
 )
 $taskContent = $taskLines -join "`n"

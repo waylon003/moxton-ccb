@@ -1,6 +1,6 @@
 ﻿# 任务状态总览
 
-**更新时间**: 2026-03-03
+**更新时间**: 2026-03-09
 **活跃任务**: 1 个
 
 ## 项目映射
@@ -15,10 +15,10 @@
 
 | 角色 | backlog | active | completed | 总计 |
 |------|---------|--------|-----------|------|
-| SHOP-FE | 0 | 0 | 6 | 6 |
+| SHOP-FE | 0 | 1 | 8 | 9 |
 | ADMIN-FE | 0 | 0 | 10 | 10 |
-| BACKEND | 0 | 1 | 17 | 18 |
-| **TOTAL** | **0** | **1** | **33** | **34** |
+| BACKEND | 0 | 0 | 18 | 18 |
+| **TOTAL** | **0** | **1** | **36** | **37** |
 
 ## 目录结构
 
@@ -41,11 +41,11 @@
 
 ## 当前活跃任务
 
-### 后端 (BACKEND)
+### 独立站前端 (SHOP-FE)
 
 | 任务ID | 标题 |
 |--------|------|
-| [BACKEND-013](./active/backend/BACKEND-013-order-images-format.md) | order images format |
+| [SHOP-FE-012](./active/shop-frontend/SHOP-FE-012-order-checkout-fix.md) | order checkout fix |
 
 
 ## backlog 任务
@@ -64,6 +64,8 @@
 | [SHOP-FE-004](./completed/shop-frontend/SHOP-FE-004-account-center-sidebar-fix.md) | account center sidebar fix |
 | [SHOP-FE-005](./completed/shop-frontend/SHOP-FE-005-backend-fix-1-fix-order-get-orders-user-500-2.md) | backend fix 1 fix order get orders user 500 2 |
 | [SHOP-FE-006](./completed/shop-frontend/SHOP-FE-006-layout.md) | layout |
+| [SHOP-FE-010](./completed/shop-frontend/SHOP-FE-010-mobile-nav-refactor.md) | mobile nav refactor |
+| [SHOP-FE-011](./completed/shop-frontend/SHOP-FE-011-mobile-address-fix.md) | mobile address fix |
 
 ### 管理后台前端 (ADMIN-FE)
 
@@ -98,6 +100,7 @@
 | [BACKEND-010](./completed/backend/BACKEND-010-role-system-operator.md) | role system operator |
 | [BACKEND-011](./completed/backend/BACKEND-011-backend-fix-1-fix-order-get-orders-user-500-2.md) | backend fix 1 fix order get orders user 500 2 |
 | [BACKEND-012](./completed/backend/BACKEND-012-pagination.md) | pagination |
+| [BACKEND-013](./completed/backend/BACKEND-013-order-images-format.md) | order images format |
 | [BUG-001](./completed/backend/BUG-001-order-api-500-error.md) | order api 500 error |
 | [BUG-002](./completed/backend/BUG-002-order-items-field-name.md) | order items field name |
 | [BUG-004](./completed/backend/BUG-004-stripe-payment-intent-params.md) | stripe payment intent params |

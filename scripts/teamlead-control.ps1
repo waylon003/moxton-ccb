@@ -6,23 +6,26 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action bootstrap
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action dispatch -TaskId BACKEND-009
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId BACKEND-009
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action dispatch -TaskId BACKEND-009 -DispatchEngine codex
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action status
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action requeue -TaskId BACKEND-009 -TargetState waiting_qa -RequeueReason "review_reject"
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction reap-stale
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction baseline-clean
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction full-clean
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action archive -TaskId SHOP-FE-004
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action approve-request -RequestId APR-20260228120000-0001
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action deny-request -RequestId APR-20260228120000-0001
 
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet("bootstrap", "dispatch", "dispatch-qa", "status", "recover", "add-lock", "archive", "approve-request", "deny-request")]
+    [ValidateSet("bootstrap", "dispatch", "dispatch-qa", "status", "requeue", "recover", "add-lock", "archive", "approve-request", "deny-request")]
     [string]$Action,
 
     [Parameter(Mandatory=$false)]
     [string]$TaskId,
 
     [Parameter(Mandatory=$false)]
-    [ValidateSet("reap-stale", "restart-worker", "reset-task", "normalize-locks", "baseline-clean")]
+    [ValidateSet("reap-stale", "restart-worker", "reset-task", "normalize-locks", "baseline-clean", "full-clean")]
     [string]$RecoverAction,
 
     [Parameter(Mandatory=$false)]
@@ -35,13 +38,20 @@ param(
     [string]$RequestId,
 
     [Parameter(Mandatory=$false)]
+    [string]$RequeueReason,
+
+    [Parameter(Mandatory=$false)]
     [switch]$NoPush,
 
     [Parameter(Mandatory=$false)]
     [string]$CommitMessage,
 
     [Parameter(Mandatory=$false)]
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("codex", "gemini")]
+    [string]$DispatchEngine
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,6 +66,9 @@ $approvalRouterPidFile = Join-Path $env:TEMP "moxton-approval-router-pids.json"
 $approvalRequestsPath = Join-Path $rootDir "mcp\route-server\data\approval-requests.json"
 $docSyncStatePath = Join-Path $rootDir "config\api-doc-sync-state.json"
 $archiveJobsPath = Join-Path $rootDir "config\archive-jobs.json"
+$taskAttemptHistoryPath = Join-Path $rootDir "config\task-attempt-history.json"
+$dispatchMutexName = "Global\MoxtonTeamLeadDispatchMutex"
+$taskLocksMutexName = "Global\MoxtonTaskLocksFileMutex"
 
 # ============================================================
 # Internal Functions
@@ -134,16 +147,315 @@ function Assert-NoInvalidTaskLockEntries($locks) {
 
 function Read-TaskLocks {
     if (-not (Test-Path $taskLocksPath)) {
-        return @{ version = "1.0"; updated_at = (Get-Date -Format "o"); locks = @{} }
+        return @{ version = "1.0"; rev = 0; updated_at = (Get-Date -Format "o"); locks = @{} }
     }
     $raw = Get-Content $taskLocksPath -Raw -Encoding UTF8
-    return $raw | ConvertFrom-Json
+    $parsed = $raw | ConvertFrom-Json
+    if (-not $parsed.PSObject.Properties['rev']) {
+        $parsed | Add-Member -NotePropertyName rev -NotePropertyValue 0 -Force
+    }
+    if (-not $parsed.PSObject.Properties['version']) {
+        $parsed | Add-Member -NotePropertyName version -NotePropertyValue "1.0" -Force
+    }
+    return $parsed
 }
 
 function Write-TaskLocks($data) {
+    if (-not $data.version) { $data.version = "1.0" }
+    if (-not $data.PSObject.Properties['rev']) {
+        $data | Add-Member -NotePropertyName rev -NotePropertyValue 0 -Force
+    }
+    $data.rev = [int]$data.rev + 1
     $data.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
     $json = ($data | ConvertTo-Json -Depth 10)
     Write-Utf8NoBomFile -path $taskLocksPath -content $json
+}
+
+function Invoke-WithTaskLocksMutex([scriptblock]$Script, [int]$TimeoutMs = 10000, [int]$RetryMs = 120) {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $mutex = $null
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, $taskLocksMutexName)
+        $acquired = $false
+        while (-not $acquired) {
+            try {
+                $acquired = $mutex.WaitOne($RetryMs)
+            } catch [System.Threading.AbandonedMutexException] {
+                $acquired = $true
+            }
+            if ($acquired) { break }
+            if ($sw.ElapsedMilliseconds -ge $TimeoutMs) {
+                throw "Timeout acquiring TASK-LOCKS mutex."
+            }
+        }
+        return & $Script
+    } finally {
+        if ($mutex) {
+            try { $mutex.ReleaseMutex() | Out-Null } catch {}
+            try { $mutex.Dispose() } catch {}
+        }
+    }
+}
+
+function Update-TaskLocksData([scriptblock]$Mutator) {
+    return Invoke-WithTaskLocksMutex {
+        $latest = Read-TaskLocks
+        if (-not $latest.locks) {
+            $latest | Add-Member -NotePropertyName locks -NotePropertyValue @{} -Force
+        }
+        $result = & $Mutator $latest
+        Write-TaskLocks $latest
+        return $result
+    }
+}
+
+function New-TaskRunId([string]$TaskId, [string]$Phase) {
+    return ("RUN-" + (Get-Date -Format "yyyyMMddHHmmssfff") + "-" + $TaskId + "-" + $Phase + "-" + (Get-Random -Minimum 1000 -Maximum 9999))
+}
+
+function Read-TaskAttemptHistory {
+    $default = @{ version = "1.0"; updated_at = (Get-Date -Format "o"); attempts = @() }
+    if (-not (Test-Path $taskAttemptHistoryPath)) {
+        return $default
+    }
+    try {
+        $raw = Get-Content $taskAttemptHistoryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $raw.attempts) {
+            $raw | Add-Member -NotePropertyName attempts -NotePropertyValue @() -Force
+        }
+        if (-not $raw.version) {
+            $raw | Add-Member -NotePropertyName version -NotePropertyValue "1.0" -Force
+        }
+        return $raw
+    } catch {
+        return $default
+    }
+}
+
+function Write-TaskAttemptHistory($data) {
+    if (-not $data.version) {
+        $data.version = "1.0"
+    }
+    if (-not $data.attempts) {
+        $data.attempts = @()
+    }
+    $data.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+    $json = ($data | ConvertTo-Json -Depth 12)
+    Write-Utf8NoBomFile -path $taskAttemptHistoryPath -content $json
+}
+
+function Get-TaskAttemptList($history) {
+    if (-not $history -or -not $history.attempts) { return @() }
+    return @($history.attempts)
+}
+
+function New-TaskAttemptId([string]$TaskId, [string]$Phase) {
+    return ("ATT-" + (Get-Date -Format "yyyyMMddHHmmssfff") + "-" + $TaskId + "-" + $Phase + "-" + (Get-Random -Minimum 1000 -Maximum 9999))
+}
+
+function Resolve-PhaseFromWorkerName([string]$WorkerName) {
+    if (-not $WorkerName) { return $null }
+    if ($WorkerName -match '-qa(?:-\d+)?$') { return "qa" }
+    if ($WorkerName -match '-dev(?:-\d+)?$') { return "dev" }
+    return $null
+}
+
+function Get-TaskLatestRouteWorker($lock) {
+    if (-not $lock) { return "" }
+    if ($lock.PSObject.Properties.Name -contains "routeUpdate" -and $lock.routeUpdate -and $lock.routeUpdate.worker) {
+        return [string]$lock.routeUpdate.worker
+    }
+    return ""
+}
+
+function Get-TaskLatestActivityUtc($lock) {
+    if (-not $lock) { return $null }
+    if ($lock.PSObject.Properties.Name -contains "routeUpdate" -and $lock.routeUpdate -and $lock.routeUpdate.timestamp) {
+        $routeUtc = ConvertTo-UtcDateSafe $lock.routeUpdate.timestamp
+        if ($routeUtc) { return $routeUtc }
+    }
+    if ($lock.updated_at) {
+        return ConvertTo-UtcDateSafe $lock.updated_at
+    }
+    return $null
+}
+
+function Get-TaskActivityAgeText($ActivityUtc) {
+    if (-not $ActivityUtc) { return "-" }
+    $span = ((Get-Date).ToUniversalTime() - $ActivityUtc)
+    if ($span.TotalMinutes -lt 1) { return "<1m" }
+    if ($span.TotalHours -lt 1) { return ([int][Math]::Floor($span.TotalMinutes)).ToString() + "m" }
+    if ($span.TotalDays -lt 1) { return ([int][Math]::Floor($span.TotalHours)).ToString() + "h" }
+    return ([int][Math]::Floor($span.TotalDays)).ToString() + "d"
+}
+
+function Get-StaleRunThresholdMinutes {
+    return Get-EnvIntOrDefault -name "TEAMLEAD_STALE_RUN_MINUTES" -defaultValue 30
+}
+
+function Add-TaskAttemptRecord {
+    param(
+        [string]$TaskId,
+        [ValidateSet("dev", "qa")]
+        [string]$Phase,
+        [string]$Worker,
+        [string]$Engine,
+        [string]$RunId,
+        [string]$DispatchAction,
+        [string]$StartedAt
+    )
+
+    $history = Read-TaskAttemptHistory
+    $attempts = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @(Get-TaskAttemptList $history)) {
+        $attempts.Add($item) | Out-Null
+    }
+
+    if (-not $StartedAt) {
+        $StartedAt = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+    }
+
+    $entry = [ordered]@{
+        attempt_id = (New-TaskAttemptId -TaskId $TaskId -Phase $Phase)
+        task_id = $TaskId
+        phase = $Phase
+        worker = $Worker
+        engine = $Engine
+        dispatch_action = $DispatchAction
+        run_id = $RunId
+        started_at = $StartedAt
+        ended_at = ""
+        result = "running"
+        final_state = ""
+        requeue_reason = ""
+        updated_by = "teamlead-control/" + $DispatchAction
+    }
+
+    $attempts.Add([pscustomobject]$entry) | Out-Null
+    $history.attempts = @($attempts.ToArray())
+    Write-TaskAttemptHistory $history
+    return [pscustomobject]$entry
+}
+
+function Update-LatestTaskAttempt {
+    param(
+        [string]$TaskId,
+        [string]$Phase,
+        [string]$Result,
+        [string]$FinalState,
+        [string]$EndedAt,
+        [string]$RequeueReason,
+        [string]$UpdatedBy
+    )
+
+    $history = Read-TaskAttemptHistory
+    $attempts = @(Get-TaskAttemptList $history)
+    $changed = $false
+
+    for ($i = $attempts.Count - 1; $i -ge 0; $i--) {
+        $attempt = $attempts[$i]
+        if (-not $attempt) { continue }
+        if ([string]$attempt.task_id -ne $TaskId) { continue }
+        if ($Phase -and [string]$attempt.phase -ne $Phase) { continue }
+
+        if ($Result) { $attempt.result = $Result }
+        if ($FinalState) { $attempt.final_state = $FinalState }
+        if ($EndedAt) { $attempt.ended_at = $EndedAt }
+        if ($RequeueReason) { $attempt.requeue_reason = $RequeueReason }
+        if ($UpdatedBy) { $attempt.updated_by = $UpdatedBy }
+        $changed = $true
+        break
+    }
+
+    if ($changed) {
+        $history.attempts = $attempts
+        Write-TaskAttemptHistory $history
+    }
+    return $changed
+}
+
+function Sync-TaskAttemptHistoryFromLocks([string]$TaskId = "") {
+    $locks = Read-TaskLocks
+    $history = Read-TaskAttemptHistory
+    $attempts = @(Get-TaskAttemptList $history)
+    if ($attempts.Count -eq 0) {
+        return $history
+    }
+
+    $changed = $false
+    $lockNames = @($locks.locks.PSObject.Properties.Name)
+    foreach ($tid in $lockNames) {
+        if ($TaskId -and $tid -ne $TaskId) { continue }
+        $lock = $locks.locks.$tid
+        if (-not $lock) { continue }
+
+        $state = if ($lock.state) { ([string]$lock.state).ToLower() } else { "" }
+        $routeWorker = Get-TaskLatestRouteWorker -lock $lock
+        $phase = Resolve-PhaseFromWorkerName -WorkerName $routeWorker
+        if (-not $phase) {
+            $phase = Resolve-PhaseFromWorkerName -WorkerName (Get-AssignedWorkerFromLock -TaskId $tid -lock $lock -State $state -WorkerMap (Get-WorkerMap))
+        }
+
+        $result = ""
+        switch ($state) {
+            "waiting_qa" {
+                $phase = "dev"
+                $result = "success"
+            }
+            "qa_passed" {
+                $phase = "qa"
+                $result = "success"
+            }
+            "completed" {
+                if ($phase -eq "qa") {
+                    $result = "success"
+                }
+            }
+            "blocked" {
+                if (-not $phase) { $phase = "dev" }
+                $result = "blocked"
+            }
+        }
+
+        if (-not $phase -or -not $result) { continue }
+        $endedAt = if ($lock.updated_at) { [string]$lock.updated_at } else { (Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz") }
+
+        for ($i = $attempts.Count - 1; $i -ge 0; $i--) {
+            $attempt = $attempts[$i]
+            if (-not $attempt) { continue }
+            if ([string]$attempt.task_id -ne $tid) { continue }
+            if ([string]$attempt.phase -ne $phase) { continue }
+
+            $attemptResult = if ($attempt.result) { [string]$attempt.result } else { "" }
+            if ($attemptResult -notin @("running", "stale")) { break }
+
+            $attempt.result = $result
+            $attempt.final_state = $state
+            $attempt.ended_at = $endedAt
+            $attempt.updated_by = "teamlead-control/sync"
+            $changed = $true
+            break
+        }
+    }
+
+    if ($changed) {
+        $history.attempts = $attempts
+        Write-TaskAttemptHistory $history
+    }
+    return $history
+}
+
+function Get-LatestTaskAttemptSummary([string]$TaskId, [string]$Phase = "") {
+    $history = Read-TaskAttemptHistory
+    $attempts = @(Get-TaskAttemptList $history)
+    for ($i = $attempts.Count - 1; $i -ge 0; $i--) {
+        $attempt = $attempts[$i]
+        if (-not $attempt) { continue }
+        if ([string]$attempt.task_id -ne $TaskId) { continue }
+        if ($Phase -and [string]$attempt.phase -ne $Phase) { continue }
+        return $attempt
+    }
+    return $null
 }
 
 function Set-NoteField($obj, [string]$value) {
@@ -155,25 +467,85 @@ function Set-NoteField($obj, [string]$value) {
     }
 }
 
+function Set-ObjectField($obj, [string]$name, $value) {
+    if (-not $obj -or -not $name) { return }
+    if (-not $obj.PSObject.Properties[$name]) {
+        $obj | Add-Member -NotePropertyName $name -NotePropertyValue $value -Force
+    } else {
+        $obj.$name = $value
+    }
+}
+
+function Enter-DispatchMutex() {
+    try {
+        $m = New-Object System.Threading.Mutex($false, $dispatchMutexName)
+        $acquired = $false
+        try {
+            $acquired = $m.WaitOne(0)
+        } catch [System.Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            Write-Host '[FAIL] Another dispatch/dispatch-qa action is already running.' -ForegroundColor Red
+            Write-Host '       Rule: Team Lead must run dispatch commands serially (one-by-one).' -ForegroundColor Yellow
+            Write-Host '       Multi-worker parallelism is handled by worker pool assignment, not concurrent dispatch commands.' -ForegroundColor DarkGray
+            exit 1
+        }
+        return $m
+    } catch {
+        # 如果互斥锁不可用，继续执行但给出告警，避免硬阻塞主流程
+        Write-Host '[WARN] Dispatch mutex unavailable; continuing without inter-process lock.' -ForegroundColor Yellow
+        return $null
+    }
+}
+
 function Read-ArchiveJobs {
+    $default = @{ version = "1.0"; updated_at = (Get-Date -Format "o"); jobs = @{} }
     if (-not (Test-Path $archiveJobsPath)) {
-        return @{ version = "1.0"; updated_at = (Get-Date -Format "o"); jobs = @{} }
+        return $default
     }
     try {
         $raw = Get-Content $archiveJobsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $raw.jobs) {
-            $raw | Add-Member -NotePropertyName jobs -NotePropertyValue @{} -Force
+        $state = @{
+            version = if ($raw.version) { [string]$raw.version } else { "1.0" }
+            updated_at = if ($raw.updated_at) { [string]$raw.updated_at } else { (Get-Date -Format "o") }
+            jobs = Convert-ToArchiveJobMap $raw.jobs
         }
-        return $raw
+        return $state
     } catch {
-        return @{ version = "1.0"; updated_at = (Get-Date -Format "o"); jobs = @{} }
+        return $default
     }
 }
 
 function Write-ArchiveJobs($data) {
+    if (-not $data.version) { $data.version = "1.0" }
+    $data.jobs = Convert-ToArchiveJobMap $data.jobs
     $data.updated_at = Get-Date -Format "o"
     $json = ($data | ConvertTo-Json -Depth 12)
     Write-Utf8NoBomFile -path $archiveJobsPath -content $json
+}
+
+function Convert-ToArchiveJobMap($jobsObj) {
+    $map = @{}
+    if ($null -eq $jobsObj) { return $map }
+
+    if ($jobsObj -is [System.Collections.IDictionary]) {
+        foreach ($k in $jobsObj.Keys) {
+            $name = [string]$k
+            if ($name -match '^ARCHIVE-[A-Z0-9\-]+$') {
+                $map[$name] = $jobsObj[$k]
+            }
+        }
+        return $map
+    }
+
+    foreach ($p in $jobsObj.PSObject.Properties) {
+        $name = [string]$p.Name
+        if ($name -match '^ARCHIVE-[A-Z0-9\-]+$') {
+            $map[$name] = $p.Value
+        }
+    }
+    return $map
 }
 
 function Convert-ObjectToHashtable($obj) {
@@ -510,16 +882,21 @@ function Get-KnownWorkersFromMap($workerMap) {
     foreach ($prefixProp in $workerMap.PSObject.Properties) {
         $cfg = $prefixProp.Value
         if (-not $cfg) { continue }
-        if ($cfg.dev) {
-            $known[[string]$cfg.dev] = @{
+        $devEngine = if ($cfg.dev_engine) { [string]$cfg.dev_engine } else { [string]$cfg.engine }
+        foreach ($w in @(Get-WorkerListForPhase -cfg $cfg -phase "dev")) {
+            if (-not $w) { continue }
+            $known[[string]$w] = @{
                 work_dir = [string]$cfg.workdir
-                engine = if ($cfg.dev_engine) { [string]$cfg.dev_engine } else { [string]$cfg.engine }
+                engine = $devEngine
             }
         }
-        if ($cfg.qa) {
-            $known[[string]$cfg.qa] = @{
+
+        $qaEngine = if ($cfg.qa_engine) { [string]$cfg.qa_engine } else { [string]$cfg.engine }
+        foreach ($w in @(Get-WorkerListForPhase -cfg $cfg -phase "qa")) {
+            if (-not $w) { continue }
+            $known[[string]$w] = @{
                 work_dir = [string]$cfg.workdir
-                engine = if ($cfg.qa_engine) { [string]$cfg.qa_engine } else { [string]$cfg.engine }
+                engine = $qaEngine
             }
         }
     }
@@ -559,8 +936,10 @@ function Reconcile-WorkerRegistryFromPanes {
 
         foreach ($workerName in $knownWorkers.Keys) {
             $match = $false
+            $escapedWorker = [regex]::Escape([string]$workerName)
+            $workerPattern = "(^|[^A-Za-z0-9\-])" + $escapedWorker + "([^A-Za-z0-9\-]|$)"
             foreach ($t in $titles) {
-                if ($t -like ("*" + $workerName + "*")) {
+                if ([regex]::IsMatch([string]$t, $workerPattern)) {
                     $match = $true
                     break
                 }
@@ -653,8 +1032,8 @@ function Get-LivePaneIdSet {
     $panes = Get-WeztermPanes
     if (-not $panes) { return $set }
     foreach ($pane in $panes) {
-        $pid = if ($pane.pane_id) { [string]$pane.pane_id } else { "" }
-        if ($pid) { [void]$set.Add($pid) }
+        $paneIdStr = if ($pane.pane_id) { [string]$pane.pane_id } else { "" }
+        if ($paneIdStr) { [void]$set.Add($paneIdStr) }
     }
     return $set
 }
@@ -680,24 +1059,27 @@ function Cleanup-StaleApprovalRouters([string]$KeepTaskId = "", [string]$KeepWor
 
     foreach ($name in $routers.Keys) {
         $entry = $routers[$name]
-        $pid = 0
+        $routerPid = 0
         $pidStr = if ($entry.pid) { [string]$entry.pid } else { "" }
         $proc = $null
         $alive = $false
-        if ([int]::TryParse($pidStr, [ref]$pid) -and $pid -gt 0) {
-            $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        if ([int]::TryParse($pidStr, [ref]$routerPid) -and $routerPid -gt 0) {
+            $proc = Get-Process -Id $routerPid -ErrorAction SilentlyContinue
             $alive = ($null -ne $proc)
         }
 
         $paneId = if ($entry.worker_pane_id) { [string]$entry.worker_pane_id } else { "" }
-        $paneAlive = ($paneId -and $livePanes.Contains($paneId))
+        $paneAlive = $false
+        if ($paneId -and $livePanes) {
+            try { $paneAlive = [bool]$livePanes.Contains($paneId) } catch { $paneAlive = $false }
+        }
         $entryWorkerUpper = if ($entry.worker) { ([string]$entry.worker).ToUpper() } else { "" }
         $sameWorkerDifferentTask = ($keepWorkerUpper -and $entryWorkerUpper -eq $keepWorkerUpper -and $name -ne $keepKey)
 
         $drop = (-not $alive) -or (-not $paneAlive) -or $sameWorkerDifferentTask
         if ($drop) {
-            if ($alive -and $pid -gt 0) {
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            if ($alive -and $routerPid -gt 0) {
+                Stop-Process -Id $routerPid -Force -ErrorAction SilentlyContinue
                 $killed++
             }
             $removed++
@@ -802,9 +1184,23 @@ function Assert-TaskState($tid, [string[]]$allowedStates, $locks) {
     if ($lock.state -notin $allowedStates) {
         $st = $lock.state
         $allowed = $allowedStates -join ', '
+        $suggestedTarget = if ($allowedStates -contains "waiting_qa") {
+            "waiting_qa"
+        } elseif ($allowedStates -contains "assigned") {
+            "assigned"
+        } elseif ($allowedStates.Count -gt 0) {
+            [string]$allowedStates[0]
+        } else {
+            "assigned"
+        }
         Write-Host ('[FAIL] Task ' + $tid + " state='" + $st + "' not allowed.") -ForegroundColor Red
         Write-Host ('       Allowed: ' + $allowed) -ForegroundColor Yellow
-        Write-Host ('       Reset: powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction reset-task -TaskId ' + $tid + ' -TargetState assigned') -ForegroundColor DarkGray
+        Write-Host ('       Next: powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $tid + ' -TargetState ' + $suggestedTarget + ' -RequeueReason "manual_requeue"') -ForegroundColor DarkGray
+        if ($suggestedTarget -eq "waiting_qa") {
+            Write-Host ('       Then: powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $tid) -ForegroundColor DarkGray
+        } elseif ($suggestedTarget -eq "assigned") {
+            Write-Host ('       Then: powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $tid) -ForegroundColor DarkGray
+        }
         exit 1
     }
     return $lock
@@ -816,6 +1212,24 @@ function Get-WorkerMap {
         exit 1
     }
     return Get-Content $workerMapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+
+function Get-RegisteredWorkerEngine([string]$WorkerName) {
+    if (-not $WorkerName) { return $null }
+    if (-not (Test-Path $registryPath)) { return $null }
+    try {
+        $reg = Get-Content $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $reg -or -not $reg.workers) { return $null }
+        foreach ($prop in $reg.workers.PSObject.Properties) {
+            if ($prop.Name -eq $WorkerName) {
+                if ($prop.Value -and $prop.Value.engine) {
+                    return ([string]$prop.Value.engine).Trim()
+                }
+                return $null
+            }
+        }
+    } catch {}
+    return $null
 }
 
 function Ensure-WorkerRunning($wName, $wConfig, $tlPaneId, [switch]$ForceRestart) {
@@ -920,17 +1334,97 @@ function Run-WorkerRegistryHealthCheck {
     } catch {}
 }
 
-function Get-ExpectedWorkerForTaskState([string]$TaskId, [string]$State, $WorkerMap) {
+function Get-WorkerListForPhase($cfg, [string]$phase) {
+    $list = New-Object System.Collections.Generic.List[string]
+    if (-not $cfg) { return @() }
+
+    $poolKey = if ($phase -eq "qa") { "qa_pool" } else { "dev_pool" }
+    $singleKey = if ($phase -eq "qa") { "qa" } else { "dev" }
+
+    if ($cfg.PSObject.Properties.Name -contains $poolKey -and $cfg.$poolKey) {
+        foreach ($w in @($cfg.$poolKey)) {
+            $name = [string]$w
+            if ($name -and -not $list.Contains($name)) {
+                $list.Add($name) | Out-Null
+            }
+        }
+    }
+    if ($list.Count -eq 0 -and $cfg.PSObject.Properties.Name -contains $singleKey -and $cfg.$singleKey) {
+        $name = [string]$cfg.$singleKey
+        if ($name) { $list.Add($name) | Out-Null }
+    }
+    return @($list.ToArray())
+}
+
+function Get-ExpectedWorkersForTaskState([string]$TaskId, [string]$State, $WorkerMap) {
     if (-not $TaskId -or -not $State -or -not $WorkerMap) { return $null }
     $prefix = Resolve-TaskPrefix $TaskId
-    if (-not $prefix) { return $null }
+    if (-not $prefix) { return @() }
     $cfg = $WorkerMap.$prefix
-    if (-not $cfg) { return $null }
+    if (-not $cfg) { return @() }
     switch ($State) {
-        "in_progress" { return $cfg.dev }
-        "qa" { return $cfg.qa }
-        default { return $null }
+        "in_progress" { return @(Get-WorkerListForPhase -cfg $cfg -phase "dev") }
+        "qa" { return @(Get-WorkerListForPhase -cfg $cfg -phase "qa") }
+        default { return @() }
     }
+}
+
+function Get-ExpectedWorkerForTaskState([string]$TaskId, [string]$State, $WorkerMap) {
+    $workers = @(Get-ExpectedWorkersForTaskState -TaskId $TaskId -State $State -WorkerMap $WorkerMap)
+    if ($workers.Count -gt 0) { return [string]$workers[0] }
+    return $null
+}
+
+function Get-AssignedWorkerFromLock([string]$TaskId, $lock, [string]$State, $WorkerMap) {
+    if (-not $lock) { return $null }
+
+    if ($lock.PSObject.Properties.Name -contains "assigned_worker") {
+        $aw = [string]$lock.assigned_worker
+        if ($aw) { return $aw }
+    }
+    if ($lock.PSObject.Properties.Name -contains "worker") {
+        $w = [string]$lock.worker
+        if ($w) { return $w }
+    }
+    if ($lock.PSObject.Properties.Name -contains "routeUpdate" -and $lock.routeUpdate) {
+        $rw = if ($lock.routeUpdate.worker) { [string]$lock.routeUpdate.worker } else { "" }
+        if ($rw) { return $rw }
+    }
+    return Get-ExpectedWorkerForTaskState -TaskId $TaskId -State $State -WorkerMap $WorkerMap
+}
+
+function Select-WorkerForDispatch([string]$TaskId, [string]$TargetState, $cfg, $locks, $workerMap) {
+    $phase = if ($TargetState -eq "qa") { "qa" } else { "dev" }
+    $candidates = @(Get-WorkerListForPhase -cfg $cfg -phase $phase)
+    if ($candidates.Count -eq 0) {
+        Write-Host ('[FAIL] No worker configured for phase=' + $phase + ' task=' + $TaskId) -ForegroundColor Red
+        exit 1
+    }
+
+    $busy = New-Object 'System.Collections.Generic.HashSet[string]'
+    if ($locks -and $locks.locks) {
+        foreach ($p in $locks.locks.PSObject.Properties) {
+            $otherTaskId = [string]$p.Name
+            if (-not $otherTaskId -or $otherTaskId -eq $TaskId) { continue }
+            $entry = $p.Value
+            if (-not $entry) { continue }
+            $state = if ($entry.state) { [string]$entry.state } else { "" }
+            if ($state -ne $TargetState) { continue }
+            $assigned = Get-AssignedWorkerFromLock -TaskId $otherTaskId -lock $entry -State $state -WorkerMap $workerMap
+            if ($assigned) { [void]$busy.Add($assigned) }
+        }
+    }
+
+    foreach ($w in $candidates) {
+        if (-not $busy.Contains([string]$w)) {
+            return [string]$w
+        }
+    }
+
+    Write-Host ('[FAIL] Worker pool exhausted for ' + $TaskId + ' state=' + $TargetState + '; busy=' + (($busy | Sort-Object) -join ', ')) -ForegroundColor Red
+    Write-Host ('       Candidates: ' + ($candidates -join ', ')) -ForegroundColor Yellow
+    Write-Host '       Wait one task to finish or expand worker-map dev_pool/qa_pool.' -ForegroundColor Yellow
+    exit 1
 }
 
 function Assert-NoExecutionDrift([string]$TaskId, $locks, $WorkerMap) {
@@ -942,16 +1436,54 @@ function Assert-NoExecutionDrift([string]$TaskId, $locks, $WorkerMap) {
     $state = if ($lock.state) { [string]$lock.state } else { "" }
     if ($state -notin @("in_progress", "qa")) { return }
 
-    $expectedWorker = Get-ExpectedWorkerForTaskState -TaskId $TaskId -State $state -WorkerMap $WorkerMap
-    if (-not $expectedWorker) { return }
-    if (Test-WorkerPaneAlive -WorkerName $expectedWorker) { return }
+    $assignedWorker = Get-AssignedWorkerFromLock -TaskId $TaskId -lock $lock -State $state -WorkerMap $WorkerMap
+    if ($assignedWorker -and (Test-WorkerPaneAlive -WorkerName $assignedWorker)) { return }
 
-    Write-Host ('[FAIL] Execution drift detected: task ' + $TaskId + ' state=' + $state + ' but worker offline (' + $expectedWorker + ')') -ForegroundColor Red
+    $expectedWorkers = @(Get-ExpectedWorkersForTaskState -TaskId $TaskId -State $state -WorkerMap $WorkerMap)
+    foreach ($w in $expectedWorkers) {
+        if (Test-WorkerPaneAlive -WorkerName $w) { return }
+    }
+
+    $displayWorker = if ($assignedWorker) { $assignedWorker } elseif ($expectedWorkers.Count -gt 0) { ($expectedWorkers -join '|') } else { 'unknown' }
+    Write-Host ('[FAIL] Execution drift detected: task ' + $TaskId + ' state=' + $state + ' but worker offline (' + $displayWorker + ')') -ForegroundColor Red
     Write-Host '       This usually happens when worker pane was closed manually.' -ForegroundColor Yellow
     Write-Host '       Recover with:' -ForegroundColor Yellow
     Write-Host ('         powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action recover -RecoverAction reap-stale') -ForegroundColor White
     Write-Host ('         powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action recover -RecoverAction reset-task -TaskId ' + $TaskId + ' -TargetState assigned') -ForegroundColor White
-    Write-Host ('         powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action recover -RecoverAction restart-worker -WorkerName ' + $expectedWorker) -ForegroundColor White
+    if ($assignedWorker) {
+        Write-Host ('         powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) -ForegroundColor White
+    }
+    exit 1
+}
+
+function Assert-WorkerNotBusy([string]$TaskId, [string]$TargetWorker, [string]$TargetState, $locks, $WorkerMap) {
+    if (-not $TaskId -or -not $TargetWorker -or -not $TargetState -or -not $locks -or -not $WorkerMap) { return }
+    if (-not $locks.locks) { return }
+
+    $conflicts = New-Object System.Collections.Generic.List[string]
+    foreach ($p in $locks.locks.PSObject.Properties) {
+        $otherTaskId = [string]$p.Name
+        if (-not $otherTaskId -or $otherTaskId -eq $TaskId) { continue }
+        $entry = $p.Value
+        if (-not $entry) { continue }
+        $state = if ($entry.state) { [string]$entry.state } else { "" }
+        if ($state -ne $TargetState) { continue }
+
+        $assignedWorker = Get-AssignedWorkerFromLock -TaskId $otherTaskId -lock $entry -State $state -WorkerMap $WorkerMap
+        if ($assignedWorker -and $assignedWorker -eq $TargetWorker) {
+            $conflicts.Add($otherTaskId) | Out-Null
+        }
+    }
+
+    if ($conflicts.Count -eq 0) { return }
+
+    $conflictList = @($conflicts.ToArray()) | Sort-Object
+    $stateLabel = if ($TargetState -eq "qa") { "QA" } else { "DEV" }
+    Write-Host ('[FAIL] Worker busy: ' + $TargetWorker + ' already has active ' + $stateLabel + ' task(s): ' + ($conflictList -join ', ')) -ForegroundColor Red
+    Write-Host '       Current controller supports one active task per worker session.' -ForegroundColor Yellow
+    Write-Host '       Resolve by waiting current task to finish, or complete/recover stale lock first.' -ForegroundColor Yellow
+    Write-Host '       Quick check:' -ForegroundColor Yellow
+    Write-Host ('         powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action status') -ForegroundColor White
     exit 1
 }
 
@@ -1017,9 +1549,10 @@ function Invoke-Bootstrap {
     Write-Host '==========================================' -ForegroundColor Green
     Write-Host ''
     Write-Host 'Available actions:' -ForegroundColor Cyan
-    Write-Host '  dispatch    -- powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId <ID>' -ForegroundColor White
-    Write-Host '  dispatch-qa -- powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId <ID>' -ForegroundColor White
+    Write-Host '  dispatch    -- powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId <ID> [-DispatchEngine codex|gemini]' -ForegroundColor White
+    Write-Host '  dispatch-qa -- powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId <ID> [-DispatchEngine codex|gemini]' -ForegroundColor White
     Write-Host '  status      -- powershell -File scripts/teamlead-control.ps1 -Action status' -ForegroundColor White
+    Write-Host '  requeue     -- powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId <ID> -TargetState <assigned|waiting_qa> -RequeueReason "..."' -ForegroundColor White
     Write-Host '  recover     -- powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction <action>' -ForegroundColor White
     Write-Host '  archive     -- powershell -File scripts/teamlead-control.ps1 -Action archive -TaskId <ID> [-NoPush] [-CommitMessage "..."]' -ForegroundColor White
     Write-Host '  approve-request -- powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId <ID>' -ForegroundColor White
@@ -1027,8 +1560,15 @@ function Invoke-Bootstrap {
     Write-Host ''
     Write-Host 'Approval Priority Rule:' -ForegroundColor Cyan
     Write-Host '  If pending approval requests exist, do NOT run sleep/wait. Approve or deny first.' -ForegroundColor Yellow
-    Write-Host '  dispatch/dispatch-qa will auto-run baseline-clean (set TEAMLEAD_AUTO_BASELINE_CLEAN=0 to disable).' -ForegroundColor DarkGray
+    Write-Host '  baseline-clean is now manual-only; run recover -RecoverAction baseline-clean only when you explicitly want cleanup.' -ForegroundColor DarkGray
     Write-Host '  dispatch-qa defaults to fresh QA context (set TEAMLEAD_QA_REUSE_CONTEXT=1 to reuse QA session).' -ForegroundColor DarkGray
+    Write-Host '  review reject should use requeue only; do not send reject reason directly into the old worker pane.' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host 'Dispatch Rule:' -ForegroundColor Cyan
+    Write-Host '  Team Lead must execute dispatch/dispatch-qa serially (one command at a time).' -ForegroundColor Yellow
+    Write-Host '  Do NOT run two dispatch commands concurrently in parallel shells.' -ForegroundColor Yellow
+    Write-Host '  True worker parallelism is provided by worker pool auto-assignment (e.g. shop-fe-dev + shop-fe-dev-2).' -ForegroundColor DarkGray
+    Write-Host '  Engine can be overridden per dispatch via -DispatchEngine codex|gemini.' -ForegroundColor DarkGray
     Write-Host ''
 }
 
@@ -1043,12 +1583,13 @@ function Invoke-Dispatch {
     Assert-CanonicalTaskId $TaskId
 
     $tlPaneId = Resolve-TeamLeadPaneId
-    Invoke-PreDispatchBaselineClean
+    Write-Host '[INFO] Pre-dispatch baseline-clean is disabled by default; controller will preserve pending routes/approvals unless you run recover -RecoverAction baseline-clean manually.' -ForegroundColor DarkGray
 
     $workerMap = Get-WorkerMap
     $locks = Read-TaskLocks
     Assert-NoInvalidTaskLockEntries $locks
     Run-WorkerRegistryHealthCheck
+    Sync-TaskAttemptHistoryFromLocks -TaskId $TaskId | Out-Null
 
     # P0-1: Resolve prefix
     $prefix = Resolve-TaskPrefix $TaskId
@@ -1064,12 +1605,13 @@ function Invoke-Dispatch {
         exit 1
     }
 
-    $devWorker = $wConfig.dev
+    $devWorker = Select-WorkerForDispatch -TaskId $TaskId -TargetState "in_progress" -cfg $wConfig -locks $locks -workerMap $workerMap
     $domain = $wConfig.domain
     Assert-NoExecutionDrift -TaskId $TaskId -locks $locks -WorkerMap $workerMap
 
     # Assert state (only assigned/blocked -> in_progress)
     Assert-TaskState $TaskId @("assigned", "blocked") $locks
+    Assert-WorkerNotBusy -TaskId $TaskId -TargetWorker $devWorker -TargetState "in_progress" -locks $locks -WorkerMap $workerMap
 
     # P0-4: Unique task file validation
     $taskDir = Join-Path $rootDir "01-tasks\active\$domain"
@@ -1111,9 +1653,20 @@ function Invoke-Dispatch {
     }
 
     # Ensure worker is running
-    $devEngine = if ($wConfig.dev_engine) { $wConfig.dev_engine } else { $wConfig.engine }
+    $defaultDevEngine = if ($wConfig.dev_engine) { [string]$wConfig.dev_engine } else { [string]$wConfig.engine }
+    $devEngine = if ($DispatchEngine) { [string]$DispatchEngine } else { $defaultDevEngine }
+    $runId = New-TaskRunId -TaskId $TaskId -Phase "dev"
+    if ($DispatchEngine) {
+        Write-Host ('[INFO] Engine override: ' + $defaultDevEngine + ' -> ' + $devEngine) -ForegroundColor Cyan
+    }
     $devConfig = @{ workdir = $wConfig.workdir; engine = $devEngine }
-    $paneId = Ensure-WorkerRunning $devWorker $devConfig $tlPaneId
+    $registeredDevEngine = Get-RegisteredWorkerEngine -WorkerName $devWorker
+    $forceRestartForEngine = $false
+    if ($registeredDevEngine -and $registeredDevEngine.ToLowerInvariant() -ne $devEngine.ToLowerInvariant()) {
+        Write-Host ('[INFO] Worker ' + $devWorker + ' engine mismatch (' + $registeredDevEngine + ' -> ' + $devEngine + '), forcing restart...') -ForegroundColor Yellow
+        $forceRestartForEngine = $true
+    }
+    $paneId = Ensure-WorkerRunning $devWorker $devConfig $tlPaneId -ForceRestart:$forceRestartForEngine
 
     # 先确保监控已启动，避免 dispatch 阶段出现审批提示但无人接管
     Ensure-RouteMonitor $tlPaneId
@@ -1121,7 +1674,7 @@ function Invoke-Dispatch {
 
     # Dispatch task (BEFORE updating lock)
     $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
-    & $dispatchScript -WorkerPaneId $paneId -WorkerName $devWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $devEngine -TeamLeadPaneId $tlPaneId
+    & $dispatchScript -WorkerPaneId $paneId -WorkerName $devWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $devEngine -TeamLeadPaneId $tlPaneId -RunId $runId
     $dispatchExit = $LASTEXITCODE
     if ($dispatchExit -ne 0) {
         Write-Host ('[FAIL] Dispatch failed for ' + $TaskId + ' (worker=' + $devWorker + ', pane=' + $paneId + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
@@ -1130,12 +1683,25 @@ function Invoke-Dispatch {
     }
 
     # Update task lock AFTER successful dispatch
-    $lockData = $locks.locks.$TaskId
-    $lockData.state = "in_progress"
-    $lockData.runner = $devEngine
-    $lockData.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-    $lockData.updated_by = "teamlead-control/dispatch"
-    Write-TaskLocks $locks
+    $dispatchUpdatedAt = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+    Update-TaskLocksData {
+        param($latestLocks)
+        if ($latestLocks.locks.PSObject.Properties.Name -notcontains $TaskId) {
+            throw ("Task lock missing during dispatch commit: " + $TaskId)
+        }
+        $latestLock = $latestLocks.locks.$TaskId
+        $latestState = if ($latestLock.state) { [string]$latestLock.state } else { "" }
+        if ($latestState -notin @("assigned", "blocked")) {
+            throw ("Task state drifted before dispatch commit: " + $TaskId + " state=" + $latestState)
+        }
+        $latestLock.state = "in_progress"
+        $latestLock.runner = $devEngine
+        Set-ObjectField -obj $latestLock -name "assigned_worker" -value $devWorker
+        Set-ObjectField -obj $latestLock -name "run_id" -value $runId
+        $latestLock.updated_at = $dispatchUpdatedAt
+        $latestLock.updated_by = "teamlead-control/dispatch"
+    } | Out-Null
+    Add-TaskAttemptRecord -TaskId $TaskId -Phase "dev" -Worker $devWorker -Engine $devEngine -RunId $runId -DispatchAction "dispatch" -StartedAt $dispatchUpdatedAt | Out-Null
 
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
@@ -1148,6 +1714,7 @@ function Invoke-Dispatch {
     Write-Host '  route-monitor: auto ensured by controller' -ForegroundColor White
     Write-Host '  approval-router: auto ensured by controller' -ForegroundColor White
     Write-Host '  route-watcher: optional (notification trigger only)' -ForegroundColor DarkGray
+    Write-Host '  dispatch/dispatch-qa commands must still be serial from Team Lead side (no parallel command launch).' -ForegroundColor Yellow
     $watcherCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\route-watcher.ps1" -FilterTask ' + $TaskId + ' -Timeout 0'
     Write-Host ('  Optional Bash(run_in_background: true): ' + $watcherCmd) -ForegroundColor DarkGray
     $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\approval-router.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $devWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -Timeout 0 -Continuous'
@@ -1166,12 +1733,13 @@ function Invoke-DispatchQA {
     Assert-CanonicalTaskId $TaskId
 
     $tlPaneId = Resolve-TeamLeadPaneId
-    Invoke-PreDispatchBaselineClean
+    Write-Host '[INFO] Pre-dispatch baseline-clean is disabled by default; controller will preserve pending routes/approvals unless you run recover -RecoverAction baseline-clean manually.' -ForegroundColor DarkGray
 
     $workerMap = Get-WorkerMap
     $locks = Read-TaskLocks
     Assert-NoInvalidTaskLockEntries $locks
     Run-WorkerRegistryHealthCheck
+    Sync-TaskAttemptHistoryFromLocks -TaskId $TaskId | Out-Null
 
     $prefix = Resolve-TaskPrefix $TaskId
     if (-not $prefix) {
@@ -1180,12 +1748,13 @@ function Invoke-DispatchQA {
     }
 
     $wConfig = $workerMap.$prefix
-    $qaWorker = $wConfig.qa
+    $qaWorker = Select-WorkerForDispatch -TaskId $TaskId -TargetState "qa" -cfg $wConfig -locks $locks -workerMap $workerMap
     $domain = $wConfig.domain
     Assert-NoExecutionDrift -TaskId $TaskId -locks $locks -WorkerMap $workerMap
 
     # Assert state (only waiting_qa -> qa)
     Assert-TaskState $TaskId @("waiting_qa") $locks
+    Assert-WorkerNotBusy -TaskId $TaskId -TargetWorker $qaWorker -TargetState "qa" -locks $locks -WorkerMap $workerMap
 
     # P0-4: Task file validation
     $taskDir = Join-Path $rootDir "01-tasks\active\$domain"
@@ -1212,14 +1781,26 @@ function Invoke-DispatchQA {
         return
     }
 
-    $qaEngine = if ($wConfig.qa_engine) { $wConfig.qa_engine } else { $wConfig.engine }
+    $defaultQaEngine = if ($wConfig.qa_engine) { [string]$wConfig.qa_engine } else { [string]$wConfig.engine }
+    $qaEngine = if ($DispatchEngine) { [string]$DispatchEngine } else { $defaultQaEngine }
+    $runId = New-TaskRunId -TaskId $TaskId -Phase "qa"
+    if ($DispatchEngine) {
+        Write-Host ('[INFO] Engine override: ' + $defaultQaEngine + ' -> ' + $qaEngine) -ForegroundColor Cyan
+    }
     $qaConfig = @{ workdir = $wConfig.workdir; engine = $qaEngine }
     $reuseQaContext = [System.Environment]::GetEnvironmentVariable("TEAMLEAD_QA_REUSE_CONTEXT")
     $forceFreshQaContext = (-not $reuseQaContext -or $reuseQaContext.Trim() -ne "1")
     if ($forceFreshQaContext) {
         Write-Host '[INFO] QA dispatch uses fresh worker context (set TEAMLEAD_QA_REUSE_CONTEXT=1 to reuse existing QA session).' -ForegroundColor Cyan
     }
-    $paneId = Ensure-WorkerRunning $qaWorker $qaConfig $tlPaneId -ForceRestart:$forceFreshQaContext
+    $registeredQaEngine = Get-RegisteredWorkerEngine -WorkerName $qaWorker
+    $forceRestartForEngine = $false
+    if ($registeredQaEngine -and $registeredQaEngine.ToLowerInvariant() -ne $qaEngine.ToLowerInvariant()) {
+        Write-Host ('[INFO] Worker ' + $qaWorker + ' engine mismatch (' + $registeredQaEngine + ' -> ' + $qaEngine + '), forcing restart...') -ForegroundColor Yellow
+        $forceRestartForEngine = $true
+    }
+    $forceRestartQa = $forceFreshQaContext -or $forceRestartForEngine
+    $paneId = Ensure-WorkerRunning $qaWorker $qaConfig $tlPaneId -ForceRestart:$forceRestartQa
 
     # 先确保监控已启动，避免 dispatch 阶段出现审批提示但无人接管
     Ensure-RouteMonitor $tlPaneId
@@ -1227,7 +1808,7 @@ function Invoke-DispatchQA {
 
     # Dispatch FIRST, then update lock
     $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
-    & $dispatchScript -WorkerPaneId $paneId -WorkerName $qaWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $qaEngine -TeamLeadPaneId $tlPaneId
+    & $dispatchScript -WorkerPaneId $paneId -WorkerName $qaWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $qaEngine -TeamLeadPaneId $tlPaneId -RunId $runId
     $dispatchExit = $LASTEXITCODE
     if ($dispatchExit -ne 0) {
         Write-Host ('[FAIL] Dispatch QA failed for ' + $TaskId + ' (worker=' + $qaWorker + ', pane=' + $paneId + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
@@ -1236,12 +1817,25 @@ function Invoke-DispatchQA {
     }
 
     # Update task lock AFTER successful dispatch
-    $lockData = $locks.locks.$TaskId
-    $lockData.state = "qa"
-    $lockData.runner = $qaEngine
-    $lockData.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-    $lockData.updated_by = "teamlead-control/dispatch-qa"
-    Write-TaskLocks $locks
+    $dispatchUpdatedAt = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+    Update-TaskLocksData {
+        param($latestLocks)
+        if ($latestLocks.locks.PSObject.Properties.Name -notcontains $TaskId) {
+            throw ("Task lock missing during QA dispatch commit: " + $TaskId)
+        }
+        $latestLock = $latestLocks.locks.$TaskId
+        $latestState = if ($latestLock.state) { [string]$latestLock.state } else { "" }
+        if ($latestState -ne "waiting_qa") {
+            throw ("Task state drifted before dispatch-qa commit: " + $TaskId + " state=" + $latestState)
+        }
+        $latestLock.state = "qa"
+        $latestLock.runner = $qaEngine
+        Set-ObjectField -obj $latestLock -name "assigned_worker" -value $qaWorker
+        Set-ObjectField -obj $latestLock -name "run_id" -value $runId
+        $latestLock.updated_at = $dispatchUpdatedAt
+        $latestLock.updated_by = "teamlead-control/dispatch-qa"
+    } | Out-Null
+    Add-TaskAttemptRecord -TaskId $TaskId -Phase "qa" -Worker $qaWorker -Engine $qaEngine -RunId $runId -DispatchAction "dispatch-qa" -StartedAt $dispatchUpdatedAt | Out-Null
 
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
@@ -1254,6 +1848,7 @@ function Invoke-DispatchQA {
     Write-Host '  route-monitor: auto ensured by controller' -ForegroundColor White
     Write-Host '  approval-router: auto ensured by controller' -ForegroundColor White
     Write-Host '  route-watcher: optional (notification trigger only)' -ForegroundColor DarkGray
+    Write-Host '  dispatch/dispatch-qa commands must still be serial from Team Lead side (no parallel command launch).' -ForegroundColor Yellow
     $watcherCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\route-watcher.ps1" -FilterTask ' + $TaskId + ' -Timeout 0'
     Write-Host ('  Optional Bash(run_in_background: true): ' + $watcherCmd) -ForegroundColor DarkGray
     $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\approval-router.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $qaWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -Timeout 0 -Continuous'
@@ -1262,13 +1857,280 @@ function Invoke-DispatchQA {
 }
 
 # ============================================================
+# Action: requeue
+# ============================================================
+function Invoke-Requeue {
+    if (-not $TaskId) {
+        Write-Host '[FAIL] requeue requires -TaskId' -ForegroundColor Red
+        exit 1
+    }
+    Assert-CanonicalTaskId $TaskId
+
+    if (-not $TargetState) {
+        Write-Host '[FAIL] requeue requires -TargetState (assigned / waiting_qa)' -ForegroundColor Red
+        exit 1
+    }
+    if ($TargetState -notin @("assigned", "waiting_qa")) {
+        Write-Host ('[FAIL] Invalid requeue target: ' + $TargetState + ' (allowed: assigned / waiting_qa)') -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not $RequeueReason) {
+        $RequeueReason = "manual_requeue"
+    }
+
+    $workerMap = Get-WorkerMap
+    $locks = Read-TaskLocks
+    if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) {
+        Write-Host ('[FAIL] Task ' + $TaskId + ' not in TASK-LOCKS.json') -ForegroundColor Red
+        exit 1
+    }
+
+    Sync-TaskAttemptHistoryFromLocks -TaskId $TaskId | Out-Null
+
+    $lock = $locks.locks.$TaskId
+    $prevState = if ($lock.state) { [string]$lock.state } else { "" }
+    $assignedWorker = Get-AssignedWorkerFromLock -TaskId $TaskId -lock $lock -State $prevState -WorkerMap $workerMap
+    $workerAlive = if ($assignedWorker) { Test-WorkerPaneAlive -WorkerName $assignedWorker } else { $false }
+    $phase = Resolve-PhaseFromWorkerName -WorkerName (Get-TaskLatestRouteWorker -lock $lock)
+    if (-not $phase) {
+        $phase = Resolve-PhaseFromWorkerName -WorkerName $assignedWorker
+    }
+    if (-not $phase) {
+        $phase = if ($TargetState -eq "waiting_qa") { "qa" } else { "dev" }
+    }
+
+    $now = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+    Update-TaskLocksData {
+        param($latest)
+        if ($latest.locks.PSObject.Properties.Name -notcontains $TaskId) {
+            throw ("Task missing during requeue commit: " + $TaskId)
+        }
+        $latestLock = $latest.locks.$TaskId
+        $latestLock.state = $TargetState
+        $latestLock.updated_at = $now
+        $latestLock.updated_by = "teamlead-control/requeue"
+        Set-NoteField -obj $latestLock -value ("Requeued to " + $TargetState + " by team lead: " + $RequeueReason)
+        Set-ObjectField -obj $latestLock -name "run_id" -value ""
+        Set-ObjectField -obj $latestLock -name "last_requeue" -value @{
+            previous_state = $prevState
+            target_state = $TargetState
+            reason = $RequeueReason
+            requested_at = $now
+            requested_by = "teamlead-control/requeue"
+        }
+        return $null
+    }
+
+    Update-LatestTaskAttempt -TaskId $TaskId -Phase $phase -Result "requeued" -FinalState $TargetState -EndedAt $now -RequeueReason $RequeueReason -UpdatedBy "teamlead-control/requeue" | Out-Null
+
+    Write-Host ('[OK] Task ' + $TaskId + ' requeued: ' + $prevState + ' -> ' + $TargetState) -ForegroundColor Green
+    Write-Host ('     Reason: ' + $RequeueReason) -ForegroundColor Gray
+    Write-Host '     Requeue only updates status/history. It does not notify the old worker and does not auto-dispatch.' -ForegroundColor Cyan
+    if ($workerAlive -and $assignedWorker) {
+        Write-Host ('[WARN] Previous worker is still online: ' + $assignedWorker) -ForegroundColor Yellow
+        Write-Host '       Do not paste the reject reason into that pane. Redispatch later with a fresh context.' -ForegroundColor Yellow
+        if ($TargetState -eq "waiting_qa") {
+            Write-Host ('       Next: powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) -ForegroundColor White
+        } else {
+            Write-Host ('       Next: powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) -ForegroundColor White
+        }
+    }
+}
+
+# ============================================================
 # Action: status
 # ============================================================
+function Get-TaskRecommendation {
+    param(
+        [string]$TaskId,
+        $Lock,
+        $PendingApprovals,
+        $WorkerMap,
+        $GateContext
+    )
+
+    if (-not $Lock) { return $null }
+
+    $state = if ($Lock.state) { ([string]$Lock.state).ToLower() } else { "" }
+    $commands = New-Object System.Collections.Generic.List[string]
+    $assignedWorker = Get-AssignedWorkerFromLock -TaskId $TaskId -lock $Lock -State $state -WorkerMap $WorkerMap
+    $workerAlive = if ($assignedWorker) { Test-WorkerPaneAlive -WorkerName $assignedWorker } else { $false }
+    $routeWorker = Get-TaskLatestRouteWorker -lock $Lock
+    $phase = Resolve-PhaseFromWorkerName -WorkerName $routeWorker
+    if (-not $phase) {
+        $phase = Resolve-PhaseFromWorkerName -WorkerName $assignedWorker
+    }
+    $activityUtc = Get-TaskLatestActivityUtc -lock $Lock
+    $activityAgeText = Get-TaskActivityAgeText -ActivityUtc $activityUtc
+    $pendingApprovalCount = @($PendingApprovals).Count
+    $hasPendingApprovals = ($pendingApprovalCount -gt 0)
+    $staleThresholdMinutes = Get-StaleRunThresholdMinutes
+    $isStaleRun = $false
+    if ($state -in @("in_progress", "qa") -and $workerAlive -and $activityUtc -and -not $hasPendingApprovals) {
+        $ageMinutes = ((Get-Date).ToUniversalTime() - $activityUtc).TotalMinutes
+        if ($ageMinutes -ge $staleThresholdMinutes) {
+            $isStaleRun = $true
+        }
+    }
+
+    $archiveBlocking = @()
+    if ($GateContext) {
+        $archiveBlocking += @($GateContext.dispatch_todo | Where-Object { $_ -ne $TaskId })
+        $archiveBlocking += @($GateContext.running | Where-Object { $_ -ne $TaskId })
+        $archiveBlocking += @($GateContext.other_active | Where-Object { -not $_.StartsWith($TaskId + ":") })
+    }
+
+    $summary = ""
+    $color = "Gray"
+    $priority = 500
+
+    switch ($state) {
+        "assigned" {
+            $summary = "待派遣开发"
+            $color = "Yellow"
+            $priority = 60
+            $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) | Out-Null
+        }
+        "waiting_qa" {
+            $summary = "待派遣 QA"
+            $color = "Cyan"
+            $priority = 70
+            $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) | Out-Null
+        }
+        "in_progress" {
+            if ($hasPendingApprovals) {
+                $summary = "开发中，但有待处理审批"
+                $color = "Red"
+                $priority = 10
+                foreach ($req in @($PendingApprovals)) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId ' + [string]$req.id) | Out-Null
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId ' + [string]$req.id) | Out-Null
+                }
+            } elseif (-not $workerAlive) {
+                $summary = "开发执行漂移，worker 已离线"
+                $color = "Red"
+                $priority = 20
+                if ($assignedWorker) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                }
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "offline_drift"') | Out-Null
+            } elseif ($isStaleRun) {
+                $summary = "开发长时间无新 route [STALE-RUN " + $activityAgeText + "]"
+                $color = "Yellow"
+                $priority = 25
+                if ($assignedWorker) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                }
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "stale_run"') | Out-Null
+            } else {
+                $summary = "开发进行中，等待新 route"
+            }
+        }
+        "qa" {
+            if ($hasPendingApprovals) {
+                $summary = "QA 中，但有待处理审批"
+                $color = "Red"
+                $priority = 10
+                foreach ($req in @($PendingApprovals)) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId ' + [string]$req.id) | Out-Null
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId ' + [string]$req.id) | Out-Null
+                }
+            } elseif (-not $workerAlive) {
+                $summary = "QA 执行漂移，worker 已离线"
+                $color = "Red"
+                $priority = 20
+                if ($assignedWorker) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                }
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "offline_drift"') | Out-Null
+            } elseif ($isStaleRun) {
+                $summary = "QA 长时间无新 route [STALE-RUN " + $activityAgeText + "]"
+                $color = "Yellow"
+                $priority = 25
+                if ($assignedWorker) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                }
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "stale_run"') | Out-Null
+            } else {
+                $summary = "QA 进行中，等待新 route"
+            }
+        }
+        "qa_passed" {
+            if ($archiveBlocking.Count -gt 0) {
+                $summary = "QA 已通过，等待其它活跃任务收口后再 archive"
+                $color = "Yellow"
+                $priority = 80
+            } else {
+                $summary = "QA 已通过，可复审后 archive"
+                $color = "Green"
+                $priority = 90
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action archive -TaskId ' + $TaskId) | Out-Null
+            }
+            $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "review_reject"') | Out-Null
+        }
+        "blocked" {
+            if ($hasPendingApprovals) {
+                $summary = "blocked，先处理审批"
+                $color = "Red"
+                $priority = 10
+                foreach ($req in @($PendingApprovals)) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId ' + [string]$req.id) | Out-Null
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId ' + [string]$req.id) | Out-Null
+                }
+            } elseif ($phase -eq "qa") {
+                $summary = "QA 驳回后待回开发"
+                $color = "Red"
+                $priority = 30
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "qa_reject"') | Out-Null
+            } else {
+                $summary = "开发 blocked，需人工恢复后再派遣"
+                $color = "Red"
+                $priority = 35
+                if ($assignedWorker) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                }
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "manual_recovery"') | Out-Null
+            }
+        }
+        "archiving" {
+            $summary = "归档链路进行中，等待 doc-updater / repo-committer"
+            $color = "Cyan"
+            $priority = 110
+        }
+        "completed" {
+            $summary = "已完成"
+            $color = "Green"
+            $priority = 900
+        }
+        default {
+            $summary = "未知状态，建议人工检查"
+            $color = "Yellow"
+            $priority = 300
+            $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action status') | Out-Null
+        }
+    }
+
+    return [pscustomobject]@{
+        task_id = $TaskId
+        state = $state
+        summary = $summary
+        color = $color
+        priority = $priority
+        commands = @($commands.ToArray())
+        assigned_worker = $assignedWorker
+        worker_alive = $workerAlive
+        activity_age = $activityAgeText
+        stale = $isStaleRun
+    }
+}
+
 function Invoke-Status {
     Write-Host ''
     Write-Host '==========================================' -ForegroundColor Cyan
     Write-Host '  Team Lead Status' -ForegroundColor Cyan
     Write-Host '==========================================' -ForegroundColor Cyan
+    Sync-TaskAttemptHistoryFromLocks | Out-Null
 
     # Environment
     Write-Host ''
@@ -1335,6 +2197,15 @@ function Invoke-Status {
         Where-Object { $_.status -eq 'pending' } |
         Sort-Object created_at
     )
+    $pendingApprovalsByTask = @{}
+    foreach ($req in $pendingApprovals) {
+        $reqTask = if ($req.task) { [string]$req.task } elseif ($req.task_id) { [string]$req.task_id } else { "" }
+        if (-not $reqTask) { continue }
+        if (-not $pendingApprovalsByTask.ContainsKey($reqTask)) {
+            $pendingApprovalsByTask[$reqTask] = New-Object System.Collections.Generic.List[object]
+        }
+        $pendingApprovalsByTask[$reqTask].Add($req) | Out-Null
+    }
     if ($pendingApprovals.Count -gt 0) {
         Write-Host '  [CRITICAL] Pending approvals detected. Handle approve/deny before any wait/sleep.' -ForegroundColor Red
         foreach ($req in $pendingApprovals) {
@@ -1361,6 +2232,9 @@ function Invoke-Status {
     try { $workerMapForStatus = Get-WorkerMap } catch {}
     $orphanLocks = New-Object System.Collections.Generic.List[string]
     $invalidLocks = New-Object System.Collections.Generic.List[string]
+    $taskRecommendations = New-Object System.Collections.Generic.List[object]
+    $staleThresholdMinutes = Get-StaleRunThresholdMinutes
+    $gate = Get-ArchiveGateContext -locks $locks
     $hasLocks = $false
     if ($locks.locks.PSObject.Properties.Count -gt 0) {
         $locks.locks.PSObject.Properties | ForEach-Object {
@@ -1387,14 +2261,37 @@ function Invoke-Status {
                 $stateColor = "Red"
                 $invalidLocks.Add($tid) | Out-Null
             }
-            $expectedWorker = Get-ExpectedWorkerForTaskState -TaskId $tid -State ([string]$lState) -WorkerMap $workerMapForStatus
-            if ($expectedWorker) {
-                if (Test-WorkerPaneAlive -WorkerName $expectedWorker) {
-                    $line += ' worker=' + $expectedWorker
-                } else {
-                    $line += ' worker=' + $expectedWorker + ' [OFFLINE-DRIFT]'
-                    $stateColor = "Red"
-                    $orphanLocks.Add($tid + '|' + $expectedWorker) | Out-Null
+            if ([string]$lState -in @("in_progress", "qa")) {
+                $displayWorker = Get-AssignedWorkerFromLock -TaskId $tid -lock $l -State ([string]$lState) -WorkerMap $workerMapForStatus
+                if ($displayWorker) {
+                    if (Test-WorkerPaneAlive -WorkerName $displayWorker) {
+                        $line += ' worker=' + $displayWorker
+                    } else {
+                        $line += ' worker=' + $displayWorker + ' [OFFLINE-DRIFT]'
+                        $stateColor = "Red"
+                        $orphanLocks.Add($tid + '|' + $displayWorker) | Out-Null
+                    }
+                }
+            }
+            $activityUtc = Get-TaskLatestActivityUtc -lock $l
+            if ($activityUtc) {
+                $line += ' last=' + (Get-TaskActivityAgeText -ActivityUtc $activityUtc)
+            }
+            $recApprovals = @()
+            if ($pendingApprovalsByTask.ContainsKey($tid)) {
+                $recApprovals = @($pendingApprovalsByTask[$tid].ToArray())
+            }
+            $recommendation = Get-TaskRecommendation -TaskId $tid -Lock $l -PendingApprovals $recApprovals -WorkerMap $workerMapForStatus -GateContext $gate
+            if ($recommendation) {
+                if ($recommendation.stale -and $stateColor -notin @("Red")) {
+                    $line += ' [STALE-RUN>' + $staleThresholdMinutes + 'm]'
+                    $stateColor = "Yellow"
+                }
+                if ($recommendation.summary) {
+                    $line += ' next=' + $recommendation.summary
+                }
+                if ([string]$recommendation.state -ne "completed") {
+                    $taskRecommendations.Add($recommendation) | Out-Null
                 }
             }
             Write-Host $line -ForegroundColor $stateColor
@@ -1408,6 +2305,35 @@ function Invoke-Status {
     }
     if ($invalidLocks.Count -gt 0) {
         Write-Host '  [WARN] Detected invalid TaskId lock entries (non-canonical).' -ForegroundColor Yellow
+    }
+
+    # Attempt history
+    Write-Host ''
+    Write-Host '--- Recent Attempts ---' -ForegroundColor Cyan
+    $attemptHistory = Read-TaskAttemptHistory
+    $recentAttempts = @(
+        @(Get-TaskAttemptList $attemptHistory) |
+        Sort-Object started_at -Descending |
+        Select-Object -First 8
+    )
+    if ($recentAttempts.Count -eq 0) {
+        Write-Host '  (no attempt history)' -ForegroundColor Gray
+    } else {
+        foreach ($attempt in $recentAttempts) {
+            $result = if ($attempt.result) { [string]$attempt.result } else { "-" }
+            $color = switch ($result) {
+                "success" { "Green" }
+                "running" { "Yellow" }
+                "blocked" { "Red" }
+                "requeued" { "Yellow" }
+                default { "Gray" }
+            }
+            $line = '  ' + ([string]$attempt.task_id).PadRight(18) + ' phase=' + [string]$attempt.phase + ' result=' + $result + ' worker=' + [string]$attempt.worker
+            if ($attempt.requeue_reason) {
+                $line += ' reason=' + [string]$attempt.requeue_reason
+            }
+            Write-Host $line -ForegroundColor $color
+        }
     }
 
     # API doc sync status
@@ -1440,7 +2366,8 @@ function Invoke-Status {
     $archiveJobs = Read-ArchiveJobs
     $jobRows = @()
     if ($archiveJobs.jobs) {
-        $jobRows = @($archiveJobs.jobs.PSObject.Properties | ForEach-Object { $_.Value })
+        $jobMap = Convert-ToArchiveJobMap $archiveJobs.jobs
+        $jobRows = @($jobMap.Values)
     }
     $activeJobs = @($jobRows | Where-Object { $_.status -in @("pending", "running", "blocked") } | Sort-Object started_at)
     if ($activeJobs.Count -eq 0) {
@@ -1465,27 +2392,27 @@ function Invoke-Status {
     if (-not $flagExists) {
         Write-Host '  powershell -File scripts/teamlead-control.ps1 -Action bootstrap' -ForegroundColor Yellow
     } else {
-        $pendingTasks = @()
-        if ($locks.locks.PSObject.Properties.Count -gt 0) {
-            $locks.locks.PSObject.Properties | ForEach-Object {
-                if ($_.Value.state -in @("assigned", "blocked")) {
-                    $pendingTasks += $_.Name
-                }
-                if ($_.Value.state -eq "qa_passed") {
-                    $qpName = $_.Name
-                    Write-Host ('  [qa_passed] ' + $qpName + ' -- confirm completion or re-dispatch') -ForegroundColor Green
+        $activeTaskIds = @($gate.active_task_ids)
+        $lockOnlyActive = @($gate.lock_only_active)
+
+        if ($lockOnlyActive.Count -gt 0) {
+            Write-Host ('  [WARN] Lock-only active tasks (missing in active dir): ' + ($lockOnlyActive -join ', ')) -ForegroundColor Yellow
+            Write-Host '         These tasks still block archive until resolved.' -ForegroundColor DarkYellow
+        }
+
+        if ($activeTaskIds.Count -eq 0) {
+            Write-Host '  No active tasks' -ForegroundColor Green
+        }
+
+        if ($taskRecommendations.Count -gt 0) {
+            foreach ($rec in @($taskRecommendations | Sort-Object priority, task_id)) {
+                Write-Host ('  ' + $rec.task_id + ' -> ' + $rec.summary) -ForegroundColor $rec.color
+                foreach ($cmd in @($rec.commands)) {
+                    Write-Host ('    ' + $cmd) -ForegroundColor White
                 }
             }
         }
-        if ($pendingTasks.Count -gt 0) {
-            $pendingStr = $pendingTasks -join ', '
-            Write-Host ('  Pending tasks: ' + $pendingStr) -ForegroundColor Yellow
-            foreach ($t in $pendingTasks) {
-                Write-Host ('    powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $t) -ForegroundColor White
-            }
-        } else {
-            Write-Host '  No pending tasks' -ForegroundColor Green
-        }
+
         if ($orphanLocks.Count -gt 0) {
             Write-Host '  Drift recovery:' -ForegroundColor Yellow
             Write-Host '    powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction reap-stale' -ForegroundColor White
@@ -1504,7 +2431,7 @@ function Invoke-Status {
             Write-Host '    powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction normalize-locks' -ForegroundColor White
         }
         if ($pendingRoutes.Count -gt 0 -or $pendingApprovals.Count -gt 0 -or $invalidLocks.Count -gt 0) {
-            Write-Host '  Baseline cleanup:' -ForegroundColor Yellow
+            Write-Host '  Optional cleanup (manual only):' -ForegroundColor Yellow
             Write-Host '    powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction baseline-clean' -ForegroundColor White
         }
     }
@@ -1527,6 +2454,64 @@ function Get-ActiveTaskIdSet {
         }
     }
     return $set
+}
+
+function Get-TaskStateText($locks, [string]$TaskId) {
+    if ($locks -and $locks.locks -and $locks.locks.PSObject.Properties.Name -contains $TaskId) {
+        $raw = $locks.locks.$TaskId.state
+        if ($raw) { return ([string]$raw).ToLower() }
+    }
+    return "unlocked"
+}
+
+function Get-ArchiveGateContext($locks) {
+    $idMap = @{}
+    foreach ($tid in @(Get-ActiveTaskIdSet)) {
+        if ($tid) { $idMap[$tid.ToUpper()] = $true }
+    }
+
+    $lockOnlyActive = New-Object System.Collections.Generic.List[string]
+    if ($locks -and $locks.locks) {
+        foreach ($p in $locks.locks.PSObject.Properties) {
+            $tid = [string]$p.Name
+            if (-not $tid) { continue }
+            $state = Get-TaskStateText -locks $locks -TaskId $tid
+            if ($state -ne "completed" -and -not $idMap.ContainsKey($tid.ToUpper())) {
+                $idMap[$tid.ToUpper()] = $true
+                $lockOnlyActive.Add($tid.ToUpper() + ":" + $state) | Out-Null
+            }
+        }
+    }
+
+    $activeTaskIds = @($idMap.Keys | Sort-Object)
+    $dispatchTodoTasks = @()
+    $runningTasks = @()
+    $archiveReadyTasks = @()
+    $otherActiveTasks = @()
+
+    foreach ($tid in $activeTaskIds) {
+        $state = Get-TaskStateText -locks $locks -TaskId $tid
+        switch ($state) {
+            "assigned"    { $dispatchTodoTasks += $tid; continue }
+            "blocked"     { $dispatchTodoTasks += $tid; continue }
+            "in_progress" { $runningTasks += $tid; continue }
+            "qa"          { $runningTasks += $tid; continue }
+            "waiting_qa"  { $runningTasks += $tid; continue }
+            "qa_passed"   { $archiveReadyTasks += $tid; continue }
+            "archiving"   { $archiveReadyTasks += $tid; continue }
+            "completed"   { $archiveReadyTasks += $tid; continue }
+            default       { $otherActiveTasks += ($tid + ":" + $state); continue }
+        }
+    }
+
+    return [pscustomobject]@{
+        active_task_ids    = $activeTaskIds
+        lock_only_active   = @($lockOnlyActive.ToArray())
+        dispatch_todo      = $dispatchTodoTasks
+        running            = $runningTasks
+        archive_ready      = $archiveReadyTasks
+        other_active       = $otherActiveTasks
+    }
 }
 
 function Invoke-BaselineClean {
@@ -1621,22 +2606,6 @@ function Invoke-BaselineClean {
     }
 
     # 4) Normalize lock keys + recover stale approval-blocked active tasks
-    $locks = Read-TaskLocks
-    $locksChanged = $false
-    $validLocks = @{}
-    if ($locks.locks) {
-        foreach ($p in $locks.locks.PSObject.Properties) {
-            $tid = [string]$p.Name
-            if ($tid -match '^(BACKEND|SHOP-FE|ADMIN-FE)-\d+$') {
-                $validLocks[$tid] = $p.Value
-            } else {
-                $summary.lock_keys_removed++
-                $locksChanged = $true
-            }
-        }
-    }
-    $locks.locks = $validLocks
-
     $activeTaskIds = Get-ActiveTaskIdSet
     $pendingTaskIds = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($req in @($approvals.requests | Where-Object { $_.status -eq 'pending' })) {
@@ -1644,33 +2613,46 @@ function Invoke-BaselineClean {
         if ($reqTask) { [void]$pendingTaskIds.Add($reqTask.ToUpper()) }
     }
 
-    foreach ($tid in @($locks.locks.Keys)) {
-        $lock = $locks.locks[$tid]
-        if (-not $lock) { continue }
-        $state = if ($lock.state) { [string]$lock.state } else { "" }
-        $note = if ($lock.note) { [string]$lock.note } else { "" }
-        if (
-            $state -eq 'blocked' -and
-            $note -like 'Approval required:*' -and
-            $activeTaskIds.Contains($tid) -and
-            -not $pendingTaskIds.Contains($tid)
-        ) {
-            $lock.state = 'assigned'
-            $lock.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $lock.updated_by = 'teamlead-control/recover-baseline-clean'
-            Set-NoteField -obj $lock -value 'Recovered from stale approval block by baseline-clean'
-            if ($lock.PSObject.Properties.Name -contains 'routeUpdate') {
-                $lock.PSObject.Properties.Remove('routeUpdate')
+    Update-TaskLocksData {
+        param($locks)
+        $validLocks = @{}
+        if ($locks.locks) {
+            foreach ($p in $locks.locks.PSObject.Properties) {
+                $tid = [string]$p.Name
+                if ($tid -match '^(BACKEND|SHOP-FE|ADMIN-FE)-\d+$') {
+                    $validLocks[$tid] = $p.Value
+                } else {
+                    $summary.lock_keys_removed++
+                }
             }
-            $locks.locks[$tid] = $lock
-            $summary.blocked_to_assigned++
-            $locksChanged = $true
         }
-    }
+        $locks.locks = $validLocks
 
-    if ($locksChanged) {
-        Write-TaskLocks $locks
-    }
+        foreach ($tid in @($locks.locks.Keys)) {
+            $lock = $locks.locks[$tid]
+            if (-not $lock) { continue }
+            $state = if ($lock.state) { [string]$lock.state } else { "" }
+            $note = if ($lock.note) { [string]$lock.note } else { "" }
+            if (
+                $state -eq 'blocked' -and
+                $note -like 'Approval required:*' -and
+                $activeTaskIds.Contains($tid) -and
+                -not $pendingTaskIds.Contains($tid)
+            ) {
+                $lock.state = 'assigned'
+                $lock.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+                $lock.updated_by = 'teamlead-control/recover-baseline-clean'
+                Set-NoteField -obj $lock -value 'Recovered from stale approval block by baseline-clean'
+                Set-ObjectField -obj $lock -name "run_id" -value ""
+                if ($lock.PSObject.Properties.Name -contains 'routeUpdate') {
+                    $lock.PSObject.Properties.Remove('routeUpdate')
+                }
+                $locks.locks[$tid] = $lock
+                $summary.blocked_to_assigned++
+            }
+        }
+        return $null
+    } | Out-Null
 
     Write-Host '[OK] baseline-clean complete' -ForegroundColor Green
     Write-Host ('  approvals_resolved: ' + $summary.approvals_resolved) -ForegroundColor Gray
@@ -1696,7 +2678,7 @@ function Invoke-PreDispatchBaselineClean {
 # ============================================================
 function Invoke-Recover {
     if (-not $RecoverAction) {
-        Write-Host '[FAIL] recover requires -RecoverAction (reap-stale / restart-worker / reset-task / normalize-locks / baseline-clean)' -ForegroundColor Red
+        Write-Host '[FAIL] recover requires -RecoverAction (reap-stale / restart-worker / reset-task / normalize-locks / baseline-clean / full-clean)' -ForegroundColor Red
         exit 1
     }
 
@@ -1743,7 +2725,9 @@ function Invoke-Recover {
             $wConfig = $null
             $workerMap.PSObject.Properties | ForEach-Object {
                 $cfg = $_.Value
-                if ($cfg.dev -eq $WorkerName -or $cfg.qa -eq $WorkerName) {
+                $devWorkers = @(Get-WorkerListForPhase -cfg $cfg -phase "dev")
+                $qaWorkers = @(Get-WorkerListForPhase -cfg $cfg -phase "qa")
+                if ($devWorkers -contains $WorkerName -or $qaWorkers -contains $WorkerName) {
                     $wConfig = $cfg
                 }
             }
@@ -1755,7 +2739,7 @@ function Invoke-Recover {
             $regScript = Join-Path $scriptDir "worker-registry.ps1"
             & $regScript -Action unregister -WorkerName $WorkerName 2>$null
 
-            $isQa = $WorkerName -like '*-qa'
+            $isQa = ($WorkerName.ToLower() -match '(^|-)qa(?:-\d+)?$')
             $restartEngine = if ($isQa -and $wConfig.qa_engine) { $wConfig.qa_engine } elseif (-not $isQa -and $wConfig.dev_engine) { $wConfig.dev_engine } else { $wConfig.engine }
 
             $startScript = Join-Path $scriptDir "start-worker.ps1"
@@ -1777,30 +2761,42 @@ function Invoke-Recover {
                 Write-Host ('[FAIL] Task ' + $TaskId + ' not in TASK-LOCKS.json') -ForegroundColor Red
                 exit 1
             }
-            $locks.locks.$TaskId.state = $TargetState
-            $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $locks.locks.$TaskId.updated_by = "teamlead-control/recover"
-            Set-NoteField -obj $locks.locks.$TaskId -value "Manual reset to $TargetState"
-            Write-TaskLocks $locks
+            Update-TaskLocksData {
+                param($latest)
+                if ($latest.locks.PSObject.Properties.Name -notcontains $TaskId) {
+                    throw ("Task missing during reset-task commit: " + $TaskId)
+                }
+                $latestLock = $latest.locks.$TaskId
+                $latestLock.state = $TargetState
+                $latestLock.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+                $latestLock.updated_by = "teamlead-control/recover"
+                Set-NoteField -obj $latestLock -value "Manual reset to $TargetState"
+                if ($TargetState -notin @("in_progress", "qa")) {
+                    Set-ObjectField -obj $latestLock -name "run_id" -value ""
+                }
+                return $null
+            } | Out-Null
             Write-Host ('[OK] Task ' + $TaskId + ' reset to ' + $TargetState) -ForegroundColor Green
         }
 
         "normalize-locks" {
-            $locks = Read-TaskLocks
-            $validLocks = @{}
-            $removed = New-Object System.Collections.Generic.List[string]
-            if ($locks.locks) {
-                foreach ($p in $locks.locks.PSObject.Properties) {
-                    $k = [string]$p.Name
-                    if ($k -match '^(BACKEND|SHOP-FE|ADMIN-FE)-\d+$') {
-                        $validLocks[$k] = $p.Value
-                    } else {
-                        $removed.Add($k) | Out-Null
+            $removed = Update-TaskLocksData {
+                param($latest)
+                $validLocks = @{}
+                $removedLocal = New-Object System.Collections.Generic.List[string]
+                if ($latest.locks) {
+                    foreach ($p in $latest.locks.PSObject.Properties) {
+                        $k = [string]$p.Name
+                        if ($k -match '^(BACKEND|SHOP-FE|ADMIN-FE)-\d+$') {
+                            $validLocks[$k] = $p.Value
+                        } else {
+                            $removedLocal.Add($k) | Out-Null
+                        }
                     }
                 }
+                $latest.locks = $validLocks
+                return @($removedLocal.ToArray())
             }
-            $locks.locks = $validLocks
-            Write-TaskLocks $locks
             if ($removed.Count -gt 0) {
                 Write-Host '[OK] Removed non-canonical task lock keys:' -ForegroundColor Green
                 foreach ($k in $removed) {
@@ -1813,6 +2809,40 @@ function Invoke-Recover {
 
         "baseline-clean" {
             Invoke-BaselineClean
+        }
+
+        "full-clean" {
+            Write-Host '[INFO] Running full-clean (baseline-clean + reap-stale + status)...' -ForegroundColor Cyan
+            Invoke-BaselineClean
+
+            Write-Host '[INFO] full-clean step 2/3: reap-stale...' -ForegroundColor Yellow
+            $regScript = Join-Path $scriptDir "worker-registry.ps1"
+            & $regScript -Action health-check
+            try { Reconcile-WorkerRegistryFromPanes | Out-Null } catch {}
+
+            if (Test-Path $monitorPidFile) {
+                $savedPid = (Get-Content $monitorPidFile -Raw).Trim()
+                try {
+                    $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
+                    if (-not $proc) {
+                        Remove-Item $monitorPidFile -Force
+                        Write-Host '[OK] Cleaned stale monitor PID file' -ForegroundColor Green
+                    }
+                } catch {
+                    Remove-Item $monitorPidFile -Force
+                }
+            }
+
+            try {
+                $clean = Cleanup-StaleApprovalRouters -Verbose
+                if ($clean.removed -gt 0) {
+                    Write-Host ('[OK] cleaned stale approval-router entries: removed=' + $clean.removed + ', killed=' + $clean.killed) -ForegroundColor Green
+                }
+            } catch {}
+
+            Write-Host '[INFO] full-clean step 3/3: status...' -ForegroundColor Yellow
+            Invoke-Status
+            Write-Host '[OK] full-clean done' -ForegroundColor Green
         }
     }
 }
@@ -1917,15 +2947,25 @@ function Invoke-AddLock {
         state = "assigned"
         updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
         updated_by = "teamlead-control/add-lock"
+        run_id = ""
         note = ""
     }
 
-    # Add to locks (convert PSCustomObject to hashtable for mutation)
-    $locksHash = @{}
-    $locks.locks.PSObject.Properties | ForEach-Object { $locksHash[$_.Name] = $_.Value }
-    $locksHash[$TaskId] = $newLock
-    $locks.locks = $locksHash
-    Write-TaskLocks $locks
+    $created = Update-TaskLocksData {
+        param($latest)
+        if ($latest.locks.PSObject.Properties.Name -contains $TaskId) {
+            return $false
+        }
+        $locksHash = @{}
+        $latest.locks.PSObject.Properties | ForEach-Object { $locksHash[$_.Name] = $_.Value }
+        $locksHash[$TaskId] = $newLock
+        $latest.locks = $locksHash
+        return $true
+    }
+    if (-not $created) {
+        Write-Host ('[WARN] Task ' + $TaskId + ' already has lock after refresh') -ForegroundColor Yellow
+        return
+    }
 
     Write-Host ('[OK] Lock created: ' + $TaskId + ' -> assigned') -ForegroundColor Green
 }
@@ -1955,6 +2995,7 @@ function Invoke-Archive {
         exit 1
     }
     $domain = $wConfig.domain
+    Sync-TaskAttemptHistoryFromLocks -TaskId $TaskId | Out-Null
 
     $lock = $null
     if ($locks.locks.PSObject.Properties.Name -contains $TaskId) {
@@ -1967,6 +3008,18 @@ function Invoke-Archive {
     if ($lock.state -notin @("completed", "qa_passed", "blocked", "archiving")) {
         Write-Host ('[FAIL] Task ' + $TaskId + " state='" + $lock.state + "' cannot archive.") -ForegroundColor Red
         Write-Host '       Required state: completed / qa_passed / blocked / archiving' -ForegroundColor Yellow
+        exit 1
+    }
+
+    # 全局归档门禁：仅当所有活跃任务都处于可归档态时才允许 archive
+    $gate = Get-ArchiveGateContext -locks $locks
+    $blocking = @()
+    $blocking += @($gate.dispatch_todo | Where-Object { $_ -ne $TaskId })
+    $blocking += @($gate.running | Where-Object { $_ -ne $TaskId })
+    $blocking += @($gate.other_active | Where-Object { -not $_.StartsWith($TaskId + ":") })
+    if ($blocking.Count -gt 0) {
+        Write-Host ('[FAIL] Archive blocked: non-archive-ready active tasks still exist: ' + ($blocking -join ', ')) -ForegroundColor Red
+        Write-Host '       Rule: only when all active tasks are qa_passed/archiving/completed can archive proceed.' -ForegroundColor Yellow
         exit 1
     }
 
@@ -2034,10 +3087,7 @@ function Invoke-Archive {
         )
         try {
             $jobsLocal = Read-ArchiveJobs
-            $jobsHashLocal = @{}
-            if ($jobsLocal.jobs) {
-                foreach ($p in $jobsLocal.jobs.PSObject.Properties) { $jobsHashLocal[$p.Name] = $p.Value }
-            }
+            $jobsHashLocal = Convert-ToArchiveJobMap $jobsLocal.jobs
             $entry = if ($jobsHashLocal.ContainsKey($jobId)) { $jobsHashLocal[$jobId] } else { @{} }
             $entry.job_id = $jobId
             $entry.task_id = $TaskId
@@ -2062,14 +3112,18 @@ function Invoke-Archive {
     }
     $markArchiveBlocked = {
         param([string]$lockNote, [string]$jobReason)
-        $locksLocal = Read-TaskLocks
-        if ($locksLocal.locks.PSObject.Properties.Name -contains $TaskId) {
-            $locksLocal.locks.$TaskId.state = "blocked"
-            $locksLocal.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-            $locksLocal.locks.$TaskId.updated_by = "teamlead-control/archive"
-            Set-NoteField -obj $locksLocal.locks.$TaskId -value $lockNote
-            Write-TaskLocks $locksLocal
-        }
+        Update-TaskLocksData {
+            param($latest)
+            if ($latest.locks.PSObject.Properties.Name -contains $TaskId) {
+                $latestLock = $latest.locks.$TaskId
+                $latestLock.state = "blocked"
+                $latestLock.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+                $latestLock.updated_by = "teamlead-control/archive"
+                Set-NoteField -obj $latestLock -value $lockNote
+                Set-ObjectField -obj $latestLock -name "run_id" -value ""
+            }
+            return $null
+        } | Out-Null
         & $upsertArchiveJob -status "blocked" -docId $docTaskId -commitId $commitTaskId -docStatus "blocked" -commitStatus "blocked" -note $lockNote -blockedReason $jobReason
     }
 
@@ -2077,11 +3131,22 @@ function Invoke-Archive {
     & $upsertArchiveJob -status "starting" -docId "" -commitId "" -docStatus "pending" -commitStatus "pending" -note "Archive initializing" -blockedReason ""
 
     # 先进入 archiving 中间态，等待 doc-updater + repo-committer 回传收口
-    $locks.locks.$TaskId.state = "archiving"
-    $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-    $locks.locks.$TaskId.updated_by = "teamlead-control/archive"
-    Set-NoteField -obj $locks.locks.$TaskId -value "Archive started: waiting doc-updater + repo-committer"
-    Write-TaskLocks $locks
+    Update-TaskLocksData {
+        param($latest)
+        if ($latest.locks.PSObject.Properties.Name -notcontains $TaskId) {
+            throw ("Task missing during archive commit: " + $TaskId)
+        }
+        $latestLock = $latest.locks.$TaskId
+        if ([string]$latestLock.state -notin @("completed", "qa_passed", "blocked", "archiving")) {
+            throw ("Task state drifted before archive commit: " + $TaskId + " state=" + [string]$latestLock.state)
+        }
+        $latestLock.state = "archiving"
+        $latestLock.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+        $latestLock.updated_by = "teamlead-control/archive"
+        Set-NoteField -obj $latestLock -value "Archive started: waiting doc-updater + repo-committer"
+        Set-ObjectField -obj $latestLock -name "run_id" -value ""
+        return $null
+    } | Out-Null
     & $upsertArchiveJob -status "running" -docId "" -commitId "" -docStatus "pending" -commitStatus "pending" -note "Archive started: waiting doc-updater + repo-committer" -blockedReason ""
 
     # Trigger doc-updater（归档一致性）
@@ -2108,6 +3173,17 @@ function Invoke-Archive {
         Write-Host '[FAIL] doc-updater response missing docTaskId.' -ForegroundColor Red
         & $markArchiveBlocked -lockNote "Archive blocked: doc-updater missing docTaskId" -jobReason "doc_updater_missing_doc_task_id"
         exit 1
+    }
+    $docPaneId = ""
+    if ($docResp.workerPane) {
+        $docPaneId = [string]$docResp.workerPane
+    } elseif ($docResp.docUpdaterPane) {
+        $docPaneId = [string]$docResp.docUpdaterPane
+    }
+    if ($docPaneId) {
+        Ensure-ApprovalRouter -TaskId $docTaskId -WorkerName "doc-updater" -WorkerPaneId $docPaneId -TeamLeadPaneId $tlPaneId
+    } else {
+        Write-Host '[WARN] doc-updater pane not returned, cannot auto-attach approval-router.' -ForegroundColor Yellow
     }
     & $upsertArchiveJob -status "running" -docId $docTaskId -commitId "" -docStatus "pending" -commitStatus "pending" -note "Doc updater dispatched" -blockedReason ""
 
@@ -2143,6 +3219,13 @@ function Invoke-Archive {
         & $markArchiveBlocked -lockNote "Archive blocked: repo-committer missing commitTaskId" -jobReason "repo_committer_missing_commit_task_id"
         exit 1
     }
+    $commitPaneId = if ($commitResp.paneId) { [string]$commitResp.paneId } else { "" }
+    $commitWorker = if ($commitResp.worker) { [string]$commitResp.worker } else { "repo-committer" }
+    if ($commitPaneId) {
+        Ensure-ApprovalRouter -TaskId $commitTaskId -WorkerName $commitWorker -WorkerPaneId $commitPaneId -TeamLeadPaneId $tlPaneId
+    } else {
+        Write-Host '[WARN] repo-committer pane not returned, cannot auto-attach approval-router.' -ForegroundColor Yellow
+    }
 
     # 记录 archive job，交给 route-monitor 根据回调推进到 completed/blocked
     & $upsertArchiveJob -status "running" -docId $docTaskId -commitId $commitTaskId -docStatus "pending" -commitStatus "pending" -note "Archive running: waiting doc-updater + repo-committer success" -blockedReason ""
@@ -2161,9 +3244,16 @@ function Invoke-Archive {
 # ============================================================
 switch ($Action) {
     "bootstrap"   { Invoke-Bootstrap }
-    "dispatch"    { Invoke-Dispatch }
-    "dispatch-qa" { Invoke-DispatchQA }
+    "dispatch"    {
+        $dispatchMutex = Enter-DispatchMutex
+        try { Invoke-Dispatch } finally { if ($dispatchMutex) { try { $dispatchMutex.ReleaseMutex() | Out-Null } catch {}; try { $dispatchMutex.Dispose() } catch {} } }
+    }
+    "dispatch-qa" {
+        $dispatchMutex = Enter-DispatchMutex
+        try { Invoke-DispatchQA } finally { if ($dispatchMutex) { try { $dispatchMutex.ReleaseMutex() | Out-Null } catch {}; try { $dispatchMutex.Dispose() } catch {} } }
+    }
     "status"      { Invoke-Status }
+    "requeue"     { Invoke-Requeue }
     "recover"     { Invoke-Recover }
     "add-lock"    { Invoke-AddLock }
     "archive"     { Invoke-Archive }

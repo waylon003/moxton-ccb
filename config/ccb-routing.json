@@ -25,7 +25,7 @@
       "mcp": ["playwright", "vitest"]
     },
     "SHOP-FE-QA": {
-      "provider": "gemini",
+      "provider": "codex",
       "repo": "E:\\nuxt-moxton",
       "mcp": ["playwright"]
     },
@@ -61,7 +61,7 @@
       "action": "立即派遣 DOC-UPDATER 更新 02-api/ 文档"
     },
     "batch": {
-      "condition": "当前轮次所有任务状态为 completed",
+      "condition": "当前轮次所有任务状态已收口（completed 或已进入可归档闭环）",
       "action": "派遣 DOC-UPDATER 做全量文档一致性检查"
     }
   }

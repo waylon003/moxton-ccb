@@ -426,8 +426,21 @@ function Resolve-ApprovalRequest([string]$requestId, [string]$decision, [string]
     }
 }
 
+function Get-CurrentTaskRunId {
+    $locks = Read-JsonRetry -path $locksPath
+    if (-not $locks -or -not $locks.locks) { return "" }
+    if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) { return "" }
+    $lock = $locks.locks.$TaskId
+    if (-not $lock) { return "" }
+    if ($lock.PSObject.Properties.Name -contains "run_id" -and $lock.run_id) {
+        return [string]$lock.run_id
+    }
+    return ""
+}
+
 function Append-RouteInbox([string]$status, [string]$body) {
-    $routeId = Get-ShortHash("$WorkerName|$TaskId|$status|$body|$(Get-Date -Format o)")
+    $currentRunId = Get-CurrentTaskRunId
+    $routeId = Get-ShortHash("$WorkerName|$TaskId|$status|$currentRunId|$body|$(Get-Date -Format o)")
     return Invoke-WithFileLock -lockPath $routerLockPath -Script {
         $inbox = Read-JsonRetry -path $inboxPath
         if (-not $inbox) {
@@ -448,6 +461,7 @@ function Append-RouteInbox([string]$status, [string]$body) {
             task = $TaskId
             status = $status
             body = $body
+            run_id = $currentRunId
             created_at = (Get-Date -Format "o")
             processed = $false
             processed_at = $null
@@ -459,20 +473,16 @@ function Append-RouteInbox([string]$status, [string]$body) {
     }
 }
 
-function Mark-TaskBlocked([string]$note) {
-    $locks = Read-JsonRetry -path $locksPath
-    if (-not $locks -or -not $locks.locks) { return }
-    if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) { return }
-    $locks.locks.$TaskId.state = "blocked"
-    $locks.locks.$TaskId.updated_at = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-    $locks.locks.$TaskId.updated_by = "approval-router"
-    $locks.locks.$TaskId.note = $note
-    Write-JsonUtf8 -path $locksPath -data $locks
-}
-
 function Get-ApprovalPromptType([string]$analysisText) {
     if (-not $analysisText) { return "command_approval" }
     $text = [string]$analysisText
+    if (
+        $text.IndexOf("Question 1/1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        ($text.IndexOf("Approve Once", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+         $text.IndexOf("Approve this Session", [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+    ) {
+        return "menu_choice"
+    }
     if (
         $text.IndexOf("Would you like to make the following edits?", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $text.IndexOf("Press enter to confirm or esc to cancel", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
@@ -484,6 +494,19 @@ function Get-ApprovalPromptType([string]$analysisText) {
 }
 
 function Send-DecisionToWorker([string]$decisionKey, [string]$promptType = "command_approval") {
+    if ($promptType -eq "menu_choice") {
+        if ($decisionKey -eq "y") {
+            # Menu-style approval UI (1=Approve Once) uses Enter to submit highlighted option.
+            wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r" | Out-Null
+            return
+        }
+        # Menu-style deny uses option 3 (Deny Once).
+        wezterm cli send-text --pane-id $WorkerPaneId --no-paste "3" | Out-Null
+        Start-Sleep -Milliseconds 120
+        wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r" | Out-Null
+        return
+    }
+
     if ($promptType -eq "edit_confirm") {
         if ($decisionKey -eq "y") {
             wezterm cli send-text --pane-id $WorkerPaneId --no-paste "`r" | Out-Null
@@ -502,8 +525,43 @@ try {
     $policy = Read-JsonRetry -path $PolicyPath
     if (-not $policy) {
         $policy = @{
+            allowed_mcp_patterns = @(
+                "report_route",
+                "check_routes",
+                "clear_route",
+                "mcp__route__report_route",
+                "mcp__route__check_routes",
+                "mcp__route__clear_route",
+                "route.report_route",
+                "route.check_routes",
+                "route.clear_route",
+                "mcp__vitest__",
+                "mcp__vitest__set_project_root",
+                "mcp__vitest__list_tests",
+                "mcp__vitest__run_tests",
+                "mcp__vitest__analyze_coverage",
+                "vitest.set_project_root",
+                "vitest.list_tests",
+                "vitest.run_tests",
+                "vitest.analyze_coverage",
+                "vitest MCP server wants to run the tool ""set_project_root""",
+                "vitest MCP server wants to run the tool ""list_tests""",
+                "vitest MCP server wants to run the tool ""run_tests""",
+                "vitest MCP server wants to run the tool ""analyze_coverage""",
+                "mcp__context7__",
+                "mcp__context7__resolve-library-id",
+                "mcp__context7__query-docs",
+                "context7.resolve-library-id",
+                "context7.query-docs",
+                "context7 MCP server wants to run the tool ""resolve-library-id""",
+                "context7 MCP server wants to run the tool ""query-docs""",
+                "mcp__playwright__browser_",
+                "playwright.browser_",
+                "tool ""browser_""",
+                "playwright MCP server wants to run the tool ""browser_"""
+            )
             approval_prompt_patterns = @("Approval needed", "requires approval", "permission", "approve")
-            low_risk_patterns = @("mcp__vitest__", "mcp__playwright__", "mcp__context7__", "git status", "git diff", "rg ")
+            low_risk_patterns = @("mcp__vitest__", "mcp__playwright__", "mcp__context7__", "mcp__route__", "git status", "git diff", "rg ", "pnpm type-check", "pnpm build", "npm run build", "node test-", "curl ", "Invoke-WebRequest")
             high_risk_patterns = @("rm ", "Remove-Item", "git reset", "git clean", "npm install", "pnpm add", "pip install")
         }
     }
@@ -582,8 +640,11 @@ try {
                 $analysisText = ($snippetLines -join "`n")
                 $promptType = Get-ApprovalPromptType -analysisText $analysisText
                 $risk = "unknown"
+                # 优先命中“允许的 MCP 工具”白名单（例如指定 Playwright/Vitest/route 工具）。
+                if ($policy.allowed_mcp_patterns -and (Contains-Any -text $analysisText -patterns $policy.allowed_mcp_patterns)) {
+                    $risk = "low"
                 # route 回调是协作主链路，默认自动批准，避免 Team Lead 被无效审批打断。
-                if ($analysisText.IndexOf("report_route", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                } elseif ($analysisText.IndexOf("report_route", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                     $risk = "low"
                 } elseif (Contains-Any -text $analysisText -patterns $policy.high_risk_patterns) {
                     $risk = "high"
@@ -625,7 +686,6 @@ try {
                         if ($resolved) {
                             $body = "[APPROVAL_TIMEOUT] request_id=$($existingPending.id) worker=$WorkerName pane=$WorkerPaneId decision=$decision"
                             $routeId = Append-RouteInbox -status "blocked" -body $body
-                            Mark-TaskBlocked -note ("Approval timeout: " + $existingPending.id)
                             Write-Output ("[APPROVAL-TIMEOUT] request_id=" + $existingPending.id + " route_id=" + $routeId + " decision=" + $decision)
                             $lastDecisionFingerprint = $fingerprint
                             $lastDecisionAt = Get-Date
@@ -699,7 +759,6 @@ try {
                 # route body 只保留结构化字段，禁止拼接原始 snippet，避免中文/控制字符乱码
                 $body = "[APPROVAL_REQUEST] request_id=$requestId worker=$WorkerName pane=$WorkerPaneId risk=$($request.risk) fp=$fingerprint"
                 $routeId = Append-RouteInbox -status "blocked" -body $body
-                Mark-TaskBlocked -note ("Approval required: " + $requestId)
 
                 $nowWake = Get-Date
                 $shouldWake = $true

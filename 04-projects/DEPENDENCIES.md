@@ -1,11 +1,11 @@
 ---
-last_verified: 2026-02-26
-verified_against: [BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
+last_verified: 2026-03-03
+verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
 # 跨项目依赖关系
 
-> **更新时间**: 2026-02-26
+> **更新时间**: 2026-03-03
 > **用途**: 清晰展示三个项目之间的 API 依赖和数据流向
 
 ## 依赖关系图
@@ -57,8 +57,8 @@ verified_against: [BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 | `/categories/tree/active` | GET | 获取分类树 | ✅ 同步 |
 | `/cart/*` | GET/POST/PUT/DELETE | 购物车操作 | ✅ 同步 |
 | `/cart/merge` | POST | 合并游客购物车 | ✅ 同步 |
-| `/orders` | POST/GET | 创建订单 / 订单列表 | ✅ 同步 |
-| `/orders/:id` | GET | 订单详情 | ✅ 同步 |
+| `/orders` | POST/GET | 创建订单 / 订单列表（订单项图片字段为 `items.product.images[]`） | ✅ 同步 |
+| `/orders/:id` | GET | 订单详情（订单项图片字段为 `items.product.images[]`） | ✅ 同步 |
 | `/payments/stripe/create-intent` | POST | 创建 Stripe 支付意图 | ✅ 同步 |
 | `/payments/:orderId` | GET | 查询支付状态 | ✅ 同步 |
 | `/addresses` | GET/POST/PUT/DELETE | 收货地址管理 | ✅ 同步 |
@@ -66,6 +66,16 @@ verified_against: [BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 | `/notifications` | GET/PUT/DELETE | 通知管理 | ✅ 同步 |
 | `/offline-orders` | POST | 提交咨询订单 | ✅ 同步 |
 | `/upload/image` | POST | 图片上传 | ✅ 同步 |
+
+#### 契约补充（2026-03-03）
+
+- 依据 `BACKEND-013`，订单相关接口中的订单项图片字段统一为 `items[].product.images: string[]`
+- 依据 `SHOP-FE-008`，商城前端订单详情渲染按 `item.product.images?.[0]` 读取首图
+- 依据 `SHOP-FE-009`，订单记录/咨询记录页面仅做头部布局与筛选框宽度调整，不涉及接口、字段、状态码变化
+- 依据 `SHOP-FE-010`，移动端导航重构仅涉及前端 UI 交互（头像下拉、悬浮搜索按钮）与登录失败提示本地化，不新增 API 端点或字段
+- 依据 `SHOP-FE-010` QA `PASS` 回传，`/auth/login` 在失败路径仍可能返回后端原始英文 `message`，前端展示层需做本地化映射
+- 依据 `SHOP-FE-011`，移动端地址页改造仅涉及前端布局与弹窗交互优化，不新增地址接口、字段或状态码
+- 依据 `SHOP-FE-011` QA `PASS` 回传，地址失败路径（`/addresses` 相关 `500`）前端展示层需输出本地化文案，不透传后端原始错误文本
 
 ### moxton-lotadmin → moxton-lotapi
 

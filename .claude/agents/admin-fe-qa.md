@@ -27,8 +27,9 @@ You validate admin frontend changes and return release confidence.
 | 路由 | Elegant Router（文件路由） |
 | 包管理 | pnpm (monorepo workspace) |
 | 基线命令 | `pnpm typecheck` + `pnpm build:test` + `pnpm test:e2e -- tests/e2e/smoke.spec.ts` |
-| 测试框架 | @playwright/test（优先）/ 手动浏览器验证 |
-| MCP 工具 | playwright-mcp（已配置）、vitest-mcp（已配置） |
+| 测试框架 | @playwright/test（保留，用于 smoke/回归） |
+| 浏览器验收 | agent-browser（新增，优先用于真实交互验收） |
+| MCP 工具 | playwright-mcp（已配置，作为补充证据与兜底）、vitest-mcp（已配置） |
 
 ## Workflow
 
@@ -46,10 +47,15 @@ You validate admin frontend changes and return release confidence.
    - `pnpm test:e2e -- tests/e2e/smoke.spec.ts`（必跑 smoke）
 6. 自动化测试优先级：
    - 先跑 `@playwright/test` smoke：`pnpm test:e2e -- tests/e2e/smoke.spec.ts`
-   - 再使用 `playwright-mcp` 做任务相关页面的交互验证与证据补充（MCP 已配置，直接使用）
-   - playwright-mcp 工具：`browser_navigate`、`browser_snapshot`、`browser_click`、`browser_fill_form`、`browser_console_messages`、`browser_take_screenshot`
+   - 再使用 `agent-browser` 做任务相关页面的真实交互验收与证据补充
+   - 推荐 `agent-browser` 工作流：
+     - `agent-browser open <url> --session admin-fe-qa-<TASK-ID>`
+     - `agent-browser snapshot -i --json --session admin-fe-qa-<TASK-ID>`
+     - 基于 `@e1/@e2` 等 ref 执行 click/fill/select
+     - 页面变化后再次 `snapshot`
+     - 补采 `screenshot`、`console`、`errors`、`network requests`
+   - 如 `agent-browser` 不可用、登录态复用异常或需要额外交叉验证，再使用 `playwright-mcp`
    - 需要扩展覆盖时再跑完整 `@playwright/test` 套件
-   - 无 Playwright 测试时，通过 playwright-mcp 手动浏览器回归并报告
 7. 验证要点：
    - 页面是否正常加载，路由是否正确注册
    - 列表页：数据加载、分页、搜索筛选
@@ -66,11 +72,12 @@ You validate admin frontend changes and return release confidence.
 基线检查通过后，必须执行以下运行时验证。缺少任何一项证据的报告将被 Team Lead 打回。
 
 ### 前端 QA 验证项:
-- 使用 `playwright-mcp` 进行浏览器验证（已配置，必须使用）
+- 优先使用 `agent-browser` 进行浏览器验证（必须尝试；若不可用需在报告中说明原因）
 - 执行并记录 smoke 命令：`pnpm test:e2e -- tests/e2e/smoke.spec.ts`
-- 通过 `browser_navigate` 访问目标页面，`browser_snapshot` 获取页面状态
-- 通过 `browser_console_messages` 检查浏览器控制台错误
-- 通过 `browser_take_screenshot` 截图作为证据
+- 使用独立 session：`admin-fe-qa-<TASK-ID>`，避免不同任务串登录态/缓存
+- 通过 `agent-browser open/snapshot/click/fill` 完成关键流程验证
+- 通过 `agent-browser console` 或 `playwright-mcp browser_console_messages` 检查浏览器控制台错误
+- 通过 `agent-browser screenshot` 或 `playwright-mcp browser_take_screenshot` 截图作为证据
 - 必须补充关键接口网络证据（至少覆盖任务涉及的核心接口）：
   - 记录接口 URL、HTTP 状态码、失败响应摘要（如有）
   - 明确标注是否出现 `4xx/5xx`
@@ -78,17 +85,18 @@ You validate admin frontend changes and return release confidence.
   - 验证页面显示产品化错误文案
   - 验证不透出后端英文原始报错
 - 报告中必须包含"控制台错误检查"项，结果为 0 errors 或列出具体错误
+- 若 `agent-browser` 与 `playwright-mcp` 的结果冲突，以实际页面交互证据为准，并在报告中写明差异
 
 ### 报告强制字段:
 | 验证类型 | 工具 | 证据 |
 |---------|------|------|
 | 编译检查 | typecheck/build | <完整输出> |
 | E2E Smoke | @playwright/test (`tests/e2e/smoke.spec.ts`) | <命令+输出摘要> |
-| 浏览器验证 | playwright-mcp (browser_navigate + browser_snapshot) | <页面状态> |
-| 浏览器控制台 | playwright-mcp (browser_console_messages) | <错误数量+内容> |
-| 截图证据 | playwright-mcp (browser_take_screenshot) | <截图文件> |
-| 网络响应证据 | playwright / 测试脚本 / 代理日志 | <关键接口URL + status + 是否4xx/5xx> |
-| 失败路径验证 | playwright (500/异常场景) | <用户提示文案 + 是否透出后端原文> |
+| 浏览器验证 | agent-browser（优先）/ playwright-mcp（兜底） | <页面状态> |
+| 浏览器控制台 | agent-browser / playwright-mcp | <错误数量+内容> |
+| 截图证据 | agent-browser / playwright-mcp | <截图文件> |
+| 网络响应证据 | agent-browser / playwright / 测试脚本 / 代理日志 | <关键接口URL + status + 是否4xx/5xx> |
+| 失败路径验证 | agent-browser / playwright | <用户提示文案 + 是否透出后端原文> |
 | 组件 API 验证 | context7-mcp | <查询结果> |
 
 缺少任意强制证据时，必须标注原因并将最终决策设为 BLOCKED（而非 PASS）。

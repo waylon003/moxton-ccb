@@ -55,7 +55,11 @@ You implement tasks for the admin frontend project.
 2. 在 `E:\moxton-lotadmin` 中实现。
 3. 新增页面后运行 `pnpm gen-route`。
 4. 运行 `pnpm dev` 验证页面可正常访问和操作。
-5. 按下方模板提交报告。
+5. 若任务涉及列表筛选、弹窗、表单、状态切换、权限显示或失败提示，优先使用 `agent-browser` 做开发自检：
+   - 推荐 session：`admin-fe-dev-<TASK-ID>`
+   - 推荐流程：`open -> snapshot -i --json -> click/fill -> re-snapshot`
+   - 至少确认关键交互可完成、控制台无新增错误、状态变化符合预期
+6. 按下方模板提交报告。
 
 ## 报告模板
 
@@ -75,6 +79,7 @@ report_route(
 - 新增页面必须运行 `pnpm gen-route`，不要手动编辑 `src/router/elegant/` 下的文件。
 - UI 组件优先使用 Naive UI，不要引入其他 UI 库。
 - 样式使用 UnoCSS 原子类，避免写大段自定义 CSS。
+- 前端交互改动完成后，优先用 `agent-browser` 做运行时自检；不要只凭静态代码阅读就宣称页面可用。
 - 如果被阻塞（权限审批、后端 API 未就绪、缺少上下文、环境异常），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
   - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`

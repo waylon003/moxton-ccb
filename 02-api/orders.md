@@ -535,7 +535,10 @@ GET /orders/guest/query?email=guest@example.com&phone=+86-13800138000
         {
           "product": {
             "id": "clx1234567892",
-            "name": "iPhone 15"
+            "name": "iPhone 15",
+            "images": [
+              "https://example.com/image1.jpg"
+            ]
           },
           "quantity": 2,
           "unitPrice": 1299.00,
@@ -1347,3 +1350,7 @@ PENDING → CANCELLED (用户取消)
 - ✅ 明确历史回读兼容：旧 `SHIPPING_INFO_UPDATED` 归一化为 `SHIPPED`
 - ✅ 明确 webhook 历史结构化字段：`metadata.source` + `reasonCode`
 - ✅ 明确权限语义：HTTP 200 + `body.code`（401/403）
+
+**2026-03-03**:
+- ✅ 修复 `GET /orders/guest/query` 示例中的历史遗漏：`items[].product` 补充 `images: string[]`
+- ✅ 与 `OrderResponseDTO` 契约保持一致（依据：`BACKEND-013`、`SHOP-FE-008`）

@@ -96,15 +96,28 @@ Moxton-CCB 是三个业务仓库的共享知识与编排中心：
 | 操作 | 命令 |
 |------|------|
 | 初始化 | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action bootstrap` |
-| 派遣开发任务 | `... -Action dispatch -TaskId <ID>` |
-| 派遣 QA 任务 | `... -Action dispatch-qa -TaskId <ID>` |
+| 派遣开发任务 | `... -Action dispatch -TaskId <ID> [-DispatchEngine codex\|gemini]` |
+| 派遣 QA 任务 | `... -Action dispatch-qa -TaskId <ID> [-DispatchEngine codex\|gemini]` |
+| 回退任务但不自动派遣 | `... -Action requeue -TaskId <ID> -TargetState <assigned\|waiting_qa> -RequeueReason "..."` |
 | 归档并触发提交 | `... -Action archive -TaskId <ID> [-NoPush] [-CommitMessage "..."]` |
 | 查看状态 | `... -Action status` |
-| 恢复操作 | `... -Action recover -RecoverAction <reap-stale\|restart-worker\|reset-task\|normalize-locks>` |
+| 恢复操作 | `... -Action recover -RecoverAction <reap-stale\|restart-worker\|reset-task\|normalize-locks\|baseline-clean\|full-clean>` |
 | 补建任务锁 | `... -Action add-lock -TaskId <ID>` |
 | 批准审批请求 | `... -Action approve-request -RequestId <ID>` |
 | 拒绝审批请求 | `... -Action deny-request -RequestId <ID>` |
 | 手动触发 repo-committer（可选） | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\trigger-repo-committer.ps1" -TaskId <ID> -Force [-Push] [-CommitMessage "..."]` |
+
+派遣规则（强约束）：
+- `dispatch/dispatch-qa` 必须串行执行（一次只跑一条命令）。
+- 禁止在并行 shell 同时发两条 dispatch 指令。
+- 同角色并发由控制器 worker pool 自动分配（如 `shop-fe-dev` 与 `shop-fe-dev-2`），不是靠并发敲命令实现。
+- 引擎默认取 `worker-map.json`，特殊场景可用 `-DispatchEngine codex|gemini` 临时覆盖。
+- `baseline-clean` 为手动恢复动作，不会在每次派遣前自动执行。
+- `requeue` 只记录原因并修改状态，不通知旧 worker、不自动重新派遣。
+- QA 复审驳回后默认走：`requeue -TargetState waiting_qa`，随后再 `dispatch-qa`，且默认 fresh QA context。
+- 每次 `dispatch/dispatch-qa` 都会生成新的 `run_id`；Worker 必须在后续每次 `report_route` 中原样带回。
+- `route-monitor` 会基于 `run_id + 当前锁状态` 忽略被 requeue 或重派后的旧 worker 迟到 route，避免主任务状态被写回漂移。
+- 前端链路保留 `Playwright` 作为 smoke/回归基座，同时加入 `agent-browser` 作为真实浏览器交互验收增强层；不做替换。
 
 ### 新会话流程
 
@@ -130,7 +143,7 @@ Moxton-CCB 是三个业务仓库的共享知识与编排中心：
 - 规划阶段必须使用 `planning-gate`：
   - 先澄清需求，再输出方案对比和推荐方案。
   - 规划阶段只读 `E:\moxton-ccb` 文档中心，禁止扫描三业务仓代码目录（除非用户明确要求代码级排查）。
-  - 任务落地走原子流程：`assign_task.py --split-preview` 先预览，用户确认后再一次性落盘。
+  - 任务文档由模板落地到 `01-tasks/active/*`；禁止 Team Lead 使用 `assign_task.py` 写入任务（`--intake/--split-request/--lock-task`）。
   - 最终可执行产物必须落到 `01-tasks/active/<domain>/<TASK-ID>.md`。
   - 禁止把 `docs/plans/*` 当作执行输入。
 - 执行阶段必须回到控制器主链路：
@@ -148,15 +161,15 @@ TaskId 命名强约束（CRITICAL）：
 - 禁止使用 `-FIX`、`-V2` 等后缀作为 TaskId；修复说明应放到任务标题或 `note`
 
 ```
-assigned → in_progress → waiting_qa → qa → completed
+assigned → in_progress → waiting_qa → qa → qa_passed → archiving → completed
                 ↓                      ↓
-              blocked               fail → retry
+              blocked ←──────── requeue ────────
 ```
 
 | 路径 | 用途 |
 |------|------|
-| `01-tasks/active/*` | 活跃任务文档 |
-| `01-tasks/completed/*` | 已完成任务 |
+| `01-tasks/active/*` | 活跃任务文档（任务主记录，含 QA 摘要回写） |
+| `01-tasks/completed/*` | 已完成任务（保留任务主记录与 QA 摘要） |
 | `01-tasks/TASK-LOCKS.json` | 任务锁状态 |
 | `config/worker-map.json` | Worker 角色映射 |
 | `config/worker-panels.json` | Worker Pane 注册表 |
@@ -188,6 +201,7 @@ Team Lead 读取文档时必须按以下优先级判断用途，禁止混用：
    - `01-tasks/completed/*`
    - `05-verification/*`
    - 用途：复盘、估时、风险预判、问题排查
+   - 说明：`01-tasks/*` 保存任务主记录与 QA 摘要索引；`05-verification/*` 保存原始验收证据与完整报告
    - 禁止用途：覆盖当前流程规则、替代当前任务标准
 
 冲突处理规则：
@@ -219,7 +233,7 @@ Team Lead 读取文档时必须按以下优先级判断用途，禁止混用：
    - 该规则由 `PreToolUse` hook 硬拦截（仅允许通过 `teamlead-control.ps1` 修改任务锁）
 11. **Worker 禁止“先提问再等待确认”**；需要决策时必须 `report_route(status=blocked, ...)`
 12. **禁止在规划阶段对 `01-tasks/active/*` 批量删除（`rm/del`）临时任务文件**
-13. **若 Worker 窗口被手动关闭，必须先执行 `recover -RecoverAction reap-stale` 与 `reset-task`，再重新 dispatch**
+13. **若 Worker 窗口被手动关闭，必须先执行 `recover -RecoverAction reap-stale` 与 `requeue/reset-task`，再重新 dispatch**
 14. **禁止无退出条件轮询**：同一 `get-text/check_routes` 在无变化时最多连续 3 轮，之后必须转入 `status/recover`
 15. **禁止 Team Lead 直接用 `assign_task.py` 做写入动作**（建任务/改锁/拆分）；仅允许 `--doctor/--standard-entry/--list/--scan/--show-lock/--show-task-locks/--team-prompt`
 
@@ -230,9 +244,9 @@ Team Lead 读取文档时必须按以下优先级判断用途，禁止混用：
 ### 阻塞与心跳
 
 - 收到任务后 60 秒内，Worker 必须至少发送一次：
-  - `report_route(..., status="in_progress", body="stage=started; ...")`
+  - `report_route(..., status="in_progress", body="stage=started; ...", run_id="<dispatch_run_id>")`
 - 遇阻塞（权限审批卡住、缺少上下文/API 契约、环境异常、依赖未就绪）必须 2 分钟内发送：
-  - `report_route(..., status="blocked", body="blocker_type=...; question=...; attempted=...; next_action_needed=...")`
+  - `report_route(..., status="blocked", body="blocker_type=...; question=...; attempted=...; next_action_needed=...", run_id="<dispatch_run_id>")`
 - 禁止静默等待。
 
 ### 脏工作区策略
@@ -250,6 +264,10 @@ Team Lead 读取文档时必须按以下优先级判断用途，禁止混用：
 - 每个检查项必须带 `evidence` 文件路径，且文件可访问。
 - `checks.network.has_5xx=true` 时禁止 `success`。
 - 不满足以上规则时，`route-monitor` 会自动把 `success` 降级为 `blocked`。
+- 前端 QA 的浏览器验收默认顺序：
+  - 先跑 `Playwright smoke`
+  - 再跑 `agent-browser` 做真实交互验收
+  - 必要时再用 `playwright-mcp` 补截图、console、network 证据
 
 ---
 
@@ -264,7 +282,9 @@ Team Lead 读取文档时必须按以下优先级判断用途，禁止混用：
 | Committer (`*-committer`) | `-a never` | 提交流程禁止交互卡住 |
 | 前端 (`shop-fe-*`/`admin-fe-*`) | 额外 `--enable js_repl` | 支持实时调试前端页面 |
 
-所有 Codex worker 统一 `--sandbox workspace-write` 沙箱兜底。
+Codex 沙箱策略：
+- `*-qa`：`--sandbox danger-full-access`（避免测试/起服务时 `spawn EPERM`）
+- 其他角色：`--sandbox workspace-write`
 
 dispatch 指令禁止 Codex 使用子代理（sub-agent），避免 pane 交互卡死。
 
@@ -304,8 +324,25 @@ dispatch 后由控制器自动确保后台能力：
 - `approval-router.ps1 -Continuous`（常驻，主链路）
 - `route-watcher.ps1`（可选，仅用于通知触发）
 
+卡住 / 崩溃判定规则（强制）：
+- Team Lead 先跑 `status`，再决定是否恢复；禁止只凭 pane 没输出就判定卡住。
+- 若任务处于 `in_progress/qa` 且 `status` 显示 `worker=... [OFFLINE-DRIFT]` 或 `next=...worker 已离线`：
+  - 判定为崩溃/终端消失/执行漂移
+  - 处理顺序：`recover -RecoverAction reap-stale` -> `recover -RecoverAction restart-worker` -> `requeue` -> 重新 `dispatch/dispatch-qa`
+- 若存在 pending approval request：
+  - 判定为等待审批，不是卡住
+  - 必须先 `approve-request/deny-request`
+- 若 worker 在线、无审批，但 `status` 出现 `[STALE-RUN>...m]` 或 `next=开发长时间无新 route / QA 长时间无新 route`：
+  - 判定为卡住
+  - 处理顺序：`restart-worker` + `requeue`
+    - 开发任务：`requeue -TargetState assigned -RequeueReason "stale_run"`
+    - QA 任务：`requeue -TargetState waiting_qa -RequeueReason "stale_run"`
+- 若任务收到 `blocked` route：
+  - 判定为明确阻塞，不是卡住
+  - 由 Team Lead 根据 blocker 信息做审批、补上下文或重新派遣
+
 approval-router 清理策略：
-- 派遣前由 `baseline-clean` 统一清理 stale router（单次清理，避免重复）
+- `baseline-clean` 仅作为显式恢复工具；不要默认在每次派遣前清理 stale router / pending route / approval
 - `recover -RecoverAction reap-stale` 会清理 pane 已消失或进程失活的 router 记录
 
 ```bash

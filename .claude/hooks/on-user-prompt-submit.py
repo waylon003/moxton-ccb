@@ -35,7 +35,8 @@ else:
                 "Bootstrap 已完成。所有操作必须通过统一控制器：\n"
                 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\\moxton-ccb\\scripts\\teamlead-control.ps1" -Action <action>\n'
                 "可用 Action: dispatch / dispatch-qa / status / recover / add-lock / archive / approve-request / deny-request\n"
-                "规划阶段任务产出必须走 assign_task 原子流程：先 --split-preview，确认后再正式写入。\n"
+                "规划阶段禁止使用 assign_task.py 写入任务文件（--intake/--split-request/--lock-task 等）。\n"
+                "规划阶段只输出任务草案；确认后按模板写入 01-tasks/active/*，再用 teamlead-control add-lock + dispatch 进入执行链路。\n"
                 "禁止在 01-tasks/active 下用 rm/del 批量删除临时任务文件。\n"
                 "禁止无退出条件轮询 worker 输出；同一 get-text/check_routes 无变化最多 3 轮，随后必须转 status/recover。\n"
                 "禁止直接调用子脚本。禁止 powershell -Command 执行复杂逻辑。"

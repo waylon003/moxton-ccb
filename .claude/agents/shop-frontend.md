@@ -61,8 +61,12 @@ You implement tasks for the Nuxt storefront project.
 1. 阅读任务文档和必读文档。
 2. 在 `E:\nuxt-moxton` 中实现。
 3. 运行 `pnpm dev` 验证页面可正常访问和操作。
-4. 检查 SSR 兼容性（避免在 setup 中直接访问 `window`/`document`，使用 `onMounted` 或 `process.client`）。
-5. 按下方模板提交报告。
+4. 若任务涉及 UI、交互、登录态、筛选、弹窗、失败提示或响应式布局，优先使用 `agent-browser` 做开发自检：
+   - 推荐 session：`shop-fe-dev-<TASK-ID>`
+   - 推荐流程：`open -> snapshot -i --json -> click/fill -> re-snapshot`
+   - 至少确认页面可加载、关键交互可完成、控制台无新增错误
+5. 检查 SSR 兼容性（避免在 setup 中直接访问 `window`/`document`，使用 `onMounted` 或 `process.client`）。
+6. 按下方模板提交报告。
 
 ## 报告模板
 
@@ -82,6 +86,7 @@ report_route(
 - 所有组件使用 `<script setup lang="ts">`，Composition API。
 - 所有用户可见文本必须走 i18n，不要硬编码。
 - 注意 SSR 兼容性，浏览器 API 必须在 `onMounted` 或 `process.client` 中使用。
+- 前端交互改动完成后，优先用 `agent-browser` 做运行时自检；不要只凭静态代码阅读就宣称页面可用。
 - 如果被阻塞（权限审批、后端 API 未就绪、缺少上下文、环境异常），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
   - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`

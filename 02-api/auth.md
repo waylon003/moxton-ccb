@@ -158,6 +158,9 @@ Login with username/email and password.
   "success": false
 }
 ```
+说明（2026-03-03 / SHOP-FE-010 一致性补录）：
+- 认证接口返回结构与状态码无变更，`401` 仍可能返回后端原始英文 `message`（例如 `Invalid credentials`）。
+- 前端展示层应基于状态码/业务语义做本地化提示，避免直接透传后端原始英文文案。
 
 **Account Deactivated (401)**
 ```json

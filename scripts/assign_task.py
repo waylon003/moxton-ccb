@@ -143,7 +143,17 @@ RUNNER_LOCK_REL = Path("01-tasks") / "ACTIVE-RUNNER.md"
 TASK_LOCKS_REL = Path("01-tasks") / "TASK-LOCKS.json"
 VERIFICATION_RUNS_REL = Path("05-verification") / "ccb-runs"
 VALID_RUNNERS = {"codex", "claude", "none"}
-VALID_TASK_STATES = {"assigned", "in_progress", "waiting_qa", "qa", "blocked", "completed"}
+# Keep task-lock states aligned with teamlead-control/route-monitor lifecycle.
+VALID_TASK_STATES = {
+    "assigned",
+    "in_progress",
+    "waiting_qa",
+    "qa",
+    "qa_passed",
+    "archiving",
+    "blocked",
+    "completed",
+}
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
 DEFAULT_TASK_LOCK_TTL_HOURS = 24.0
 

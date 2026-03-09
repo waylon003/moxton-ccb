@@ -80,7 +80,7 @@ Worker 角色映射定义在 `config/worker-map.json`：
 | 前缀 | Dev Worker | QA Worker | 引擎 | 工作目录 |
 |------|-----------|-----------|------|---------|
 | BACKEND | backend-dev | backend-qa | codex | E:\moxton-lotapi |
-| SHOP-FE | shop-fe-dev | shop-fe-qa | gemini | E:\nuxt-moxton |
+| SHOP-FE | shop-fe-dev | shop-fe-qa | dev=gemini / qa=codex | E:\nuxt-moxton |
 | ADMIN-FE | admin-fe-dev | admin-fe-qa | codex | E:\moxton-lotadmin |
 
 **控制器操作：**
@@ -95,6 +95,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 # 派遣 QA 任务
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch-qa -TaskId BACKEND-009
 
+# 复审驳回后回退任务（只改状态/记原因，不自动派遣）
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action requeue -TaskId BACKEND-009 -TargetState waiting_qa -RequeueReason "review_reject"
+
 # 手动派遣 repo-committer（可选，通常由 archive 自动触发）
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\trigger-repo-committer.ps1" -TaskId SHOP-FE-004 -Force
 
@@ -107,7 +110,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 # 恢复操作
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action recover -RecoverAction reap-stale
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action recover -RecoverAction restart-worker -WorkerName backend-dev
-powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action recover -RecoverAction reset-task -TaskId BACKEND-009 -TargetState assigned
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action requeue -TaskId BACKEND-009 -TargetState assigned -RequeueReason "manual_recovery"
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action requeue -TaskId BACKEND-009 -TargetState waiting_qa -RequeueReason "review_reject"
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action recover -RecoverAction normalize-locks
 
 # 补建任务锁（任务文件存在但 TASK-LOCKS.json 无条目时）
@@ -123,6 +127,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - 禁止在规划阶段对 `01-tasks/active/*` 执行批量 `rm/del` 清理临时文件
 - 禁止无退出条件地重复轮询 `wezterm cli get-text` / `check_routes`
 - 上述两条（send-text / TASK-LOCKS 直改）由 `PreToolUse` hook 硬拦截
+- 若被 hook 拦截“禁止直接编辑 TASK-LOCKS.json”，必须改走：
+  - 开发转 QA：`requeue -TargetState waiting_qa` 后再 `dispatch-qa`
+  - QA 回开发：`requeue -TargetState assigned` 后再 `dispatch`
 
 ## Mandatory Workflow
 
@@ -149,7 +156,7 @@ TaskId 命名强约束（CRITICAL）：
    - **需求讨论阶段**：按 `planning-gate` 一次一问澄清需求，直到范围/验收/依赖明确。
    - **编写开发计划**：按 `planning-gate` 输出方案对比与推荐方案。
    - **信息源约束**：规划阶段只读 `E:\moxton-ccb` 文档中心，禁止扫描三业务仓代码目录（除非用户明确要求代码级排查）。
-   - **任务生成约束**：任务文件必须通过 `scripts/assign_task.py` split 流程生成（先 `--split-preview`，确认后再正式写入），禁止手写临时任务文件后删除重建。
+   - **任务生成约束**：禁止 Team Lead 使用 `scripts/assign_task.py` 写入任务（`--intake/--split-request/--lock-task`）。规划阶段先产出任务草案，确认后按模板写入 `01-tasks/active/*`，再通过 `teamlead-control.ps1 -Action add-lock` 建锁。
    - **产出物路径（CRITICAL）**：
      - 最终可执行文档必须保存到：`01-tasks/active/<domain>/<TASK-ID>.md`
      - `<domain>` 取值：`backend`、`shop-frontend`、`admin-frontend`
@@ -167,9 +174,9 @@ TaskId 命名强约束（CRITICAL）：
 
 6. **Execution 分支**：
   - 派遣前控制器会自动做 Worker Registry health-check。
-   - 若检测到任务处于执行态但对应 Worker pane 已离线（`OFFLINE-DRIFT`），必须先：
+  - 若检测到任务处于执行态但对应 Worker pane 已离线（`OFFLINE-DRIFT`），必须先：
      - `recover -RecoverAction reap-stale`
-     - `recover -RecoverAction reset-task -TaskId <ID> -TargetState assigned`
+     - `requeue -TaskId <ID> -TargetState assigned -RequeueReason "offline_drift"`
      - `recover -RecoverAction restart-worker -WorkerName <worker>`
      - 然后再 `dispatch`
   - 通过控制器 `dispatch` 派遣任务（自动启动 worker、更新锁、读取任务文件）。
@@ -191,12 +198,33 @@ TaskId 命名强约束（CRITICAL）：
      - 前端 QA 必须包含：`checks.ui`、`checks.console`、`checks.network`、`checks.failure_path`（均 pass=true）
      - 后端 QA 必须包含：`checks.contract`、`checks.network`、`checks.failure_path`（均 pass=true）
      - `checks.network.has_5xx` 必须为 false
-     - 任一缺失：不得接受 success，按 `blocked` 处理并立即重新派遣 QA 补证据
+     - 任一缺失：不得接受 success，按 `blocked` 处理；先 `requeue -TargetState waiting_qa`，再重新派遣 QA 补证据
      - 禁止仅凭“已验证/已通过”口头描述放行
    - approval watcher 检测到高风险权限请求后：执行 `status` 查看 pending request，然后用以下命令决策：
      - `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action approve-request -RequestId <REQUEST-ID>`
      - `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action deny-request -RequestId <REQUEST-ID>`
    - 发现跨角色依赖时由 Team Lead 中继
+
+### 卡住 / 崩溃判定（强制按 status 决策）
+
+- Team Lead 不靠主观感觉判断，统一先执行：
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status`
+- 判定顺序固定如下：
+  1. 若任务处于 `in_progress/qa`，且 `status` 显示 `worker=... [OFFLINE-DRIFT]` 或 `next=...worker 已离线`
+     - 结论：这是崩溃/终端消失/执行漂移，不是普通卡住
+     - 处理：`recover -RecoverAction reap-stale` -> `recover -RecoverAction restart-worker` -> `requeue` -> 重新 `dispatch/dispatch-qa`
+  2. 若存在 pending approval request
+     - 结论：这不是卡住，是等待 Team Lead 审批
+     - 处理：先 `approve-request/deny-request`，禁止直接重启 worker
+  3. 若 worker 在线、无审批，但 `status` 出现 `[STALE-RUN>...m]` 或 `next=开发长时间无新 route / QA 长时间无新 route`
+     - 结论：这是卡住
+     - 处理：优先 `restart-worker`，随后按阶段 `requeue`
+       - 开发任务：`requeue -TargetState assigned -RequeueReason "stale_run"`
+       - QA 任务：`requeue -TargetState waiting_qa -RequeueReason "stale_run"`
+  4. 若任务已收到 `blocked` 回传
+     - 结论：这不是卡住，是 worker 明确上报阻塞
+     - 处理：根据 `blocked` 内容做审批、补上下文或重新派遣
+- 禁止在未执行 `status` 的情况下，仅凭 pane 没输出就认定 worker 卡住。
 
 7. **QA**：
    - Dev 完成后必须安排 QA worker 验证（`dispatch-qa`）
@@ -206,7 +234,12 @@ TaskId 命名强约束（CRITICAL）：
     - 前端：`ui + console + network + failure_path`
     - 后端：`contract + network + failure_path`
     - 每项都要有真实证据路径（可访问文件）
+  - 前端 QA 浏览器验收默认顺序：`Playwright smoke -> agent-browser 真实交互验收 -> playwright-mcp 证据补充`
   - QA 通过只表示验收通过，不自动提交代码
+  - 若 Team Lead 复审驳回，先 `requeue -TargetState waiting_qa`，不要把驳回原因直接发到旧 QA pane
+  - 复审驳回后的重新验收默认使用 fresh QA context；只有“补证据/补报告格式”才考虑复用原 QA pane
+  - 每次 `dispatch/dispatch-qa` 都会生成新的 `run_id`；Worker 必须在后续每次 `report_route` 中原样带回
+  - `route-monitor` 会基于 `run_id + 当前锁状态` 忽略已被 requeue 的旧 worker 迟到 route；不要再尝试人工把旧 route 当作新结果接收
   - 仅在 Team Lead 执行 `archive` 且任务文件成功从 `active` 迁移到 `completed` 后，才触发 `repo-committer`
 
 8. **收口**：

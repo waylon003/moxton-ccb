@@ -34,10 +34,13 @@ $instructions = @"
 ║    task: <TASK-ID>                                                 ║
 ║    status: success / fail / blocked                                ║
 ║    body: <修改的文件、执行的命令、测试结果>                           ║
+║    run_id: <派遣消息中的 route_run_id，若提供则必须原样回传>          ║
 ║                                                                  ║
 ║  ⚠️ 禁止行为：                                                     ║
 ║  - 未调用 report_route 就声明任务完成                               ║
 ║  - 省略 status 或 body 字段                                        ║
+║  - 已收到 route_run_id 却不在 report_route 中回传                    ║
+║  - 前端任务只做静态阅读，不做真实浏览器交互就宣称页面可用            ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
 "@

@@ -130,14 +130,17 @@ description: 指导 Team Lead 如何为 Moxton 项目编写正确的开发计划
 └── backend/            # BACKEND 任务
 ```
 
-**使用 Python 脚本创建**:
+**创建方式（Team Lead 主链路）**:
 ```bash
-# 方式 1: 使用 --intake 接收需求并生成任务
-python scripts/assign_task.py --intake "实现订单支付状态查询接口"
+# 1) 按模板创建任务文档到 01-tasks/active/<domain>/
+# 2) 通过控制器补建任务锁
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId <TASK-ID>
 
-# 方式 2: 使用 --split-request 拆分跨角色需求
-python scripts/assign_task.py --split-request "实现 Stripe webhook + 管理后台状态 UI + 商城支付状态"
+# 3) 进入执行链路派遣
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId <TASK-ID>
 ```
+
+> 约束：Team Lead 禁止使用 `assign_task.py` 写入任务（`--intake/--split-request/--lock-task`），仅允许只读诊断参数。
 
 ### 步骤 4: 填写任务内容
 
@@ -221,25 +224,19 @@ SHOP-FE-002 依赖 BACKEND-002 完成
 - [ ] **放置正确目录** - 任务放在 `01-tasks/active/[角色]/` 下
 - [ ] **填写完整内容** - 概述、技术方案、实施步骤、验收标准
 - [ ] **参考示例文档** - 查看 `examples/` 中的示例
-- [ ] **添加任务锁** - 使用 `--lock-task` 添加任务锁
+- [ ] **添加任务锁** - 使用 `teamlead-control.ps1 -Action add-lock` 添加任务锁
 
 ### 常用命令
 
 ```bash
 # 查看当前活动任务
-python scripts/assign_task.py --list
-
-# 接收需求并生成任务
-python scripts/assign_task.py --intake "需求描述"
-
-# 拆分跨角色需求
-python scripts/assign_task.py --split-request "需求描述"
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status
 
 # 添加任务锁
-python scripts/assign_task.py --lock-task BACKEND-001 --task-owner team-lead --task-state assigned
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId BACKEND-001
 
-# 分派任务给 worker（通过 WezTerm dispatch）
-.\scripts\dispatch-task.ps1 -WorkerName "backend-dev" -TaskId "BACKEND-001" -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-001.md" -Raw)
+# 分派任务给 worker（统一控制器）
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId BACKEND-001
 
 # 查看任务锁状态
 python scripts/assign_task.py --show-task-locks
@@ -259,7 +256,10 @@ python scripts/assign_task.py --show-task-locks
 
 **操作**:
 ```bash
-python scripts/assign_task.py --intake "开发订单支付状态查询接口"
+# 1) 基于 tech-spec-backend.md 创建任务文件
+# 2) add-lock + dispatch
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId BACKEND-001
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId BACKEND-001
 ```
 
 **生成任务**:
@@ -277,7 +277,10 @@ python scripts/assign_task.py --intake "开发订单支付状态查询接口"
 
 **操作**:
 ```bash
-python scripts/assign_task.py --intake "实现管理后台订单列表页面"
+# 1) 基于 tech-spec-admin-frontend.md 创建任务文件
+# 2) add-lock + dispatch
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId ADMIN-FE-001
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId ADMIN-FE-001
 ```
 
 **生成任务**:
@@ -296,7 +299,12 @@ python scripts/assign_task.py --intake "实现管理后台订单列表页面"
 
 **操作**:
 ```bash
-python scripts/assign_task.py --split-request "实现 Stripe 支付流程：前端集成 Stripe Elements + 后端处理支付 webhook"
+# 1) 分别创建 SHOP-FE 与 BACKEND 子任务文档（按模板）
+# 2) 分别 add-lock + dispatch（可串行下发，worker pool 自动并行）
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId SHOP-FE-001
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId BACKEND-001
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId SHOP-FE-001
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId BACKEND-001
 ```
 
 **生成任务**:

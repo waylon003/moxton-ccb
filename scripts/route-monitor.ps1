@@ -18,12 +18,15 @@ $scriptDir = Split-Path $PSScriptRoot -Parent
 $locksFile = Join-Path $scriptDir "01-tasks\TASK-LOCKS.json"
 $inboxFile = Join-Path $scriptDir "mcp\route-server\data\route-inbox.json"
 $docTriggerScript = Join-Path $scriptDir "scripts\trigger-doc-updater.ps1"
+$commitTriggerScript = Join-Path $scriptDir "scripts\trigger-repo-committer.ps1"
 $docSyncStateFile = Join-Path $scriptDir "config\api-doc-sync-state.json"
 $archiveJobsFile = Join-Path $scriptDir "config\archive-jobs.json"
+$taskAttemptHistoryFile = Join-Path $scriptDir "config\task-attempt-history.json"
 $processedRoutes = @{}
 $processedRoutesFile = Join-Path $env:TEMP "moxton-ccb-processed-routes.json"
 $activeSnapshotFile = Join-Path $env:TEMP "moxton-active-snapshot.json"
 $activeTaskIds = @()
+$taskLocksMutexName = "Global\\MoxtonTaskLocksFileMutex"
 
 function Write-Utf8NoBomFile([string]$path, [string]$content) {
     $dir = Split-Path -Parent $path
@@ -43,6 +46,63 @@ function Read-Json([string]$path) {
     }
 }
 
+function Read-TaskLocks {
+    if (-not (Test-Path $locksFile)) {
+        return @{ version = "1.0"; rev = 0; updated_at = (Get-Date -Format "o"); locks = @{} }
+    }
+    $raw = Get-Content $locksFile -Raw -Encoding UTF8
+    $parsed = $raw | ConvertFrom-Json
+    if (-not $parsed.PSObject.Properties['rev']) {
+        $parsed | Add-Member -NotePropertyName rev -NotePropertyValue 0 -Force
+    }
+    if (-not $parsed.PSObject.Properties['version']) {
+        $parsed | Add-Member -NotePropertyName version -NotePropertyValue "1.0" -Force
+    }
+    if (-not $parsed.PSObject.Properties['locks']) {
+        $parsed | Add-Member -NotePropertyName locks -NotePropertyValue @{} -Force
+    }
+    return $parsed
+}
+
+function Write-TaskLocks($data) {
+    if (-not $data.version) { $data.version = "1.0" }
+    if (-not $data.PSObject.Properties['rev']) {
+        $data | Add-Member -NotePropertyName rev -NotePropertyValue 0 -Force
+    }
+    if (-not $data.PSObject.Properties['locks']) {
+        $data | Add-Member -NotePropertyName locks -NotePropertyValue @{} -Force
+    }
+    $data.rev = [int]$data.rev + 1
+    $data.updated_at = Get-Date -Format "o"
+    Write-Utf8NoBomFile -path $locksFile -content ($data | ConvertTo-Json -Depth 12)
+}
+
+function Invoke-WithTaskLocksMutex([scriptblock]$Script, [int]$TimeoutMs = 10000, [int]$RetryMs = 120) {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $mutex = $null
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, $taskLocksMutexName)
+        $acquired = $false
+        while (-not $acquired) {
+            try {
+                $acquired = $mutex.WaitOne($RetryMs)
+            } catch [System.Threading.AbandonedMutexException] {
+                $acquired = $true
+            }
+            if ($acquired) { break }
+            if ($sw.ElapsedMilliseconds -ge $TimeoutMs) {
+                throw "Timeout acquiring TASK-LOCKS mutex."
+            }
+        }
+        return & $Script
+    } finally {
+        if ($mutex) {
+            try { $mutex.ReleaseMutex() | Out-Null } catch {}
+            try { $mutex.Dispose() } catch {}
+        }
+    }
+}
+
 function Convert-ObjectToHashtable($obj) {
     $hash = @{}
     if ($null -eq $obj) { return $hash }
@@ -50,6 +110,340 @@ function Convert-ObjectToHashtable($obj) {
         $hash[$p.Name] = $p.Value
     }
     return $hash
+}
+
+function Set-ObjectField($obj, [string]$name, $value) {
+    if (-not $obj -or -not $name) { return }
+    if (-not $obj.PSObject.Properties[$name]) {
+        $obj | Add-Member -NotePropertyName $name -NotePropertyValue $value -Force
+    } else {
+        $obj.$name = $value
+    }
+}
+
+function Read-TaskAttemptHistory {
+    $default = @{
+        version = "1.0"
+        updated_at = (Get-Date -Format "o")
+        attempts = @()
+    }
+    if (-not (Test-Path $taskAttemptHistoryFile)) { return $default }
+    try {
+        $raw = Get-Content $taskAttemptHistoryFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $raw.attempts) {
+            $raw | Add-Member -NotePropertyName attempts -NotePropertyValue @() -Force
+        }
+        if (-not $raw.version) {
+            $raw | Add-Member -NotePropertyName version -NotePropertyValue "1.0" -Force
+        }
+        return $raw
+    } catch {
+        return $default
+    }
+}
+
+function Write-TaskAttemptHistory($state) {
+    if (-not $state.version) { $state.version = "1.0" }
+    if (-not $state.attempts) { $state.attempts = @() }
+    $state.updated_at = Get-Date -Format "o"
+    Write-Utf8NoBomFile -path $taskAttemptHistoryFile -content ($state | ConvertTo-Json -Depth 12)
+}
+
+function Get-TaskAttemptList($history) {
+    if (-not $history -or -not $history.attempts) { return @() }
+    return @($history.attempts)
+}
+
+function New-TaskAttemptId([string]$TaskId, [string]$Phase) {
+    return ("ATT-" + (Get-Date -Format "yyyyMMddHHmmssfff") + "-" + $TaskId + "-" + $Phase + "-" + (Get-Random -Minimum 1000 -Maximum 9999))
+}
+
+function Resolve-PhaseFromWorkerName([string]$WorkerName) {
+    if (-not $WorkerName) { return $null }
+    if ($WorkerName -match '-qa(?:-\d+)?$') { return "qa" }
+    if ($WorkerName -match '-dev(?:-\d+)?$') { return "dev" }
+    return $null
+}
+
+function Resolve-TaskLockStateFromRoute([string]$Status, [string]$WorkerName) {
+    $safeStatus = if ($null -eq $Status) { "" } else { [string]$Status }
+    switch ($safeStatus.ToLower()) {
+        "success" {
+            if ($WorkerName -match "-qa(?:-\d+)?$") { return "qa_passed" }
+            if ($WorkerName -match "-dev(?:-\d+)?$") { return "waiting_qa" }
+            return "waiting_qa"
+        }
+        "fail" { return "blocked" }
+        "blocked" { return "blocked" }
+        "in_progress" { return "in_progress" }
+        "qa" { return "qa" }
+        "waiting_qa" { return "waiting_qa" }
+        default { return $Status }
+    }
+}
+
+function Get-CurrentTaskLock([string]$TaskId) {
+    $locks = Read-TaskLocks
+    if (-not $locks -or -not $locks.locks) { return $null }
+    if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) { return $null }
+    return $locks.locks.$TaskId
+}
+
+function Should-ApplyPrimaryTaskRoute {
+    param(
+        [string]$TaskId,
+        [string]$WorkerName,
+        [string]$RouteRunId
+    )
+
+    if (-not $TaskId -or $TaskId -notmatch '^(BACKEND|SHOP-FE|ADMIN-FE)-\d+$') {
+        return @{ apply = $true; reason = "" }
+    }
+
+    if ($WorkerName -notmatch '-(dev|qa)(?:-\d+)?$') {
+        return @{ apply = $true; reason = "" }
+    }
+
+    $lock = Get-CurrentTaskLock -TaskId $TaskId
+    if (-not $lock -or -not $lock.state) {
+        return @{ apply = $true; reason = "" }
+    }
+
+    $lockRunId = ""
+    if ($lock.PSObject.Properties.Name -contains "run_id" -and $lock.run_id) {
+        $lockRunId = [string]$lock.run_id
+    }
+    $state = ([string]$lock.state).ToLower()
+    if ($lockRunId) {
+        if ([string]::IsNullOrWhiteSpace($RouteRunId)) {
+            return @{
+                apply = $false
+                reason = ("task_state=" + $state + "; lock_run_id=" + $lockRunId + "; route_run_id_missing")
+            }
+        }
+        if ([string]$RouteRunId -ne $lockRunId) {
+            return @{
+                apply = $false
+                reason = ("task_state=" + $state + "; lock_run_id=" + $lockRunId + "; route_run_id=" + [string]$RouteRunId + "; stale_run_id")
+            }
+        }
+    }
+
+    if ($state -in @("in_progress", "qa")) {
+        return @{ apply = $true; reason = "" }
+    }
+
+    return @{
+        apply = $false
+        reason = ("task_state=" + $state + "; stale_or_unassigned_worker_route")
+    }
+}
+
+function Update-TaskAttemptHistoryFromRoute {
+    param(
+        [string]$TaskId,
+        [string]$Status,
+        [string]$WorkerName,
+        [string]$ResolvedLockState,
+        [string]$RunId
+    )
+
+    $phase = Resolve-PhaseFromWorkerName -WorkerName $WorkerName
+    if (-not $phase) { return }
+    if (-not $TaskId) { return }
+
+    $history = Read-TaskAttemptHistory
+    $attempts = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @(Get-TaskAttemptList $history)) {
+        $attempts.Add($item) | Out-Null
+    }
+
+    $latest = $null
+    if (-not [string]::IsNullOrWhiteSpace($RunId)) {
+        for ($i = $attempts.Count - 1; $i -ge 0; $i--) {
+            $attempt = $attempts[$i]
+            if (-not $attempt) { continue }
+            if ([string]$attempt.task_id -ne $TaskId) { continue }
+            if ([string]$attempt.phase -ne $phase) { continue }
+            if ([string]$attempt.run_id -ne [string]$RunId) { continue }
+            $latest = $attempt
+            break
+        }
+    }
+    if (-not $latest) {
+        for ($i = $attempts.Count - 1; $i -ge 0; $i--) {
+            $attempt = $attempts[$i]
+            if (-not $attempt) { continue }
+            if ([string]$attempt.task_id -ne $TaskId) { continue }
+            if ([string]$attempt.phase -ne $phase) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($RunId) -and -not [string]::IsNullOrWhiteSpace([string]$attempt.run_id) -and [string]$attempt.run_id -ne [string]$RunId) {
+                continue
+            }
+            $latest = $attempt
+            break
+        }
+    }
+
+    $now = Get-Date -Format "o"
+    if (-not $latest) {
+        $latest = [pscustomobject]@{
+            attempt_id = (New-TaskAttemptId -TaskId $TaskId -Phase $phase)
+            task_id = $TaskId
+            phase = $phase
+            worker = $WorkerName
+            engine = ""
+            dispatch_action = "route-monitor/reconstructed"
+            run_id = $RunId
+            started_at = $now
+            ended_at = ""
+            result = "running"
+            final_state = ""
+            requeue_reason = ""
+            updated_by = "route-monitor/reconstructed"
+        }
+        $attempts.Add($latest) | Out-Null
+    }
+
+    $statusLower = if ($Status) { ([string]$Status).ToLower() } else { "" }
+    if (-not $latest.worker) { $latest.worker = $WorkerName }
+    if ($RunId -and ((-not $latest.PSObject.Properties['run_id']) -or [string]::IsNullOrWhiteSpace([string]$latest.run_id))) {
+        Set-ObjectField -obj $latest -name "run_id" -value $RunId
+    }
+
+    switch ($statusLower) {
+        "success" {
+            $latest.result = "success"
+            $latest.final_state = $ResolvedLockState
+            $latest.ended_at = $now
+            $latest.updated_by = "route-monitor/success"
+        }
+        "blocked" {
+            $latest.result = "blocked"
+            $latest.final_state = $ResolvedLockState
+            $latest.ended_at = $now
+            $latest.updated_by = "route-monitor/blocked"
+        }
+        "fail" {
+            $latest.result = "blocked"
+            $latest.final_state = $ResolvedLockState
+            $latest.ended_at = $now
+            $latest.updated_by = "route-monitor/fail"
+        }
+        "in_progress" {
+            $latest.result = "running"
+            $latest.final_state = $ResolvedLockState
+            $latest.updated_by = "route-monitor/in_progress"
+        }
+        "qa" {
+            $latest.result = "running"
+            $latest.final_state = $ResolvedLockState
+            $latest.updated_by = "route-monitor/qa"
+        }
+        "waiting_qa" {
+            $latest.result = "running"
+            $latest.final_state = $ResolvedLockState
+            $latest.updated_by = "route-monitor/waiting_qa"
+        }
+        default {
+            return
+        }
+    }
+
+    $history.attempts = @($attempts.ToArray())
+    Write-TaskAttemptHistory $history
+}
+
+function Convert-CommandOutputToJson($output) {
+    if ($null -eq $output) { return $null }
+    $lines = @()
+    if ($output -is [System.Array]) {
+        $lines = @($output | ForEach-Object { [string]$_ })
+    } else {
+        $lines = @(([string]$output) -split "`r?`n")
+    }
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $line = $lines[$i].Trim()
+        if (-not $line) { continue }
+        if ($line.StartsWith("{") -or $line.StartsWith("[")) {
+            try {
+                return ($line | ConvertFrom-Json)
+            } catch {}
+        }
+    }
+    return $null
+}
+
+function Try-RecoverArchiveCommitDispatch {
+    param(
+        $Job,
+        [string]$TaskId
+    )
+
+    if (-not $TaskId) {
+        return @{ kind = "invalid"; message = "missing_task_id" }
+    }
+    if (-not (Test-Path $commitTriggerScript)) {
+        return @{ kind = "invalid"; message = "trigger_repo_committer_script_missing" }
+    }
+
+    $pushRequired = $true
+    if ($Job -and $Job.PSObject.Properties.Name -contains "push_required") {
+        $pushRequired = Convert-ToBoolean -value $Job.push_required -default $true
+    }
+
+    $args = @("-TaskId", $TaskId, "-Force", "-EmitJson")
+    if ($TeamLeadPaneId) {
+        $args += @("-TeamLeadPaneId", $TeamLeadPaneId)
+    }
+    if ($pushRequired) {
+        $args += @("-Push")
+    }
+
+    $raw = & $commitTriggerScript @args 2>&1
+    $exitCode = $LASTEXITCODE
+    $resp = Convert-CommandOutputToJson -output $raw
+    if (-not $resp) {
+        return @{
+            kind = "invalid_response"
+            message = "trigger_repo_committer_no_json"
+            exit_code = $exitCode
+        }
+    }
+
+    $status = if ($resp.status) { [string]$resp.status } else { "" }
+    switch ($status) {
+        "dispatched" {
+            return @{
+                kind = "ok"
+                message = "repo_committer_dispatched"
+                commit_task_id = if ($resp.commitTaskId) { [string]$resp.commitTaskId } else { "" }
+                worker = if ($resp.worker) { [string]$resp.worker } else { "repo-committer" }
+                pane_id = if ($resp.paneId) { [string]$resp.paneId } else { "" }
+            }
+        }
+        "already_dispatched" {
+            return @{
+                kind = "ok"
+                message = "repo_committer_already_dispatched"
+                commit_task_id = if ($resp.commitTaskId) { [string]$resp.commitTaskId } else { "" }
+                worker = if ($resp.worker) { [string]$resp.worker } else { "repo-committer" }
+                pane_id = if ($resp.paneId) { [string]$resp.paneId } else { "" }
+            }
+        }
+        "queued_pending_worker" {
+            return @{
+                kind = "queued"
+                message = if ($resp.message) { [string]$resp.message } else { "committer_worker_unavailable" }
+            }
+        }
+        default {
+            return @{
+                kind = "failed"
+                message = if ($resp.message) { [string]$resp.message } else { ("status=" + $status + ", exit=" + $exitCode) }
+                exit_code = $exitCode
+            }
+        }
+    }
 }
 
 function Read-DocSyncState {
@@ -93,18 +487,45 @@ function Read-ArchiveJobs {
     if (-not (Test-Path $archiveJobsFile)) { return $default }
     try {
         $raw = Get-Content $archiveJobsFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $raw.jobs) {
-            $raw | Add-Member -NotePropertyName jobs -NotePropertyValue @{} -Force
+        $state = @{
+            version = if ($raw.version) { [string]$raw.version } else { "1.0" }
+            updated_at = if ($raw.updated_at) { [string]$raw.updated_at } else { (Get-Date -Format "o") }
+            jobs = Convert-ToArchiveJobMap $raw.jobs
         }
-        return $raw
+        return $state
     } catch {
         return $default
     }
 }
 
 function Write-ArchiveJobs($state) {
+    if (-not $state.version) { $state.version = "1.0" }
+    $state.jobs = Convert-ToArchiveJobMap $state.jobs
     $state.updated_at = Get-Date -Format "o"
     Write-Utf8NoBomFile -path $archiveJobsFile -content ($state | ConvertTo-Json -Depth 12)
+}
+
+function Convert-ToArchiveJobMap($jobsObj) {
+    $map = @{}
+    if ($null -eq $jobsObj) { return $map }
+
+    if ($jobsObj -is [System.Collections.IDictionary]) {
+        foreach ($k in $jobsObj.Keys) {
+            $name = [string]$k
+            if ($name -match '^ARCHIVE-[A-Z0-9\-]+$') {
+                $map[$name] = $jobsObj[$k]
+            }
+        }
+        return $map
+    }
+
+    foreach ($p in $jobsObj.PSObject.Properties) {
+        $name = [string]$p.Name
+        if ($name -match '^ARCHIVE-[A-Z0-9\-]+$') {
+            $map[$name] = $p.Value
+        }
+    }
+    return $map
 }
 
 function Mark-BackendDocSyncPending([string]$BackendTaskId, [string]$QaWorker) {
@@ -244,6 +665,149 @@ function Convert-ToBoolean($value, [bool]$default = $false) {
     return $default
 }
 
+function Convert-ToSingleLineText([string]$value, [int]$maxLength = 280) {
+    if ([string]::IsNullOrWhiteSpace($value)) { return "" }
+    $normalized = (($value -replace '\r?\n', ' ') -replace '\s+', ' ').Trim()
+    if ($normalized.Length -le $maxLength) { return $normalized }
+    return $normalized.Substring(0, $maxLength).TrimEnd() + "..."
+}
+
+function Resolve-TaskMarkdownPath([string]$TaskId) {
+    if ([string]::IsNullOrWhiteSpace($TaskId)) { return $null }
+
+    $roots = @(
+        (Join-Path $scriptDir "01-tasks\active"),
+        (Join-Path $scriptDir "01-tasks\completed")
+    )
+
+    foreach ($root in $roots) {
+        if (-not (Test-Path $root)) { continue }
+        $matches = @(Get-ChildItem -Path $root -Recurse -File -Filter "$TaskId*.md" -ErrorAction SilentlyContinue | Sort-Object FullName)
+        if ($matches.Count -eq 1) {
+            return $matches[0].FullName
+        }
+        if ($matches.Count -gt 1) {
+            $preferred = @($matches | Where-Object { $_.BaseName -eq $TaskId -or $_.BaseName -like ($TaskId + "-*") })
+            if ($preferred.Count -ge 1) {
+                return $preferred[0].FullName
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-QaPayload([string]$Body) {
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
+    try {
+        return ($Body | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        return $null
+    }
+}
+
+function Build-QaSummaryMarkdown {
+    param(
+        [string]$TaskId,
+        [string]$WorkerName,
+        [string]$Status,
+        [string]$Body,
+        [string]$Timestamp
+    )
+
+    $payload = Get-QaPayload -Body $Body
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("## QA 摘要（自动回写）") | Out-Null
+    $lines.Add("") | Out-Null
+    $lines.Add(('- 最后更新: `{0}`' -f $Timestamp)) | Out-Null
+    $lines.Add(('- QA Worker: `{0}`' -f $WorkerName)) | Out-Null
+    $lines.Add(('- 路由状态: `{0}`' -f $Status)) | Out-Null
+
+    if ($payload) {
+        $verdict = [string](Get-PropValue $payload "verdict")
+        $summary = Convert-ToSingleLineText -value ([string](Get-PropValue $payload "summary")) -maxLength 320
+        if (-not [string]::IsNullOrWhiteSpace($verdict)) {
+            $lines.Add(('- 验收结论: `{0}`' -f $verdict.Trim().ToUpper())) | Out-Null
+        }
+        if (-not [string]::IsNullOrWhiteSpace($summary)) {
+            $lines.Add("- 结论摘要: " + $summary) | Out-Null
+        }
+
+        $checks = Get-PropValue $payload "checks"
+        if ($checks) {
+            $lines.Add("- 证据索引:") | Out-Null
+            foreach ($prop in @($checks.PSObject.Properties | Sort-Object Name)) {
+                $checkName = [string]$prop.Name
+                $node = $prop.Value
+                $passValue = if (Convert-ToBoolean -value (Get-PropValue $node "pass") -default $false) { "PASS" } else { "FAIL" }
+                $evidence = Convert-ToStringArray (Get-PropValue $node "evidence")
+                if ($evidence.Count -gt 0) {
+                    $formattedEvidence = @($evidence | ForEach-Object { ('`{0}`' -f $_) }) -join ", "
+                    $lines.Add(('  - `{0}`: `{1}` -> {2}' -f $checkName, $passValue, $formattedEvidence)) | Out-Null
+                } else {
+                    $lines.Add(('  - `{0}`: `{1}`' -f $checkName, $passValue)) | Out-Null
+                }
+            }
+        }
+
+        $commands = Convert-ToStringArray (Get-PropValue $payload "commands")
+        if ($commands.Count -gt 0) {
+            $lines.Add("- 验证命令:") | Out-Null
+            foreach ($cmd in $commands) {
+                $lines.Add(('  - `{0}`' -f $cmd)) | Out-Null
+            }
+        }
+    } else {
+        $summaryText = Convert-ToSingleLineText -value $Body -maxLength 360
+        if (-not [string]::IsNullOrWhiteSpace($summaryText)) {
+            $lines.Add("- 回传摘要: " + $summaryText) | Out-Null
+        } else {
+            $lines.Add("- 回传摘要: （空）") | Out-Null
+        }
+    }
+
+    $lines.Add('- 原始证据仍以 `05-verification/` 中的文件为准。') | Out-Null
+    return (($lines -join "`r`n").TrimEnd() + "`r`n")
+}
+
+function Write-QaSummaryToTaskFile {
+    param(
+        [string]$TaskId,
+        [string]$WorkerName,
+        [string]$Status,
+        [string]$Body,
+        [string]$Timestamp
+    )
+
+    if ($WorkerName -notmatch "-qa(?:-\d+)?$") { return }
+    if ($Status -notin @("success", "blocked", "fail")) { return }
+
+    $taskPath = Resolve-TaskMarkdownPath -TaskId $TaskId
+    if (-not $taskPath) {
+        Write-Host ("  [WARN] QA summary write-back skipped, task file not found: " + $TaskId) -ForegroundColor Yellow
+        return
+    }
+
+    $raw = Get-Content -Path $taskPath -Raw -Encoding UTF8
+    $beginMarker = "<!-- AUTO-QA-SUMMARY:BEGIN -->"
+    $endMarker = "<!-- AUTO-QA-SUMMARY:END -->"
+    $summaryBody = Build-QaSummaryMarkdown -TaskId $TaskId -WorkerName $WorkerName -Status $Status -Body $Body -Timestamp $Timestamp
+    $replacement = $beginMarker + "`r`n" + $summaryBody.TrimEnd() + "`r`n" + $endMarker + "`r`n"
+
+    if ($raw -match [regex]::Escape($beginMarker) -and $raw -match [regex]::Escape($endMarker)) {
+        $pattern = "(?s)" + [regex]::Escape($beginMarker) + ".*?" + [regex]::Escape($endMarker) + "\r?\n?"
+        $updated = [regex]::Replace($raw, $pattern, $replacement, 1)
+    } else {
+        $trimmed = $raw.TrimEnd()
+        $updated = $trimmed + "`r`n`r`n" + $replacement
+    }
+
+    if ($updated -ne $raw) {
+        Write-Utf8NoBomFile -path $taskPath -content $updated
+        Write-Host ("  QA summary written back: " + $TaskId + " -> " + $taskPath) -ForegroundColor Cyan
+    }
+}
+
 function Resolve-EvidencePath([string]$pathText) {
     if ([string]::IsNullOrWhiteSpace($pathText)) { return $null }
     $trimmed = $pathText.Trim().Replace("/", "\")
@@ -314,7 +878,7 @@ function Validate-QaSuccessBody {
     if ($null -eq $checks) {
         $errors.Add("缺少 checks 对象") | Out-Null
     } else {
-        $isFrontendQa = ($WorkerName -in @("shop-fe-qa", "admin-fe-qa"))
+        $isFrontendQa = ($WorkerName -match "^(shop-fe|admin-fe)-qa(?:-\d+)?$")
         $requiredCheckKeys = if ($isFrontendQa) {
             @("ui", "console", "network", "failure_path")
         } else {
@@ -379,7 +943,7 @@ function Apply-QaSuccessGate {
     $statusLower = if ($Route.status) { ([string]$Route.status).ToLower() } else { "" }
     $fromText = if ($Route.from) { [string]$Route.from } else { "" }
 
-    if ($statusLower -ne "success" -or $fromText -notmatch "-qa$") {
+    if ($statusLower -ne "success" -or $fromText -notmatch "-qa(?:-\d+)?$") {
         return @{
             route = $Route
             downgraded = $false
@@ -424,46 +988,84 @@ function Update-TaskLockFromRoute {
         [string]$TaskId,
         [string]$Status,
         [string]$WorkerName,
-        [string]$Body
+        [string]$Body,
+        [string]$RouteRunId
     )
 
-    if (-not (Test-Path $locksFile)) { return }
-    $locks = Read-Json -path $locksFile
-    if (-not $locks -or -not $locks.locks) { return }
-    if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) { return }
-
-    $safeStatus = if ($null -eq $Status) { "" } else { [string]$Status }
-    $lockState = switch ($safeStatus.ToLower()) {
-        "success" {
-            if ($WorkerName -match "-qa$") { "completed" }
-            elseif ($WorkerName -match "-dev$") { "waiting_qa" }
-            else { "waiting_qa" }
-        }
-        "fail" { "blocked" }
-        "blocked" { "blocked" }
-        "in_progress" { "in_progress" }
-        "qa" { "qa" }
-        "waiting_qa" { "waiting_qa" }
-        default { $Status }
-    }
-
-    $locks.locks.$TaskId.state = $lockState
-    $locks.locks.$TaskId.updated_at = Get-Date -Format "o"
-    $locks.locks.$TaskId.updated_by = "route-monitor"
+    $lockState = Resolve-TaskLockStateFromRoute -Status $Status -WorkerName $WorkerName
     $safeBody = if ($null -eq $Body) { "" } else { [string]$Body }
     $bodyPreview = if ($safeBody.Length -gt 100) { $safeBody.Substring(0, 100) + "..." } else { $safeBody }
-    $locks.locks.$TaskId.routeUpdate = @{
-        worker = $WorkerName
-        timestamp = (Get-Date -Format "o")
-        bodyPreview = $bodyPreview
+    $updateResult = Invoke-WithTaskLocksMutex {
+        $locks = Read-TaskLocks
+        if (-not $locks -or -not $locks.locks) {
+            return @{ applied = $false; reason = "locks_missing"; state = "" }
+        }
+        if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) {
+            return @{ applied = $false; reason = "task_lock_missing"; state = "" }
+        }
+
+        $lock = $locks.locks.$TaskId
+        $isPrimaryTask = ($TaskId -match '^(BACKEND|SHOP-FE|ADMIN-FE)-\d+$' -and $WorkerName -match '-(dev|qa)(?:-\d+)?$')
+        $currentState = if ($lock.state) { ([string]$lock.state).ToLower() } else { "" }
+        $currentRunId = ""
+        if ($lock.PSObject.Properties.Name -contains "run_id" -and $lock.run_id) {
+            $currentRunId = [string]$lock.run_id
+        }
+
+        if ($isPrimaryTask) {
+            if ($currentRunId) {
+                if ([string]::IsNullOrWhiteSpace($RouteRunId)) {
+                    return @{
+                        applied = $false
+                        reason = ("task_state=" + $currentState + "; lock_run_id=" + $currentRunId + "; route_run_id_missing")
+                        state = ""
+                    }
+                }
+                if ([string]$RouteRunId -ne $currentRunId) {
+                    return @{
+                        applied = $false
+                        reason = ("task_state=" + $currentState + "; lock_run_id=" + $currentRunId + "; route_run_id=" + [string]$RouteRunId + "; stale_run_id")
+                        state = ""
+                    }
+                }
+            }
+            if ($currentState -notin @("in_progress", "qa")) {
+                return @{
+                    applied = $false
+                    reason = ("task_state=" + $currentState + "; stale_or_unassigned_worker_route")
+                    state = ""
+                }
+            }
+        }
+
+        $now = Get-Date -Format "o"
+        $lock.state = $lockState
+        $lock.updated_at = $now
+        $lock.updated_by = "route-monitor"
+        if ($RouteRunId) {
+            Set-ObjectField -obj $lock -name "run_id" -value $RouteRunId
+        }
+        $routeUpdate = @{
+            worker = $WorkerName
+            timestamp = $now
+            bodyPreview = $bodyPreview
+        }
+        if ($RouteRunId) {
+            $routeUpdate.run_id = $RouteRunId
+        }
+        $lock.routeUpdate = $routeUpdate
+        Write-TaskLocks $locks
+        return @{ applied = $true; reason = ""; state = $lockState }
     }
-    $locks.updated_at = Get-Date -Format "o"
-    Write-Utf8NoBomFile -path $locksFile -content ($locks | ConvertTo-Json -Depth 12)
+
+    if (-not $updateResult.applied) {
+        return $updateResult
+    }
 
     Write-Host ("  Task lock updated: " + $TaskId + " -> " + $lockState) -ForegroundColor Green
 
     # 后端 QA 成功后实时触发 doc-updater
-    if ($lockState -eq "completed" -and $TaskId -match "^BACKEND-" -and $WorkerName -match "-qa$") {
+    if ($lockState -eq "qa_passed" -and $TaskId -match "^BACKEND-" -and $WorkerName -match "-qa(?:-\d+)?$") {
         Mark-BackendDocSyncPending -BackendTaskId $TaskId -QaWorker $WorkerName
         if (Test-Path $docTriggerScript) {
             Write-Host "  Triggering doc-updater (backend_qa)..." -ForegroundColor Cyan
@@ -476,6 +1078,7 @@ function Update-TaskLockFromRoute {
         }
     }
 
+    return $updateResult
 }
 
 function Set-TaskLockState {
@@ -485,18 +1088,18 @@ function Set-TaskLockState {
         [string]$UpdatedBy,
         [string]$Note
     )
-    if (-not (Test-Path $locksFile)) { return }
-    $locks = Read-Json -path $locksFile
-    if (-not $locks -or -not $locks.locks) { return }
-    if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) { return }
-    $locks.locks.$TaskId.state = $State
-    $locks.locks.$TaskId.updated_at = Get-Date -Format "o"
-    $locks.locks.$TaskId.updated_by = $UpdatedBy
-    if ($Note) {
-        $locks.locks.$TaskId.note = $Note
-    }
-    $locks.updated_at = Get-Date -Format "o"
-    Write-Utf8NoBomFile -path $locksFile -content ($locks | ConvertTo-Json -Depth 12)
+    Invoke-WithTaskLocksMutex {
+        $locks = Read-TaskLocks
+        if (-not $locks -or -not $locks.locks) { return }
+        if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) { return }
+        $locks.locks.$TaskId.state = $State
+        $locks.locks.$TaskId.updated_at = Get-Date -Format "o"
+        $locks.locks.$TaskId.updated_by = $UpdatedBy
+        if ($Note) {
+            $locks.locks.$TaskId.note = $Note
+        }
+        Write-TaskLocks $locks
+    } | Out-Null
 }
 
 function Normalize-SubTaskStatus([string]$RouteStatus) {
@@ -521,10 +1124,7 @@ function Update-ArchiveJobsFromRoute {
     $jobs = Read-ArchiveJobs
     if (-not $jobs.jobs) { return }
 
-    $jobHash = @{}
-    foreach ($p in $jobs.jobs.PSObject.Properties) {
-        $jobHash[$p.Name] = $p.Value
-    }
+    $jobHash = Convert-ToArchiveJobMap $jobs.jobs
 
     $changed = $false
     foreach ($jobId in @($jobHash.Keys)) {
@@ -545,6 +1145,40 @@ function Update-ArchiveJobsFromRoute {
         $docState = if ($job.doc_status) { [string]$job.doc_status } else { "pending" }
         $commitState = if ($job.commit_status) { [string]$job.commit_status } else { "pending" }
         $taskId = if ($job.task_id) { [string]$job.task_id } else { "" }
+
+        # 归档兜底：
+        # 若 doc-updater 已成功但 commit_task_id 丢失（常见于 archive 中途被中断），
+        # 则由 route-monitor 自动补触发 repo-committer，避免任务长期停留在 archiving/running。
+        $needCommitRecover = ($RouteTaskId -eq $docTaskId -and $subStatus -eq "success" -and [string]::IsNullOrWhiteSpace($commitTaskId) -and -not [string]::IsNullOrWhiteSpace($taskId))
+        if ($needCommitRecover) {
+            $recover = Try-RecoverArchiveCommitDispatch -Job $job -TaskId $taskId
+            if ($recover.kind -eq "ok") {
+                if ($recover.commit_task_id) {
+                    Set-ObjectField -obj $job -name "commit_task_id" -value $recover.commit_task_id
+                    $commitTaskId = [string]$recover.commit_task_id
+                }
+                if (-not $job.commit_status -or [string]$job.commit_status -eq "pending") {
+                    Set-ObjectField -obj $job -name "commit_status" -value "in_progress"
+                }
+                if ($recover.worker) {
+                    Set-ObjectField -obj $job -name "commit_worker" -value $recover.worker
+                }
+                if ($recover.pane_id) {
+                    Set-ObjectField -obj $job -name "commit_worker_pane_id" -value $recover.pane_id
+                }
+                Set-ObjectField -obj $job -name "note" -value ("Repo-committer fallback dispatched by route-monitor (" + $recover.message + ")")
+                Write-Host ("  [ARCHIVE-JOB] " + $taskId + " fallback dispatched repo-committer (" + $recover.message + ")") -ForegroundColor Cyan
+                $commitState = if ($job.commit_status) { [string]$job.commit_status } else { "pending" }
+            } elseif ($recover.kind -eq "queued") {
+                Set-ObjectField -obj $job -name "note" -value ("Repo-committer fallback queued: " + $recover.message)
+                Write-Host ("  [ARCHIVE-JOB] " + $taskId + " fallback queued (" + $recover.message + ")") -ForegroundColor Yellow
+            } else {
+                Set-ObjectField -obj $job -name "commit_status" -value "blocked"
+                Set-ObjectField -obj $job -name "blocked_reason" -value ("commit_fallback_failed: " + $recover.message)
+                $commitState = "blocked"
+                Write-Host ("  [ARCHIVE-JOB] " + $taskId + " fallback failed (" + $recover.message + ")") -ForegroundColor Yellow
+            }
+        }
 
         if ($docState -eq "blocked" -or $commitState -eq "blocked") {
             $job.status = "blocked"
@@ -576,6 +1210,72 @@ function Update-ArchiveJobsFromRoute {
 
         $jobHash[$jobId] = $job
         $changed = $true
+    }
+
+    if ($changed) {
+        $jobs.jobs = $jobHash
+        Write-ArchiveJobs $jobs
+    }
+}
+
+function Reconcile-ArchiveCommitFallback {
+    $jobs = Read-ArchiveJobs
+    if (-not $jobs.jobs) { return }
+
+    $jobHash = Convert-ToArchiveJobMap $jobs.jobs
+    $changed = $false
+
+    foreach ($jobId in @($jobHash.Keys)) {
+        $job = $jobHash[$jobId]
+        if (-not $job) { continue }
+
+        $status = if ($job.status) { [string]$job.status } else { "" }
+        if ($status -eq "success" -or $status -eq "blocked") { continue }
+
+        $taskId = if ($job.task_id) { [string]$job.task_id } else { "" }
+        $docState = if ($job.doc_status) { [string]$job.doc_status } else { "pending" }
+        $commitTaskId = if ($job.commit_task_id) { [string]$job.commit_task_id } else { "" }
+        if ([string]::IsNullOrWhiteSpace($taskId)) { continue }
+        if ($docState -ne "success") { continue }
+        if (-not [string]::IsNullOrWhiteSpace($commitTaskId)) { continue }
+
+        $recover = Try-RecoverArchiveCommitDispatch -Job $job -TaskId $taskId
+        if ($recover.kind -eq "ok") {
+            if ($recover.commit_task_id) {
+                Set-ObjectField -obj $job -name "commit_task_id" -value $recover.commit_task_id
+            }
+            Set-ObjectField -obj $job -name "commit_status" -value "in_progress"
+            Set-ObjectField -obj $job -name "status" -value "running"
+            Set-ObjectField -obj $job -name "updated_at" -value (Get-Date -Format "o")
+            Set-ObjectField -obj $job -name "updated_by" -value "route-monitor/archive-fallback"
+            Set-ObjectField -obj $job -name "note" -value ("Repo-committer fallback dispatched by reconcile (" + $recover.message + ")")
+            if ($recover.worker) {
+                Set-ObjectField -obj $job -name "commit_worker" -value $recover.worker
+            }
+            if ($recover.pane_id) {
+                Set-ObjectField -obj $job -name "commit_worker_pane_id" -value $recover.pane_id
+            }
+            Set-TaskLockState -TaskId $taskId -State "archiving" -UpdatedBy "route-monitor/archive-fallback" -Note "Archive resumed: repo-committer fallback dispatched"
+            Write-Host ("  [ARCHIVE-JOB] " + $taskId + " reconcile dispatched repo-committer (" + $recover.message + ")") -ForegroundColor Cyan
+            $changed = $true
+        } elseif ($recover.kind -eq "queued") {
+            Set-ObjectField -obj $job -name "updated_at" -value (Get-Date -Format "o")
+            Set-ObjectField -obj $job -name "updated_by" -value "route-monitor/archive-fallback"
+            Set-ObjectField -obj $job -name "note" -value ("Repo-committer fallback queued: " + $recover.message)
+            Write-Host ("  [ARCHIVE-JOB] " + $taskId + " reconcile queued (" + $recover.message + ")") -ForegroundColor Yellow
+            $changed = $true
+        } else {
+            Set-ObjectField -obj $job -name "commit_status" -value "blocked"
+            Set-ObjectField -obj $job -name "status" -value "blocked"
+            Set-ObjectField -obj $job -name "updated_at" -value (Get-Date -Format "o")
+            Set-ObjectField -obj $job -name "updated_by" -value "route-monitor/archive-fallback"
+            Set-ObjectField -obj $job -name "blocked_reason" -value ("commit_fallback_failed: " + $recover.message)
+            Set-TaskLockState -TaskId $taskId -State "blocked" -UpdatedBy "route-monitor/archive-fallback" -Note ("Archive blocked: commit fallback failed (" + $recover.message + ")")
+            Write-Host ("  [ARCHIVE-JOB] " + $taskId + " reconcile failed (" + $recover.message + ")") -ForegroundColor Red
+            $changed = $true
+        }
+
+        $jobHash[$jobId] = $job
     }
 
     if ($changed) {
@@ -626,7 +1326,19 @@ function Process-InboxRoutes {
             Show-RouteNotification -route $effectiveRoute
             Update-DocSyncStateFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body
             Update-ArchiveJobsFromRoute -RouteTaskId ([string]$effectiveRoute.task) -RouteStatus ([string]$effectiveRoute.status) -WorkerName ([string]$effectiveRoute.from) -Body ([string]$effectiveRoute.body)
-            Update-TaskLockFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body
+            $routeRunId = if ($effectiveRoute.PSObject.Properties.Name -contains "run_id" -and $effectiveRoute.run_id) { [string]$effectiveRoute.run_id } else { "" }
+            $routeApply = Should-ApplyPrimaryTaskRoute -TaskId ([string]$effectiveRoute.task) -WorkerName ([string]$effectiveRoute.from) -RouteRunId $routeRunId
+            if ($routeApply.apply) {
+                $lockUpdate = Update-TaskLockFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body -RouteRunId $routeRunId
+                if ($lockUpdate.applied) {
+                    Update-TaskAttemptHistoryFromRoute -TaskId ([string]$effectiveRoute.task) -Status ([string]$effectiveRoute.status) -WorkerName ([string]$effectiveRoute.from) -ResolvedLockState ([string]$lockUpdate.state) -RunId $routeRunId
+                    Write-QaSummaryToTaskFile -TaskId ([string]$effectiveRoute.task) -WorkerName ([string]$effectiveRoute.from) -Status ([string]$effectiveRoute.status).ToLower() -Body ([string]$effectiveRoute.body) -Timestamp (Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz")
+                } else {
+                    Write-Host ("  [ROUTE-IGNORED] task=" + [string]$effectiveRoute.task + " from=" + [string]$effectiveRoute.from + " reason=" + [string]$lockUpdate.reason) -ForegroundColor DarkYellow
+                }
+            } else {
+                Write-Host ("  [ROUTE-IGNORED] task=" + [string]$effectiveRoute.task + " from=" + [string]$effectiveRoute.from + " reason=" + $routeApply.reason) -ForegroundColor DarkYellow
+            }
 
             $processedAt = Get-Date -Format "o"
             $newProcessed[$routeId] = $processedAt
@@ -743,6 +1455,7 @@ if ($null -ne $loadedActive) {
 do {
     try {
         Process-InboxRoutes
+        Reconcile-ArchiveCommitFallback
         Check-RoundCompleteTrigger
     } catch {
         Write-Host ("Monitor error: " + $_.Exception.Message) -ForegroundColor Yellow

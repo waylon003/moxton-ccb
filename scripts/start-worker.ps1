@@ -29,6 +29,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$normalizedWorkerName = $WorkerName.ToLower()
+$isQaWorker = ($normalizedWorkerName -match '(^|-)qa(?:-\d+)?$')
+$isCommitterWorker = ($normalizedWorkerName -match 'committer(?:-\d+)?$')
+$isFrontendWorker = ($normalizedWorkerName -match '^(shop-fe|admin-fe)-')
+$agentBrowserCmd = Get-Command agent-browser -ErrorAction SilentlyContinue
+$agentBrowserPath = if ($agentBrowserCmd) { [string]$agentBrowserCmd.Source } else { "" }
+$agentBrowserAvailable = -not [string]::IsNullOrWhiteSpace($agentBrowserPath)
 
 function Normalize-PaneId([string]$value) {
     if (-not $value) { return $null }
@@ -54,6 +61,15 @@ Write-Host "Engine: $Engine"
 Write-Host "WorkDir: $WorkDir"
 Write-Host "Team Lead Pane: $TeamLeadPaneId"
 Write-Host "Timeout: $TimeoutSeconds seconds"
+if ($isFrontendWorker) {
+    if ($agentBrowserAvailable) {
+        Write-Host "agent-browser: available" -ForegroundColor Green
+        Write-Host "Path: $agentBrowserPath" -ForegroundColor Gray
+    } else {
+        Write-Host "agent-browser: missing" -ForegroundColor Yellow
+        Write-Host "Fallback: Playwright smoke + playwright-mcp runtime verification" -ForegroundColor Yellow
+    }
+}
 
 if ($Split) {
     Write-Host "模式: 左右分屏" -ForegroundColor Yellow
@@ -69,16 +85,18 @@ $engineCommand = if ($Engine -eq "codex") {
     # qa: on-request（模型自主决策是否请求审批）
     # committer: never（避免 git 提交流程卡在交互审批）
     # 其他 dev: untrusted（只自动批准可信命令）
-    $approvalFlag = if ($WorkerName -like "*-qa") {
+    $approvalFlag = if ($isQaWorker) {
         "on-request"
-    } elseif ($WorkerName -like "*-committer") {
+    } elseif ($isCommitterWorker) {
         "never"
     } else {
         "untrusted"
     }
-    $codexCmd = "codex -a $approvalFlag --sandbox workspace-write --add-dir '$ccbRoot'"
+    # QA 需要稳定运行测试与本地服务，放开沙盒以避免 spawn EPERM 阻塞。
+    $sandboxMode = if ($isQaWorker) { "danger-full-access" } else { "workspace-write" }
+    $codexCmd = "codex -a $approvalFlag --sandbox $sandboxMode --add-dir '$ccbRoot'"
     # 前端 worker 启用 js_repl，支持实时调试前端页面
-    if ($WorkerName -like "shop-fe-*" -or $WorkerName -like "admin-fe-*") {
+    if ($isFrontendWorker) {
         $codexCmd += " --enable js_repl"
     }
     $codexCmd
@@ -102,11 +120,20 @@ $wrapperContent = @"
 `$env:WORKER_ENGINE = "$Engine"
 `$env:WORKER_START_TIME = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 `$env:WORKER_TIMEOUT = "$TimeoutSeconds"
+`$env:AGENT_BROWSER_AVAILABLE = "$(if ($agentBrowserAvailable) { "1" } else { "0" })"
+`$env:AGENT_BROWSER_PATH = "$agentBrowserPath"
 
 Write-Host ""
 Write-Host "Worker ready: $WorkerName ($Engine)" -ForegroundColor Cyan
 Write-Host "WorkDir: $WorkDir" -ForegroundColor Cyan
 Write-Host "Team Lead Pane: $TeamLeadPaneId" -ForegroundColor Cyan
+if ("$isFrontendWorker" -eq "True") {
+    if ("$(if ($agentBrowserAvailable) { "1" } else { "0" })" -eq "1") {
+        Write-Host "agent-browser ready: use it first for frontend runtime verification" -ForegroundColor Green
+    } else {
+        Write-Host "agent-browser unavailable: fall back to Playwright smoke + playwright-mcp" -ForegroundColor Yellow
+    }
+}
 Write-Host "Waiting for task dispatch..." -ForegroundColor Yellow
 Write-Host ""
 

@@ -1,13 +1,7 @@
 import { createHash } from 'crypto';
-import { mapRouteToLockState } from './state-mapper.js';
 
-function routeId(from, task, status, body) {
-  return createHash('sha256').update(`${from}|${task}|${status}|${body}`).digest('hex').slice(0, 16);
-}
-
-function isAuxiliaryTask(task) {
-  if (!task) return false;
-  return /^(DOC-UPDATE-|COMMIT-|COMMIT-PUSH-|ARCHIVE-)/i.test(task);
+function routeId(from, task, status, body, runId = '') {
+  return createHash('sha256').update(`${from}|${task}|${status}|${runId}|${body}`).digest('hex').slice(0, 16);
 }
 
 export function registerTools(server, z, store) {
@@ -17,10 +11,11 @@ export function registerTools(server, z, store) {
       from: z.string().describe('Worker name, e.g. backend-dev, shop-fe-qa'),
       task: z.string().describe('Task ID, e.g. BACKEND-008'),
       status: z.enum(['success', 'fail', 'blocked', 'in_progress']).describe('Task status'),
-      body: z.string().describe('Result summary: files changed, commands run, test results')
+      body: z.string().describe('Result summary: files changed, commands run, test results'),
+      run_id: z.string().optional().describe('Dispatch run ID for stale-route isolation, e.g. RUN-202603091234...')
     })
-  }, async ({ from, task, status, body }) => {
-    const id = routeId(from, task, status, body);
+  }, async ({ from, task, status, body, run_id }) => {
+    const id = routeId(from, task, status, body, run_id || '');
 
     return store.withLock(store.inboxPath, async () => {
       const inbox = await store.readInbox();
@@ -31,29 +26,13 @@ export function registerTools(server, z, store) {
       inbox.routes.push({
         id, from, to: 'team-lead', type: 'status',
         task, status, body,
+        run_id: run_id || '',
         created_at: new Date().toISOString(),
         processed: false, processed_at: null
       });
       await store.writeInbox(inbox);
 
-      // Update TASK-LOCKS.json
-      let lockWarning = null;
-      await store.withLock(store.locksPath, async () => {
-        const locks = await store.readLocks();
-        if (locks?.locks?.[task]) {
-          const newState = mapRouteToLockState(status, from);
-          locks.locks[task].state = newState;
-          locks.locks[task].updated_at = new Date().toISOString();
-          locks.locks[task].updated_by = 'mcp-route-server/report_route';
-          locks.locks[task].routeUpdate = { worker: from, timestamp: new Date().toISOString(), bodyPreview: (body || '').slice(0, 200) };
-          await store.writeLocks(locks);
-        } else if (!isAuxiliaryTask(task)) {
-          lockWarning = `Task '${task}' not found in TASK-LOCKS.json. Route saved to inbox but lock not updated.`;
-        }
-      });
-
       const result = { success: true, routeId: id, timestamp: new Date().toISOString() };
-      if (lockWarning) result.warning = lockWarning;
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     });
   });

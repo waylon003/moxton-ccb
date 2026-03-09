@@ -25,6 +25,9 @@ param(
     [string]$Engine = "codex",
 
     [Parameter(Mandatory=$false)]
+    [string]$RunId,
+
+    [Parameter(Mandatory=$false)]
     [string]$TeamLeadPaneId = $env:TEAM_LEAD_PANE_ID
 )
 
@@ -191,14 +194,15 @@ function Resolve-RoleDefinitionPath([string]$workerName, [string]$ccbRoot) {
     if (-not $workerName) { return $null }
     $agentsDir = Join-Path $ccbRoot ".claude\agents"
     $roleFile = switch -Regex ($workerName) {
-        '^backend-dev$' { 'backend.md'; break }
-        '^backend-qa$' { 'backend-qa.md'; break }
-        '^shop-fe-dev$' { 'shop-frontend.md'; break }
-        '^shop-fe-qa$' { 'shop-fe-qa.md'; break }
-        '^admin-fe-dev$' { 'admin-frontend.md'; break }
-        '^admin-fe-qa$' { 'admin-fe-qa.md'; break }
-        '^repo-committer$' { 'repo-committer.md'; break }
-        '^doc-updater$' { 'doc-updater.md'; break }
+        '^backend-dev(?:-\d+)?$' { 'backend.md'; break }
+        '^backend-qa(?:-\d+)?$' { 'backend-qa.md'; break }
+        '^shop-fe-dev(?:-\d+)?$' { 'shop-frontend.md'; break }
+        '^shop-fe-qa(?:-\d+)?$' { 'shop-fe-qa.md'; break }
+        '^admin-fe-dev(?:-\d+)?$' { 'admin-frontend.md'; break }
+        '^admin-fe-qa(?:-\d+)?$' { 'admin-fe-qa.md'; break }
+        '^(?:repo-)?committer(?:-\d+)?$' { 'repo-committer.md'; break }
+        '^[a-z-]*committer(?:-\d+)?$' { 'repo-committer.md'; break }
+        '^doc-updater(?:-\d+)?$' { 'doc-updater.md'; break }
         default { $null }
     }
     if (-not $roleFile) { return $null }
@@ -273,12 +277,13 @@ if (-not (Test-Path $protocolPath)) {
 }
 
 $qaHint = ""
-if ($WorkerName -like "*-qa") {
+if ($WorkerName -match "-qa(?:-\d+)?$") {
     $qaHint = @"
 QA 注意：success 回传必须满足 protocol.md 的 QA 回传合同（JSON + checks + evidence）。
 "@
 }
 $taskSource = if ($hasTaskFile) { $TaskFilePath } else { "<inline-task-body>" }
+$routeRunId = if ([string]::IsNullOrWhiteSpace($RunId)) { "<none>" } else { $RunId }
 $inlineSection = if ($hasInlineBody) {
 @"
 
@@ -293,6 +298,7 @@ $fullTask = @"
 [TASK-DISPATCH]
 task_id: $TaskId
 worker: $WorkerName
+route_run_id: $routeRunId
 task_file: $taskSource
 role_definition: $(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" })
 protocol: $protocolPath
@@ -303,6 +309,7 @@ protocol: $protocolPath
 3) $(if ($hasTaskFile) { "最后读取 task_file 并开始执行" } else { "按 inline_task_body 执行，不需要再读任务文件" })
 4) 生命周期按 protocol 执行（in_progress 心跳 / blocked 上报 / 完成回传）
 5) 禁止子代理（sub-agent/background agent），仅主进程执行
+6) 每次调用 `report_route` / `mcp__route__report_route` 时都必须携带 `run_id: "$routeRunId"`
 $qaHint
 $inlineSection
 收到后请先回复：ACK $TaskId + first_step
@@ -311,7 +318,7 @@ $inlineSection
 if ($Engine -eq "gemini") {
     # Gemini 对多行粘贴提交不稳定：改为单行派遣，降低“文本留在输入框”概率。
     $inlineHint = if ($hasInlineBody) { " inline_task_body_present=true" } else { "" }
-    $fullTask = "[TASK-DISPATCH] task_id=$TaskId role_definition=$(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" }) protocol=$protocolPath task_file=$taskSource$inlineHint; 按顺序读取 role_definition -> protocol -> $(if ($hasTaskFile) { "task_file" } else { "inline_task_body" }); 按 protocol 生命周期回传; 禁止子代理; 先回复 ACK $TaskId + first_step"
+    $fullTask = "[TASK-DISPATCH] task_id=$TaskId route_run_id=$routeRunId role_definition=$(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" }) protocol=$protocolPath task_file=$taskSource$inlineHint; 按顺序读取 role_definition -> protocol -> $(if ($hasTaskFile) { "task_file" } else { "inline_task_body" }); 每次 report_route/mcp__route__report_route 必须携带 run_id=$routeRunId; 按 protocol 生命周期回传; 禁止子代理; 先回复 ACK $TaskId + first_step"
 }
 
 # 发送到 Worker
