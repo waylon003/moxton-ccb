@@ -1,3 +1,39 @@
-.npm-cache/
+﻿.npm-cache/
+.pw-browsers/
 nul
 node_modules/
+
+# Local settings / runtime state
+.claude/settings.local.json
+config/pending-doc-updates.json
+config/worker-panels.json
+config/api-doc-sync-state.json
+config/archive-jobs.json
+config/doc-update-history.json
+config/repo-commit-history.json
+mcp/route-server/data/approval-requests.json
+
+# Verification artifacts
+05-verification/
+
+# Python cache
+scripts/__pycache__/
+*.pyc
+
+# Temp files
+_temp_*.py
+_temp_*.ps1
+_temp_*.txt
+
+# Local diagnostics
+*.log
+config/teamlead-alerts.jsonl
+config/notify-sentinel.ready.json
+config/route-monitor-state.json
+config/auto-decision-state.json
+config/task-attempt-history.json
+config/worker-samples.log
+mcp/route-server/data/route-inbox.json
+config/pane-approval-watchers.json
+config/local-approval-events.jsonl
+config/local-approval-state.json

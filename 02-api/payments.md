@@ -1,7 +1,7 @@
 # Moxton Lot API - 支付系统接口文档
 
-**版本**: v1.14.0
-**最后更新**: 2026-02-09
+**版本**: v1.15.1
+**最后更新**: 2026-03-13
 **服务地址**: http://localhost:3033
 
 ---
@@ -110,10 +110,101 @@ X-Guest-ID: <guest-session-id>     // 游客必填，用于验证订单归属
 - 调用 `stripePaymentService.createPaymentIntent()` 创建支付意图
 - 提取设备信息（`user-agent`, `ip`）用于安全追踪
 - 游客订单：验证 `X-Guest-ID` 与订单 `metadata.guestId` 匹配
+- 当存在已过期的支付记录（`expiresAt` 早于当前时间，或未设置 `expiresAt` 且 `createdAt` 超过 24 小时）时，后端会先将其标记为 `CANCELLED`，并允许创建新的支付意图
 
 ---
 
-### 2. 获取支付状态
+### 2. 查询订单支付记录
+
+**端点**: `GET /payments/order/:orderId`
+
+**认证**: Optional (支持游客和登录用户)
+
+**说明**: 查询订单关联的支付记录，供前端判断是否可复用现有支付意图
+
+**路径参数**:
+- `orderId`: 订单ID (例如: `clt123456789`)
+
+**请求头**:
+```http
+Authorization: Bearer <token>       // 可选，登录用户需提供
+X-Guest-ID: <guest-session-id>     // 游客必填，用于验证订单归属
+```
+
+**成功响应** (200 OK):
+```json
+{
+  "code": 200,
+  "message": "Payment records retrieved successfully",
+  "data": {
+    "orderId": "clt123456789",
+    "payments": [
+      {
+        "id": "clt987654321",
+        "paymentNo": "PAY202603090001",
+        "paymentIntentId": "pi_1234567890",
+        "clientSecret": "pi_1234567890_secret_xxxxxxxxxxxxxxxxxxxx",
+        "amount": 599.98,
+        "currency": "AUD",
+        "status": "PENDING",
+        "expiresAt": "2026-03-09T10:30:00.000Z",
+        "createdAt": "2026-03-09T10:00:00.000Z"
+      }
+    ],
+    "activePayment": {
+      "id": "clt987654321",
+      "paymentIntentId": "pi_1234567890",
+      "clientSecret": "pi_1234567890_secret_xxxxxxxxxxxxxxxxxxxx",
+      "status": "PENDING",
+      "expiresAt": "2026-03-09T10:30:00.000Z"
+    }
+  },
+  "success": true,
+  "timestamp": "2026-03-09T10:05:00.000Z"
+}
+```
+
+**响应说明**:
+- `payments`: 最近 5 条支付记录，按 `createdAt` 倒序
+- `activePayment`: 可复用的活跃支付意图；仅当状态为 `PENDING` / `PAYMENT_INITIATED` / `REQUIRES_ACTION` 且未过期时返回，否则为 `null`
+- 若支付记录 `expiresAt` 为空，服务端按 `createdAt + 24h` 计算有效过期时间用于返回与活跃判断
+- 游客订单校验依赖订单 `metadata.guestId`；创建订单时未携带 `X-Guest-ID` 会导致该接口返回 403
+
+**错误响应**:
+```json
+{
+  "code": 403,
+  "message": "Access denied: Order does not belong to this guest session",
+  "timestamp": "2026-03-09T10:00:00.000Z",
+  "success": false
+}
+```
+
+**错误码**:
+- `400`: `orderId is required` - 缺少订单ID
+- `404`: `Order not found` - 订单不存在
+- `403`: `Access denied: Order does not belong to user` - 订单不属于当前登录用户
+- `403`: `X-Guest-ID header is required for guest payments` - 游客请求缺少 `X-Guest-ID`
+- `403`: `Access denied: Order does not belong to this guest session` - 游客订单与 `X-Guest-ID` 不匹配
+
+**权限验证逻辑**:
+
+**登录用户**:
+1. 从 `ctx.user?.id` 获取用户ID
+2. 验证订单 `userId` 与当前用户ID匹配
+3. 不匹配返回 403 错误
+
+**游客用户**:
+1. 从请求头 `X-Guest-ID` 获取游客会话ID
+   - 若缺失：返回 403 `X-Guest-ID header is required for guest payments`
+2. 验证订单 `userId=null`（游客订单）
+3. 解析订单 `metadata.guestId` 字段
+4. 验证 `guestId` 与 `X-Guest-ID` 匹配
+5. 不匹配返回 403 错误
+
+---
+
+### 3. 获取支付状态
 
 **端点**: `GET /payments/stripe/status/:paymentIntentId`
 
@@ -159,7 +250,7 @@ X-Guest-ID: <guest-session-id>     // 游客必填，用于验证订单归属
 
 ---
 
-### 3. Stripe Webhook
+### 4. Stripe Webhook
 
 **端点**: `POST /payments/stripe/webhook`
 
@@ -210,7 +301,7 @@ Body: "Webhook Error: Invalid webhook signature"
 
 ---
 
-### 4. 获取支付历史
+### 5. 获取支付历史
 
 **端点**: `GET /payments/history`
 
@@ -720,6 +811,18 @@ ctx.forbidden(message)
 - 添加 403 错误码：`Access denied: Order does not belong to this guest session`
 - 更新权限验证逻辑说明
 
+### v1.15.2 (2026-03-16)
+- 修复 create-intent 对已过期支付记录的阻塞，过期判断统一基于 expiresAt / createdAt+24h
+
+### v1.15.1 (2026-03-13)
+- 修复游客订单支付查询对 `X-Guest-ID` 的识别，明确该接口依赖订单 `metadata.guestId`
+- 过期支付记录在创建支付意图前会被标记为 `CANCELLED`，允许重新创建
+
+### v1.15.0 (2026-03-09)
+- 新增 `GET /payments/order/:orderId`，用于查询订单最近 5 条支付记录
+- 返回 `activePayment` 字段，供前端复用未过期的活跃支付意图
+- 明确该接口同时支持登录用户和游客用户的订单归属校验
+
 ### v1.13.0 (2026-02-04)
 - 完全重写支付系统，从 Stripe Checkout Session 升级为 Stripe Elements + Payment Intent API
 - 新增支付意图创建端点
@@ -740,3 +843,8 @@ ctx.forbidden(message)
 - Stripe 官方文档: https://docs.stripe.com/api
 - Stripe Webhooks: https://docs.stripe.com/webhooks
 - Stripe Payment Intents: https://docs.stripe.com/api/payment_intents
+
+
+
+
+

@@ -5,79 +5,86 @@ triggers:
   - bootstrap
   - dispatch
   - dispatch-qa
-  - repo-committer
   - archive
   - status
   - recover
   - add-lock
+  - approve-request
+  - deny-request
+  - show-approval
+  - requeue
+  - qa-pass
+  - reply-worker
 ---
 
-# Team Lead 控制器技能
+# Team Lead 控制器技能（最新）
 
 ## 目的
 
-强制 Team Lead 所有操作走单一入口。
-避免常见错误：bash/PowerShell 转义冲突、直接调用子脚本、手工拼接 wezterm 派遣命令。
+强制 Team Lead 所有操作走 `teamlead-control.ps1` 单一入口，避免手工派遣、子脚本绕过和状态漂移。
 
-## 操作映射
+## 新会话必做
+
+1. 先执行 bootstrap（每个新会话一次）
+2. 再执行 status 确认当前锁、路由与审批
+3. 在 Claude Code UI/手机端务必手动创建 notify-sentinel（见下文）
+
+## 控制器动作表
 
 | 意图 | Action | 命令 |
-|--------|--------|---------|
+|------|--------|------|
 | 新会话初始化 | bootstrap | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action bootstrap` |
+| 查看状态 | status | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status` |
 | 派遣开发任务 | dispatch | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId <ID>` |
 | 派遣 QA 任务 | dispatch-qa | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch-qa -TaskId <ID>` |
-| 派遣 repo-committer | repo-committer | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\trigger-repo-committer.ps1" -TaskId <ID> -Force` |
-| 归档并提交/推送 | archive | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action archive -TaskId <ID>` |
-| 查看状态 | status | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status` |
-| 清理僵尸 Worker | recover | `... -Action recover -RecoverAction reap-stale` |
-| 重启 Worker | recover | `... -Action recover -RecoverAction restart-worker -WorkerName <name>` |
-| 重置任务状态 | recover | `... -Action recover -RecoverAction reset-task -TaskId <ID> -TargetState <assigned\|waiting_qa>` |
+| QA 通过后保持待复审 | qa-pass | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action qa-pass -TaskId <ID>` |
+| 复审驳回回退（不自动派遣） | requeue | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action requeue -TaskId <ID> -TargetState <assigned|waiting_qa> -RequeueReason "..."` |
+| 查看审批详情 | show-approval | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action show-approval -RequestId <ID>` |
+| 批准审批 | approve-request | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action approve-request -RequestId <ID>` |
+| 拒绝审批 | deny-request | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action deny-request -RequestId <ID>` |
 | 补建任务锁 | add-lock | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId <ID>` |
+| 恢复流程 | recover | `... -Action recover -RecoverAction <action>` |
+| 归档并提交/推送 | archive | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action archive -TaskId <ID>` |
+| 回覆 worker（仅提醒/暂停） | reply-worker | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action reply-worker -WorkerName <name> -TaskId <ID> -ReplyText "..."` |
 
-## 意图识别
+recover 可用动作：
+- `reap-stale`
+- `restart-worker -WorkerName <name>`
+- `reset-task -TaskId <ID> -TargetState <assigned|waiting_qa>`
+- `normalize-locks`
+- `prune-orphan-locks`
+- `baseline-clean`
+- `full-clean`
 
-用户表达意图后，映射到正确分支：
+## notify-sentinel（强制提醒）
 
-| 关键词模式 | 分支 |
-|---------|--------|
-| "execute", "continue", "dispatch", "run tasks" | 执行分支：status -> dispatch |
-| "QA", "verify", "test", "validate" | 执行分支：dispatch-qa |
-| "discuss", "plan", "design", "brainstorm" | 规划分支：仅读 CCB 文档 -> planning-gate -> 任务模板落地 |
-| "status", "progress", "what's happening" | 状态分支：status |
-| "stuck", "broken", "restart", "reset" | 恢复分支：recover |
+- notify-sentinel 不会随 dispatch 自动启动；每个新会话必须手动创建并让其阅读 `E:\moxton-ccb\.claude\agents\notify-sentinel.md`
+- Claude Code UI/手机端审批与回调提醒依赖 notify-sentinel（非 WezTerm 注入）
+- WezTerm 注入默认启用；如需关闭，设置 `CCB_ENABLE_WEZTERM_NOTIFY=0`
+- notify-sentinel 启动后必须输出一次 [WATCH-READY]；未出现则重建 teammate
+- dispatch/dispatch-qa 前必须有 notify-sentinel ready 标记；若无，先执行 `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action notify-ready`
 
-## 禁止行为
+## 关键规则
 
-1. **禁止**直接调用子脚本：
-   - `start-worker.ps1`：改用控制器 `bootstrap` 或 `recover -RecoverAction restart-worker`
-   - `dispatch-task.ps1`：改用控制器 `dispatch`
-   - `route-monitor.ps1`：由控制器 `bootstrap` 管理
-   - `worker-registry.ps1`：改用控制器 `status` 或 `recover`
+- **不得**直接调用子脚本：`start-worker.ps1` / `dispatch-task.ps1` / `route-monitor.ps1` / `worker-registry.ps1`
+- **不得**手工拼 `wezterm cli send-text` 派遣任务文本
+- **不得**在新会话跳过 bootstrap
+- **不得**使用 `Task(...)` / `Backgrounded agent` 进行派遣
+- **不得**无限轮询：同一 pane `get-text` 连续 3 次无变化必须停止；同一 task `check_routes` 3 次无变化必须停止
+- **不得**直接用 `assign_task.py` 做写入动作（仅允许只读诊断参数）
 
-2. **禁止**使用 `powershell -Command` 执行复杂逻辑（变量、中文、嵌套引号）
+## 审批优先级
 
-3. **禁止**手工拼接 `wezterm cli send-text` 进行任务派遣
+- 有 pending 审批时必须先 `show-approval` 并 `approve-request/deny-request`
+- 高风险审批不得询问用户；由 Team Lead 直接 approve/deny，默认拒绝，除非任务文档明确允许
+- 不允许先 `sleep/wait`
+- 若确认是历史遗留可用 `recover -RecoverAction baseline-clean` 一键清理
 
-4. **禁止**在新会话跳过 bootstrap
+## 复审流转
 
-5. **禁止**使用 `Task(...)` / `Backgrounded agent` 进行 Team Lead 派遣
-   - 包括："Task(Dispatch ...)"、"Backgrounded agent"、子代理委派
-   - 必须路径：仅在主进程运行控制器/触发脚本
-   - repo 提交场景：必须使用 `trigger-repo-committer.ps1`
-
-6. **禁止**无退出条件轮询 Worker 输出
-   - 同一 pane 的 `get-text` 连续 3 次无变化必须停止
-   - 同一 task 的 `check_routes` 连续 3 次无 pending 必须停止
-   - 停止后转 `status -> recover`，不得继续同样轮询
-
-## 常见状态修复（强推荐）
-
-- 开发完成需转 QA：  
-  `... -Action recover -RecoverAction reset-task -TaskId <ID> -TargetState waiting_qa`  
-  然后：`... -Action dispatch-qa -TaskId <ID>`
-- QA 失败需回到开发：  
-  `... -Action recover -RecoverAction reset-task -TaskId <ID> -TargetState assigned`  
-  然后：`... -Action dispatch -TaskId <ID>`
+- QA 通过后默认 `qa-pass` 等人工复审
+- 复审不通过：`requeue` 回退，不把驳回原因直接发到旧 worker 窗口
+- 重新派遣：`requeue` 后再 `dispatch` 或 `dispatch-qa`
 
 ## 结构化输出模板
 

@@ -10,7 +10,7 @@ param(
     [switch]$Continuous,
 
     [Parameter(Mandatory = $false)]
-    [int]$PollIntervalSeconds = 5
+    [int]$PollIntervalSeconds = 2
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,11 +22,30 @@ $commitTriggerScript = Join-Path $scriptDir "scripts\trigger-repo-committer.ps1"
 $docSyncStateFile = Join-Path $scriptDir "config\api-doc-sync-state.json"
 $archiveJobsFile = Join-Path $scriptDir "config\archive-jobs.json"
 $taskAttemptHistoryFile = Join-Path $scriptDir "config\task-attempt-history.json"
+$monitorStateFile = Join-Path $scriptDir "config\route-monitor-state.json"
+$teamLeadAlertsFile = Join-Path $scriptDir "config\teamlead-alerts.jsonl"
+
+$notifySentinelReadyPath = Join-Path $scriptDir "config\\notify-sentinel.ready.json"
+$workerSamplesLogFile = Join-Path $scriptDir "config\worker-samples.log"
 $processedRoutes = @{}
 $processedRoutesFile = Join-Path $env:TEMP "moxton-ccb-processed-routes.json"
 $activeSnapshotFile = Join-Path $env:TEMP "moxton-active-snapshot.json"
 $activeTaskIds = @()
-$taskLocksMutexName = "Global\\MoxtonTaskLocksFileMutex"
+$taskLocksMutexName = "Global\MoxtonTaskLocksFileMutex"
+$recentRouteNotifications = @{}
+$recentSampleNotifications = @{}
+$lastStaleSampleScanAt = Get-Date "1970-01-01T00:00:00Z"
+$workerRegistryPath = Join-Path $scriptDir "config\worker-panels.json"
+$autoDecisionStatePath = Join-Path $scriptDir "config\auto-decision-state.json"
+$script:monitorStartedAt = Get-Date -Format "o"
+$flag = $env:CCB_ENABLE_WEZTERM_NOTIFY
+$script:enableWeztermNotify = $true
+if ($flag) {
+    $normalized = $flag.Trim().ToLowerInvariant()
+    if ($normalized -in @("0","false","no","off")) {
+        $script:enableWeztermNotify = $false
+    }
+}
 
 function Write-Utf8NoBomFile([string]$path, [string]$content) {
     $dir = Split-Path -Parent $path
@@ -35,6 +54,601 @@ function Write-Utf8NoBomFile([string]$path, [string]$content) {
     }
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
+}
+
+function Append-Utf8Line([string]$path, [string]$line) {
+    if ([string]::IsNullOrWhiteSpace($path) -or [string]::IsNullOrWhiteSpace($line)) { return }
+    $dir = Split-Path -Parent $path
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $writer = New-Object System.IO.StreamWriter($path, $true, $utf8NoBom)
+    try {
+        $writer.WriteLine($line)
+    } finally {
+        $writer.Dispose()
+    }
+}
+
+function Write-MonitorState([string]$status, [string]$note = "") {
+    $state = [ordered]@{
+        status = if ([string]::IsNullOrWhiteSpace($status)) { "unknown" } else { $status }
+        pid = [int]$PID
+        teamlead_pane_id = if ($TeamLeadPaneId) { [string]$TeamLeadPaneId } else { "" }
+        wezterm_notify_enabled = [bool]$script:enableWeztermNotify
+        continuous = [bool]$Continuous
+        poll_interval_seconds = [int]$PollIntervalSeconds
+        started_at = $script:monitorStartedAt
+        last_loop_at = (Get-Date -Format "o")
+        script_path = $PSCommandPath
+        note = if ($note) { [string]$note } else { "" }
+    }
+    Write-Utf8NoBomFile -path $monitorStateFile -content ($state | ConvertTo-Json -Depth 6)
+}
+
+function Read-AutoDecisionState {
+    if (-not (Test-Path $autoDecisionStatePath)) {
+        return @{ updated_at = (Get-Date -Format "o"); decisions = @{} }
+    }
+    try {
+        $raw = Get-Content $autoDecisionStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $raw.decisions) {
+            $raw | Add-Member -NotePropertyName decisions -NotePropertyValue @{} -Force
+        }
+        if (-not ($raw.decisions -is [System.Collections.IDictionary])) {
+            $raw.decisions = Convert-ObjectToHashtable $raw.decisions
+        }
+        return $raw
+    } catch {
+        return @{ updated_at = (Get-Date -Format "o"); decisions = @{} }
+    }
+}
+
+function Write-AutoDecisionState($state) {
+    if (-not $state.decisions) { $state.decisions = @{} }
+    $state.updated_at = Get-Date -Format "o"
+    Write-Utf8NoBomFile -path $autoDecisionStatePath -content ($state | ConvertTo-Json -Depth 8)
+}
+
+function Mark-AutoDecisionApplied([string]$routeId, [string]$decision) {
+    if (-not $routeId) { return }
+    $state = Read-AutoDecisionState
+    if (-not $state.decisions) { $state.decisions = @{} }
+    $state.decisions[$routeId] = @{
+        decision = $decision
+        applied_at = (Get-Date -Format "o")
+    }
+    Write-AutoDecisionState $state
+}
+
+function Test-AutoDecisionApplied([string]$routeId) {
+    if (-not $routeId) { return $false }
+    $state = Read-AutoDecisionState
+    if (-not $state.decisions) { return $false }
+    return ($state.decisions.PSObject.Properties.Name -contains $routeId)
+}
+
+function Get-AutoDecisionNotifyKey([string]$TaskId, [string]$Worker, [string]$Decision) {
+    $t = if ($TaskId) { $TaskId } else { "" }
+    $w = if ($Worker) { $Worker } else { "" }
+    $d = if ($Decision) { $Decision } else { "" }
+    return ("notify:" + $d + ":" + $t + ":" + $w)
+}
+
+function Should-NotifyAutoDecision {
+    param([string]$TaskId,[string]$Worker,[string]$Decision)
+    $cooldown = Get-EnvIntOrDefault -name "AUTO_DECISION_NOTIFY_COOLDOWN_MINUTES" -defaultValue 10
+    if ($cooldown -le 0) { return $true }
+    $state = Read-AutoDecisionState
+    if (-not $state.decisions) { $state.decisions = @{} }
+    if (-not ($state.decisions -is [System.Collections.IDictionary])) { $state.decisions = Convert-ObjectToHashtable $state.decisions }
+    $key = Get-AutoDecisionNotifyKey -TaskId $TaskId -Worker $Worker -Decision $Decision
+    if (-not $state.decisions.ContainsKey($key)) { return $true }
+    $last = $state.decisions[$key]
+    if (-not $last -or -not $last.notified_at) { return $true }
+    $parsed = $null
+    try { $parsed = [DateTimeOffset]::Parse([string]$last.notified_at) } catch {}
+    if (-not $parsed) { return $true }
+    $age = ((Get-Date).ToUniversalTime() - $parsed.UtcDateTime).TotalMinutes
+    return ($age -ge $cooldown)
+}
+
+function Mark-AutoDecisionNotified {
+    param([string]$TaskId,[string]$Worker,[string]$Decision)
+    $state = Read-AutoDecisionState
+    if (-not $state.decisions) { $state.decisions = @{} }
+    $key = Get-AutoDecisionNotifyKey -TaskId $TaskId -Worker $Worker -Decision $Decision
+    $state.decisions[$key] = @{
+        decision = $Decision
+        task = $TaskId
+        worker = $Worker
+        notified_at = (Get-Date -Format "o")
+    }
+    Write-AutoDecisionState $state
+}
+
+function Get-WeztermPanes {
+    try {
+        $raw = wezterm cli list --format json 2>$null
+        if (-not $raw) { return @() }
+        return @($raw | ConvertFrom-Json)
+    } catch {
+        return @()
+    }
+}
+
+function Get-WorkerPaneIdSet {
+    $set = New-Object System.Collections.Generic.HashSet[string]
+    if (-not (Test-Path $workerRegistryPath)) { return $set }
+    try {
+        $raw = Get-Content $workerRegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($raw -and $raw.workers) {
+            foreach ($p in $raw.workers.PSObject.Properties) {
+                $paneId = $null
+                if ($p.Value -and $p.Value.pane_id) { $paneId = [string]$p.Value.pane_id }
+                if ($paneId) { [void]$set.Add($paneId) }
+            }
+        }
+    } catch {}
+    return $set
+}
+
+function Resolve-TeamLeadPaneId([string]$preferredPaneId) {
+    $panes = Get-WeztermPanes
+    if (-not $panes -or $panes.Count -eq 0) { return $null }
+
+    $workerPaneIds = Get-WorkerPaneIdSet
+    if ($workerPaneIds.Count -gt 0) {
+        $panes = @($panes | Where-Object { -not $workerPaneIds.Contains([string]$_.pane_id) })
+    }
+    if (-not $panes -or $panes.Count -eq 0) { return $null }
+
+    if ($preferredPaneId) {
+        $matched = $panes | Where-Object { ([string]$_.pane_id) -eq ([string]$preferredPaneId) } | Select-Object -First 1
+        if ($matched) { return [string]$matched.pane_id }
+    }
+    if ($env:WEZTERM_PANE) {
+        $matched = $panes | Where-Object { ([string]$_.pane_id) -eq ([string]$env:WEZTERM_PANE) } | Select-Object -First 1
+        if ($matched) { return [string]$matched.pane_id }
+    }
+    $fallback = $panes | Where-Object { $_.title -like '*claude*' -or $_.title -like '* Claude*' } | Select-Object -First 1
+    if ($fallback) { return [string]$fallback.pane_id }
+    $ccbPane = $panes | Where-Object { $_.cwd -like '*\\moxton-ccb*' -or $_.cwd -like '*/moxton-ccb*' } | Select-Object -First 1
+    if ($ccbPane) { return [string]$ccbPane.pane_id }
+    if ($panes.Count -eq 1) { return [string]$panes[0].pane_id }
+    return $null
+}
+
+function Notify-TeamLeadWake([string]$message) {
+    if ([string]::IsNullOrWhiteSpace($message)) { return $false }
+    if (-not (Should-NotifyTeamLeadWake)) { return }
+    if (-not $script:enableWeztermNotify) { return $false }
+    $targetPane = Resolve-TeamLeadPaneId -preferredPaneId $TeamLeadPaneId
+    if (-not $targetPane) { return $false }
+    try {
+        wezterm cli send-text --pane-id $targetPane --no-paste $message | Out-Null
+        Start-Sleep -Milliseconds 80
+        wezterm cli send-text --pane-id $targetPane --no-paste "`r" | Out-Null
+        return $true
+    } catch {
+        $targetPane = Resolve-TeamLeadPaneId -preferredPaneId ""
+        if (-not $targetPane) { return $false }
+        try {
+            wezterm cli send-text --pane-id $targetPane --no-paste $message | Out-Null
+            Start-Sleep -Milliseconds 80
+            wezterm cli send-text --pane-id $targetPane --no-paste "`r" | Out-Null
+            return $true
+        } catch {
+            return $false
+        }
+    }
+}
+
+function Read-NotifySentinelReady {
+    if (-not (Test-Path $notifySentinelReadyPath)) { return $null }
+    try { return (Get-Content $notifySentinelReadyPath -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+}
+
+function Get-NotifySentinelAgeMinutes($ready) {
+    if (-not $ready) { return $null }
+    $at = $null
+    try { if ($ready.at) { $at = [DateTimeOffset]::Parse([string]$ready.at) } } catch {}
+    if (-not $at) { return $null }
+    return ((Get-Date).ToUniversalTime() - $at.UtcDateTime).TotalMinutes
+}
+
+function Get-NotifySentinelWakeGraceMinutes {
+    return Get-EnvIntOrDefault -name "CCB_NOTIFY_SENTINEL_WAKE_GRACE_MINUTES" -defaultValue 3
+}
+
+function Should-NotifyTeamLeadWake {
+    $flag = $env:CCB_ROUTE_MONITOR_NOTIFY
+    if ($flag) {
+        $norm = $flag.Trim().ToLowerInvariant()
+        if ($norm -in @("0","false","no","off")) { return $false }
+        if ($norm -in @("1","true","yes","on")) { return $true }
+    }
+
+    $ready = Read-NotifySentinelReady
+    if (-not $ready) { return $true }
+
+    $source = if ($ready.source) { [string]$ready.source } else { "" }
+    if ($source -ne "notify-sentinel") { return $true }
+
+    $notifyState = if ($ready.notify) { ([string]$ready.notify).Trim().ToLowerInvariant() } else { "" }
+    if ($notifyState -notin @("on", "1", "true", "yes")) { return $true }
+
+    $age = Get-NotifySentinelAgeMinutes $ready
+    if ($null -eq $age) { return $true }
+
+    $grace = Get-NotifySentinelWakeGraceMinutes
+    return ($age -gt $grace)
+}
+
+function Write-TeamLeadAlert {
+    param(
+        [string]$Kind,
+        [string]$TaskId,
+        [string]$Worker,
+        [string]$Status,
+        [string]$Action,
+        [string]$RunId,
+        [string]$LockState,
+        [string]$Detail
+    )
+
+    $record = [ordered]@{
+        at = (Get-Date -Format "o")
+        kind = if ($Kind) { $Kind } else { "route" }
+        task = if ($TaskId) { $TaskId } else { "" }
+        worker = if ($Worker) { $Worker } else { "" }
+        status = if ($Status) { $Status } else { "" }
+        action = if ($Action) { $Action } else { "" }
+        run_id = if ($RunId) { $RunId } else { "" }
+        lock = if ($LockState) { $LockState } else { "" }
+        detail = if ($Detail) { $Detail } else { "" }
+    }
+    Append-Utf8Line -path $teamLeadAlertsFile -line ($record | ConvertTo-Json -Compress -Depth 6)
+}
+
+function Get-RouteDetailPreview([string]$detail) {
+    if ([string]::IsNullOrWhiteSpace($detail)) { return "-" }
+    $flat = ($detail -replace "\r?\n", " ").Trim()
+    if ($flat.Length -gt 140) {
+        return $flat.Substring(0, 140) + "..."
+    }
+    return $flat
+}
+
+function Should-NotifyTeamLeadRouteEvent {
+    param(
+        [object]$Route,
+        [string]$Action,
+        [string]$LockState,
+        [string]$Detail
+    )
+
+    if (-not $Route) { return $false }
+    $status = if ($Route.status) { ([string]$Route.status).ToLower() } else { "" }
+    $actionText = if ([string]::IsNullOrWhiteSpace($Action)) { "processed" } else { $Action.ToLower() }
+    $lockText = if ([string]::IsNullOrWhiteSpace($LockState)) { "" } else { $LockState.ToLower() }
+
+    # 正常 in_progress 心跳不直接唤醒 Team Lead，避免刷屏；状态变化通知交由 Agent Teams 或 Team Lead 主动查看。
+    # 但如果是 ACK 上报（body 含 ack=1），允许通知一次。
+    if ($actionText -eq "applied" -and $status -eq "in_progress" -and $lockText -eq "in_progress") {
+        if ($Detail -and $Detail.IndexOf("ack=1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            # allow
+        } else {
+            return $false
+        }
+    }
+
+    $preview = Get-RouteDetailPreview -detail $Detail
+    $taskId = if ($Route.task) { [string]$Route.task } else { "-" }
+    $worker = if ($Route.from) { [string]$Route.from } else { "-" }
+    $key = ($taskId + "|" + $worker + "|" + $status + "|" + $actionText + "|" + $lockText + "|" + $preview)
+    $now = Get-Date
+
+    $expiredKeys = @()
+    foreach ($existingKey in @($recentRouteNotifications.Keys)) {
+        $lastAt = $recentRouteNotifications[$existingKey]
+        if ($lastAt -is [datetime] -and (($now - $lastAt).TotalSeconds -gt 120)) {
+            $expiredKeys += $existingKey
+        }
+    }
+    foreach ($expired in $expiredKeys) {
+        $recentRouteNotifications.Remove($expired) | Out-Null
+    }
+
+    if ($recentRouteNotifications.ContainsKey($key)) {
+        $lastAt = $recentRouteNotifications[$key]
+        if ($lastAt -is [datetime] -and (($now - $lastAt).TotalSeconds -lt 30)) {
+            return $false
+        }
+    }
+
+    $recentRouteNotifications[$key] = $now
+    return $true
+}
+
+function Notify-TeamLeadRouteEvent {
+    param(
+        [object]$Route,
+        [string]$Action,
+        [string]$LockState,
+        [string]$Detail
+    )
+
+    if (-not $Route) { return }
+    if (-not (Should-NotifyTeamLeadRouteEvent -Route $Route -Action $Action -LockState $LockState -Detail $Detail)) { return }
+    $taskId = if ($Route.task) { [string]$Route.task } else { "-" }
+    $worker = if ($Route.from) { [string]$Route.from } else { "-" }
+    $status = if ($Route.status) { [string]$Route.status } else { "-" }
+    $runId = if ($Route.PSObject.Properties.Name -contains "run_id" -and $Route.run_id) { [string]$Route.run_id } else { "-" }
+    $lockText = if ([string]::IsNullOrWhiteSpace($LockState)) { "-" } else { $LockState }
+    $actionText = if ([string]::IsNullOrWhiteSpace($Action)) { "processed" } else { $Action }
+    $preview = Get-RouteDetailPreview -detail $Detail
+    Write-TeamLeadAlert -Kind "route" -TaskId $taskId -Worker $worker -Status $status -Action $actionText -RunId $runId -LockState $lockText -Detail $preview
+    $message = "[ROUTE] task=$taskId status=$status from=$worker action=$actionText. next=status/check_routes"
+    Notify-TeamLeadWake -message $message | Out-Null
+}
+
+function Get-EnvIntOrDefault([string]$name, [int]$defaultValue) {
+    try {
+        $raw = [string](Get-Item -Path ("Env:" + $name) -ErrorAction SilentlyContinue).Value
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $defaultValue }
+        $val = 0
+        if ([int]::TryParse($raw, [ref]$val)) { return $val }
+    } catch {}
+    return $defaultValue
+}
+
+function Get-HeartbeatStaleThresholdMinutes {
+    return Get-EnvIntOrDefault -name "TEAMLEAD_HEARTBEAT_STALE_MINUTES" -defaultValue 3
+}
+
+function Try-ParseUtc([string]$value) {
+    if (-not $value) { return $null }
+    try {
+        $dto = [DateTimeOffset]::Parse([string]$value)
+        return $dto.UtcDateTime
+    } catch {
+        return $null
+    }
+}
+
+function Get-AttemptHeartbeatUtc($attempt) {
+    if (-not $attempt) { return $null }
+    $last = $null
+    if ($attempt.PSObject.Properties['last_heartbeat_at']) {
+        $last = Try-ParseUtc ([string]$attempt.last_heartbeat_at)
+    }
+    if (-not $last) {
+        $last = Try-ParseUtc ([string]$attempt.started_at)
+    }
+    return $last
+}
+
+function Get-AttemptHeartbeatAgeMinutes($attempt) {
+    $last = Get-AttemptHeartbeatUtc $attempt
+    if (-not $last) { return $null }
+    $span = ((Get-Date).ToUniversalTime() - $last)
+    return $span.TotalMinutes
+}
+
+function Get-WorkerPaneId([string]$workerName) {
+    if (-not $workerName) { return $null }
+    $registryScript = Join-Path $scriptDir "scripts\worker-registry.ps1"
+    if (-not (Test-Path $registryScript)) { return $null }
+    try {
+        $pane = & $registryScript -Action get -WorkerName $workerName 2>$null
+        if (-not $pane) { return $null }
+        return ([string]$pane).Trim()
+    } catch {
+        return $null
+    }
+}
+
+function Get-PaneTailAscii([string]$paneId, [int]$maxLines = 20, [int]$maxChars = 1200) {
+    if (-not $paneId) { return "" }
+    try {
+        $text = wezterm cli get-text --pane-id $paneId 2>$null
+    } catch {
+        return ""
+    }
+    if (-not $text) { return "" }
+    $lines = @($text -split "`n")
+    if ($lines.Count -gt $maxLines) {
+        $lines = $lines[-$maxLines..-1]
+    }
+    $joined = ($lines -join "`n")
+    $clean = ($joined -replace '[^\x09\x0A\x0D\x20-\x7E]', '')
+    if ($clean.Length -gt $maxChars) {
+        $clean = $clean.Substring($clean.Length - $maxChars)
+    }
+    return $clean.Trim()
+}
+
+function Should-NotifySample([string]$taskId, [string]$worker, [string]$reason) {
+    if (-not $taskId -or -not $worker -or -not $reason) { return $false }
+    $key = ($taskId + "|" + $worker + "|" + $reason)
+    $now = Get-Date
+    if ($recentSampleNotifications.ContainsKey($key)) {
+        $lastAt = $recentSampleNotifications[$key]
+        if ($lastAt -is [datetime] -and (($now - $lastAt).TotalSeconds -lt 120)) {
+            return $false
+        }
+    }
+    $recentSampleNotifications[$key] = $now
+    return $true
+}
+
+function Notify-TeamLeadSample {
+    param(
+        [string]$TaskId,
+        [string]$Worker,
+        [string]$Reason
+    )
+    if (-not (Should-NotifySample -taskId $TaskId -worker $Worker -reason $Reason)) { return }
+    $paneId = Get-WorkerPaneId -workerName $Worker
+    $tail = if ($paneId) { Get-PaneTailAscii -paneId $paneId } else { "" }
+    $sample = [ordered]@{
+        at = (Get-Date -Format "o")
+        task = if ($TaskId) { $TaskId } else { "" }
+        worker = if ($Worker) { $Worker } else { "" }
+        reason = if ($Reason) { $Reason } else { "" }
+        pane = if ($paneId) { $paneId } else { "" }
+        tail = if ($tail) { $tail } else { "" }
+    }
+    Append-Utf8Line -path $workerSamplesLogFile -line ($sample | ConvertTo-Json -Compress -Depth 6)
+}
+
+function Invoke-TeamLeadControl {
+    param(
+        [string]$Arguments
+    )
+    if (-not $Arguments) { return $false }
+    $scriptPath = Join-Path $scriptDir "scripts\teamlead-control.ps1"
+    if (-not (Test-Path $scriptPath)) { return $false }
+    $pane = Resolve-TeamLeadPaneId -preferredPaneId $TeamLeadPaneId
+    $envPrefix = if ($pane) { "`$env:TEAM_LEAD_PANE_ID = '$pane'; " } else { "" }
+    $cmd = $envPrefix + "& '" + $scriptPath + "' " + $Arguments
+    try {
+        $proc = Start-Process -FilePath "powershell" -ArgumentList @("-NoProfile","-ExecutionPolicy","Bypass","-Command",$cmd) -NoNewWindow -PassThru
+        $proc.WaitForExit() | Out-Null
+        return ($proc.ExitCode -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+function Get-BlockedDecision([string]$body) {
+    if (-not $body) { return "unknown" }
+    $text = $body.ToLowerInvariant()
+    if ($text -match "3033|health" -or $text -match "connection refused|econnrefused|port .* closed|service unavailable|server not started") {
+        return "service_down"
+    }
+    if ($text -match "pre-existing|dirty state|working tree|uncommitted|git status|modified files|already modified|baseline") {
+        return "dirty_state"
+    }
+    if ($text -match "credential|credentials|token|login|password|no credentials|sec_e_no_credentials|auth") {
+        return "missing_credentials"
+    }
+    return "unknown"
+}
+
+function Auto-ResolveBlockedRoute {
+    param(
+        [object]$Route,
+        [string]$RouteId
+    )
+    $disable = $env:CCB_DISABLE_AUTO_DECISION
+    if ($disable) {
+        $norm = $disable.Trim().ToLowerInvariant()
+        if ($norm -in @("1","true","yes","on")) { return }
+    }
+    if (-not $Route) { return }
+    $status = if ($Route.status) { ([string]$Route.status).ToLower() } else { "" }
+    if ($status -ne "blocked" -and $status -ne "fail") { return }
+    if (Test-AutoDecisionApplied -routeId $RouteId) { return }
+
+    $taskId = if ($Route.task) { [string]$Route.task } else { "" }
+    $worker = if ($Route.from) { [string]$Route.from } else { "" }
+    $body = if ($Route.body) { [string]$Route.body } else { "" }
+    $decision = Get-BlockedDecision -body $body
+
+    switch ($decision) {
+        "service_down" {
+            if (-not (Should-NotifyAutoDecision -TaskId $taskId -Worker $worker -Decision $decision)) {
+                return
+            }
+            Mark-AutoDecisionNotified -TaskId $taskId -Worker $worker -Decision $decision
+            Write-TeamLeadAlert -Kind "auto-decision" -TaskId $taskId -Worker $worker -Status $status -Action $decision -RunId "" -LockState "" -Detail "decision=service_down; action=notify_only; next=restart service then requeue+dispatch-qa"
+            Mark-AutoDecisionApplied -routeId $RouteId -decision $decision
+            return
+        }
+        "dirty_state" {
+            # auto baseline-clean + requeue + dispatch (dev or qa)
+            $phase = if ($worker -match "-qa(?:-\\d+)?$") { "qa" } else { "dev" }
+            if (-not (Should-NotifyAutoDecision -TaskId $taskId -Worker $worker -Decision $decision)) {
+                return
+            }
+            Mark-AutoDecisionNotified -TaskId $taskId -Worker $worker -Decision $decision
+            Write-TeamLeadAlert -Kind "auto-decision" -TaskId $taskId -Worker $worker -Status $status -Action $decision -RunId "" -LockState "" -Detail ("decision=dirty_state; action=baseline-clean + requeue + dispatch-" + $phase)
+            Invoke-TeamLeadControl -Arguments "-Action recover -RecoverAction baseline-clean" | Out-Null
+            if ($phase -eq "qa") {
+                Invoke-TeamLeadControl -Arguments ("-Action requeue -TaskId " + $taskId + " -TargetState waiting_qa -RequeueReason ""auto_dirty_state_clean""") | Out-Null
+                Invoke-TeamLeadControl -Arguments ("-Action dispatch-qa -TaskId " + $taskId) | Out-Null
+            } else {
+                Invoke-TeamLeadControl -Arguments ("-Action requeue -TaskId " + $taskId + " -TargetState assigned -RequeueReason ""auto_dirty_state_clean""") | Out-Null
+                Invoke-TeamLeadControl -Arguments ("-Action dispatch -TaskId " + $taskId) | Out-Null
+            }
+            Mark-AutoDecisionApplied -routeId $RouteId -decision $decision
+            return
+        }
+        "missing_credentials" {
+            if (-not (Should-NotifyAutoDecision -TaskId $taskId -Worker $worker -Decision $decision)) {
+                return
+            }
+            Mark-AutoDecisionNotified -TaskId $taskId -Worker $worker -Decision $decision
+            Write-TeamLeadAlert -Kind "auto-decision" -TaskId $taskId -Worker $worker -Status $status -Action $decision -RunId "" -LockState "" -Detail "decision=missing_credentials; action=manual; next=provide credentials or run push in authenticated env"
+            Mark-AutoDecisionApplied -routeId $RouteId -decision $decision
+            return
+        }
+        default {
+            # unknown: leave for Team Lead
+            return
+        }
+    }
+}
+
+function Maybe-SampleOnRoute {
+    param(
+        [object]$Route
+    )
+    if (-not $Route) { return }
+    $status = if ($Route.status) { ([string]$Route.status).ToLower() } else { "" }
+    if ($status -in @("blocked", "fail")) {
+        $taskId = if ($Route.task) { [string]$Route.task } else { "" }
+        $worker = if ($Route.from) { [string]$Route.from } else { "" }
+        Notify-TeamLeadSample -TaskId $taskId -Worker $worker -Reason $status
+    }
+}
+
+function Check-StaleHeartbeatsAndSample {
+    $threshold = Get-HeartbeatStaleThresholdMinutes
+    if ($threshold -le 0) { return }
+    $history = Read-TaskAttemptHistory
+    $attempts = @(Get-TaskAttemptList $history)
+    if ($attempts.Count -eq 0) { return }
+
+    $latestByKey = @{}
+    foreach ($attempt in $attempts) {
+        if (-not $attempt) { continue }
+        if (-not $attempt.task_id -or -not $attempt.phase) { continue }
+        if ($attempt.result -ne "running") { continue }
+        $last = Get-AttemptHeartbeatUtc $attempt
+        if (-not $last) { continue }
+        $key = ([string]$attempt.task_id + "|" + [string]$attempt.phase)
+        if (-not $latestByKey.ContainsKey($key)) {
+            $latestByKey[$key] = @{ attempt = $attempt; last = $last }
+        } else {
+            if ($last -gt $latestByKey[$key].last) {
+                $latestByKey[$key] = @{ attempt = $attempt; last = $last }
+            }
+        }
+    }
+
+    foreach ($entry in $latestByKey.Values) {
+        $attempt = $entry.attempt
+        $age = Get-AttemptHeartbeatAgeMinutes $attempt
+        if ($null -eq $age) { continue }
+        if ($age -lt $threshold) { continue }
+        $taskId = [string]$attempt.task_id
+        $worker = [string]$attempt.worker
+        Notify-TeamLeadSample -TaskId $taskId -Worker $worker -Reason "stale_heartbeat"
+    }
 }
 
 function Read-Json([string]$path) {
@@ -229,7 +843,7 @@ function Should-ApplyPrimaryTaskRoute {
         }
     }
 
-    if ($state -in @("in_progress", "qa")) {
+    if ($state -in @("in_progress", "qa", "blocked")) {
         return @{ apply = $true; reason = "" }
     }
 
@@ -295,6 +909,7 @@ function Update-TaskAttemptHistoryFromRoute {
             dispatch_action = "route-monitor/reconstructed"
             run_id = $RunId
             started_at = $now
+            last_heartbeat_at = ""
             ended_at = ""
             result = "running"
             final_state = ""
@@ -312,43 +927,48 @@ function Update-TaskAttemptHistoryFromRoute {
 
     switch ($statusLower) {
         "success" {
-            $latest.result = "success"
-            $latest.final_state = $ResolvedLockState
-            $latest.ended_at = $now
-            $latest.updated_by = "route-monitor/success"
+            Set-ObjectField -obj $latest -name "result" -value "success"
+            Set-ObjectField -obj $latest -name "final_state" -value $ResolvedLockState
+            Set-ObjectField -obj $latest -name "last_heartbeat_at" -value $now
+            Set-ObjectField -obj $latest -name "ended_at" -value $now
+            Set-ObjectField -obj $latest -name "updated_by" -value "route-monitor/success"
         }
         "blocked" {
-            $latest.result = "blocked"
-            $latest.final_state = $ResolvedLockState
-            $latest.ended_at = $now
-            $latest.updated_by = "route-monitor/blocked"
+            Set-ObjectField -obj $latest -name "result" -value "blocked"
+            Set-ObjectField -obj $latest -name "final_state" -value $ResolvedLockState
+            Set-ObjectField -obj $latest -name "last_heartbeat_at" -value $now
+            Set-ObjectField -obj $latest -name "ended_at" -value $now
+            Set-ObjectField -obj $latest -name "updated_by" -value "route-monitor/blocked"
         }
         "fail" {
-            $latest.result = "blocked"
-            $latest.final_state = $ResolvedLockState
-            $latest.ended_at = $now
-            $latest.updated_by = "route-monitor/fail"
+            Set-ObjectField -obj $latest -name "result" -value "blocked"
+            Set-ObjectField -obj $latest -name "final_state" -value $ResolvedLockState
+            Set-ObjectField -obj $latest -name "last_heartbeat_at" -value $now
+            Set-ObjectField -obj $latest -name "ended_at" -value $now
+            Set-ObjectField -obj $latest -name "updated_by" -value "route-monitor/fail"
         }
         "in_progress" {
-            $latest.result = "running"
-            $latest.final_state = $ResolvedLockState
-            $latest.updated_by = "route-monitor/in_progress"
+            Set-ObjectField -obj $latest -name "result" -value "running"
+            Set-ObjectField -obj $latest -name "final_state" -value $ResolvedLockState
+            Set-ObjectField -obj $latest -name "last_heartbeat_at" -value $now
+            Set-ObjectField -obj $latest -name "updated_by" -value "route-monitor/in_progress"
         }
         "qa" {
-            $latest.result = "running"
-            $latest.final_state = $ResolvedLockState
-            $latest.updated_by = "route-monitor/qa"
+            Set-ObjectField -obj $latest -name "result" -value "running"
+            Set-ObjectField -obj $latest -name "final_state" -value $ResolvedLockState
+            Set-ObjectField -obj $latest -name "last_heartbeat_at" -value $now
+            Set-ObjectField -obj $latest -name "updated_by" -value "route-monitor/qa"
         }
         "waiting_qa" {
-            $latest.result = "running"
-            $latest.final_state = $ResolvedLockState
-            $latest.updated_by = "route-monitor/waiting_qa"
+            Set-ObjectField -obj $latest -name "result" -value "running"
+            Set-ObjectField -obj $latest -name "final_state" -value $ResolvedLockState
+            Set-ObjectField -obj $latest -name "last_heartbeat_at" -value $now
+            Set-ObjectField -obj $latest -name "updated_by" -value "route-monitor/waiting_qa"
         }
         default {
             return
         }
     }
-
     $history.attempts = @($attempts.ToArray())
     Write-TaskAttemptHistory $history
 }
@@ -531,6 +1151,7 @@ function Convert-ToArchiveJobMap($jobsObj) {
 function Mark-BackendDocSyncPending([string]$BackendTaskId, [string]$QaWorker) {
     if (-not $BackendTaskId) { return }
     $state = Read-DocSyncState
+    if (-not ($state.backend -is [System.Collections.IDictionary])) { $state.backend = Convert-ObjectToHashtable $state.backend }
     if (-not $state.backend.ContainsKey($BackendTaskId)) {
         $state.backend[$BackendTaskId] = @{}
     }
@@ -564,6 +1185,7 @@ function Update-DocSyncStateFromRoute {
 
     if ($taskUpper -match '^DOC-UPDATE-(BACKEND-\d+)$') {
         $backendTask = $Matches[1]
+        if (-not ($state.backend -is [System.Collections.IDictionary])) { $state.backend = Convert-ObjectToHashtable $state.backend }
         if (-not $state.backend.ContainsKey($backendTask)) {
             $state.backend[$backendTask] = @{}
         }
@@ -695,6 +1317,22 @@ function Resolve-TaskMarkdownPath([string]$TaskId) {
     }
 
     return $null
+}
+
+function Get-TaskQALevel([string]$TaskId) {
+    $path = Resolve-TaskMarkdownPath -TaskId $TaskId
+    if (-not $path) { return "full" }
+    try {
+        $content = Get-Content -Path $path -Raw -Encoding UTF8
+    } catch {
+        return "full"
+    }
+    if (-not $content) { return "full" }
+    $m = [regex]::Match($content, '^\s*QA_LEVEL\s*:\s*([A-Za-z]+)\s*$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Multiline)
+    if (-not $m.Success) { return "full" }
+    $level = $m.Groups[1].Value.ToLowerInvariant()
+    if ($level -in @("full", "smoke", "skip")) { return $level }
+    return "full"
 }
 
 function Get-QaPayload([string]$Body) {
@@ -993,6 +1631,12 @@ function Update-TaskLockFromRoute {
     )
 
     $lockState = Resolve-TaskLockStateFromRoute -Status $Status -WorkerName $WorkerName
+    $statusLower = if ($Status) { ([string]$Status).ToLower() } else { "" }
+    $qaLevel = Get-TaskQALevel -TaskId $TaskId
+    $isDevSuccess = ($statusLower -eq "success" -and $WorkerName -match "-dev(?:-\\d+)?$")
+    if ($lockState -eq "waiting_qa" -and $isDevSuccess -and $qaLevel -eq "skip") {
+        $lockState = "qa_passed"
+    }
     $safeBody = if ($null -eq $Body) { "" } else { [string]$Body }
     $bodyPreview = if ($safeBody.Length -gt 100) { $safeBody.Substring(0, 100) + "..." } else { $safeBody }
     $updateResult = Invoke-WithTaskLocksMutex {
@@ -1042,6 +1686,9 @@ function Update-TaskLockFromRoute {
         $lock.state = $lockState
         $lock.updated_at = $now
         $lock.updated_by = "route-monitor"
+        if ($qaLevel -and ($qaLevel -ne "full")) {
+            Set-ObjectField -obj $lock -name "qa_level" -value $qaLevel
+        }
         if ($RouteRunId) {
             Set-ObjectField -obj $lock -name "run_id" -value $RouteRunId
         }
@@ -1053,7 +1700,7 @@ function Update-TaskLockFromRoute {
         if ($RouteRunId) {
             $routeUpdate.run_id = $RouteRunId
         }
-        $lock.routeUpdate = $routeUpdate
+        Set-ObjectField -obj $lock -name "routeUpdate" -value $routeUpdate
         Write-TaskLocks $locks
         return @{ applied = $true; reason = ""; state = $lockState }
     }
@@ -1320,8 +1967,12 @@ function Process-InboxRoutes {
         try {
             $gate = Apply-QaSuccessGate -Route $r
             $effectiveRoute = $gate.route
+            $notifyAction = "processed"
+            $notifyLockState = ""
+            $notifyDetail = if ($effectiveRoute.body) { [string]$effectiveRoute.body } else { "" }
             if ($gate.downgraded) {
                 Write-Host ("  [QA GATE] success -> blocked: " + $gate.reason) -ForegroundColor Yellow
+                $notifyDetail = "qa_gate=" + $gate.reason + "; " + $notifyDetail
             }
             Show-RouteNotification -route $effectiveRoute
             Update-DocSyncStateFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body
@@ -1331,14 +1982,23 @@ function Process-InboxRoutes {
             if ($routeApply.apply) {
                 $lockUpdate = Update-TaskLockFromRoute -TaskId $effectiveRoute.task -Status $effectiveRoute.status -WorkerName $effectiveRoute.from -Body $effectiveRoute.body -RouteRunId $routeRunId
                 if ($lockUpdate.applied) {
+                    $notifyAction = "applied"
+                    $notifyLockState = [string]$lockUpdate.state
                     Update-TaskAttemptHistoryFromRoute -TaskId ([string]$effectiveRoute.task) -Status ([string]$effectiveRoute.status) -WorkerName ([string]$effectiveRoute.from) -ResolvedLockState ([string]$lockUpdate.state) -RunId $routeRunId
                     Write-QaSummaryToTaskFile -TaskId ([string]$effectiveRoute.task) -WorkerName ([string]$effectiveRoute.from) -Status ([string]$effectiveRoute.status).ToLower() -Body ([string]$effectiveRoute.body) -Timestamp (Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz")
                 } else {
+                    $notifyAction = "ignored"
+                    $notifyDetail = [string]$lockUpdate.reason
                     Write-Host ("  [ROUTE-IGNORED] task=" + [string]$effectiveRoute.task + " from=" + [string]$effectiveRoute.from + " reason=" + [string]$lockUpdate.reason) -ForegroundColor DarkYellow
                 }
             } else {
+                $notifyAction = "ignored"
+                $notifyDetail = [string]$routeApply.reason
                 Write-Host ("  [ROUTE-IGNORED] task=" + [string]$effectiveRoute.task + " from=" + [string]$effectiveRoute.from + " reason=" + $routeApply.reason) -ForegroundColor DarkYellow
             }
+            Notify-TeamLeadRouteEvent -Route $effectiveRoute -Action $notifyAction -LockState $notifyLockState -Detail $notifyDetail
+            Auto-ResolveBlockedRoute -Route $effectiveRoute -RouteId $routeId
+            Maybe-SampleOnRoute -Route $effectiveRoute
 
             $processedAt = Get-Date -Format "o"
             $newProcessed[$routeId] = $processedAt
@@ -1346,6 +2006,7 @@ function Process-InboxRoutes {
             $r.processed_at = $processedAt
             $inboxChanged = $true
         } catch {
+            Notify-TeamLeadRouteEvent -Route $r -Action "error" -LockState "" -Detail $_.Exception.Message
             Write-Host ("  [ROUTE-ERROR] route_id=" + $routeId + " task=" + [string]$r.task + " err=" + $_.Exception.Message) -ForegroundColor Yellow
             continue
         }
@@ -1452,12 +2113,21 @@ if ($null -ne $loadedActive) {
     Save-ActiveSnapshotIds -ids $script:activeTaskIds
 }
 
+Write-MonitorState -status "starting" -note "route-monitor bootstrap complete"
+
 do {
     try {
         Process-InboxRoutes
         Reconcile-ArchiveCommitFallback
         Check-RoundCompleteTrigger
+        $now = Get-Date
+        if (($now - $script:lastStaleSampleScanAt).TotalSeconds -ge 15) {
+            Check-StaleHeartbeatsAndSample
+            $script:lastStaleSampleScanAt = $now
+        }
+        Write-MonitorState -status "running"
     } catch {
+        Write-MonitorState -status "error" -note $_.Exception.Message
         Write-Host ("Monitor error: " + $_.Exception.Message) -ForegroundColor Yellow
     }
 
@@ -1466,5 +2136,11 @@ do {
     }
 } while ($Continuous)
 
+Write-MonitorState -status "stopped" -note "route-monitor loop exited"
 Write-Host ""
 Write-Host "Monitor stopped." -ForegroundColor Cyan
+
+
+
+
+

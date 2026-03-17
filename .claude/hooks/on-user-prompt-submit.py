@@ -1,4 +1,4 @@
-import json
+﻿import json
 import sys
 import os
 import tempfile
@@ -20,7 +20,8 @@ if not os.path.exists(flag):
                 "```bash\n"
                 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\\moxton-ccb\\scripts\\teamlead-control.ps1" -Action bootstrap\n'
                 "```\n\n"
-                "当前只允许 bootstrap 和 status 操作。\n"
+                "当前仅允许 bootstrap/status + 审批处理（show-approval/approve-request/deny-request）；必要时可用 recover -RecoverAction baseline-clean 清理遗留 pending 审批。\n"
+                "若你已执行 bootstrap 仍提示限制，请检查 $env:TEMP\\moxton-bootstrap-done.flag 是否存在。\n"
                 "禁止直接调用子脚本（start-worker.ps1、dispatch-task.ps1 等）。\n"
                 "禁止使用 powershell -Command 执行复杂逻辑。\n"
                 "=== END ==="

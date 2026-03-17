@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-03-03
+last_verified: 2026-03-10
 verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, SHOP-FE-001]
 ---
 
@@ -8,7 +8,7 @@ verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-0
 > **项目**: Moxton 商城前端
 > **路径**: `E:\nuxt-moxton`
 > **类型**: Nuxt 3 应用
-> **端口**: 3000
+> **端口**: 3666
 > **状态**: 🟢 活跃
 
 ## 项目概述

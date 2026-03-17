@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-02-26
+last_verified: 2026-03-10
 verified_against: [BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
@@ -7,7 +7,7 @@ verified_against: [BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 
 > **用途**: Team Lead 通过此文件感知三个项目的协调状态
 > **更新频率**: 每次修改跨项目接口时更新
-> **最后更新**: 2026-02-26
+> **最后更新**: 2026-03-10
 
 ## 📊 项目概览
 
@@ -15,7 +15,7 @@ verified_against: [BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 |------|------|------|------|------|
 | 后端 API | `E:\moxton-lotapi` | Koa/TypeScript | 3006 | 🟢 活跃 |
 | 管理后台 | `E:\moxton-lotadmin` | Vue3/Soybean | 3002 | 🟢 活跃 |
-| 前端商城 | `E:\nuxt-moxton` | Nuxt3 | 3000 | 🟢 活跃 |
+| 前端商城 | `E:\nuxt-moxton` | Nuxt3 | 3666 | 🟢 活跃 |
 
 ---
 
@@ -138,7 +138,7 @@ POST /upload/image  // 图片上传
 ┌─────────────────┐
 │  nuxt-moxton    │ ── auth, products, categories, cart, orders,
 │  (前端商城)      │    payments, addresses, notifications,
-│    :3000        │    offline-orders, upload
+│    :3666        │    offline-orders, upload
 └────────┬────────┘
          │
          │ HTTP API

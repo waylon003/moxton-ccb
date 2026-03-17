@@ -13,12 +13,16 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction baseline-clean
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction full-clean
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action archive -TaskId SHOP-FE-004
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action show-approval -RequestId APR-20260228120000-0001
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action approve-request -RequestId APR-20260228120000-0001
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action deny-request -RequestId APR-20260228120000-0001
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action approve-local -WorkerName shop-fe-qa [-PromptType auto|command_approval|edit_confirm|menu_approval]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action approve-local-session -WorkerName shop-fe-qa [-PromptType auto|menu_approval]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action deny-local -WorkerName shop-fe-qa [-PromptType auto|command_approval|edit_confirm|menu_approval]
 
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet("bootstrap", "dispatch", "dispatch-qa", "status", "requeue", "recover", "add-lock", "archive", "approve-request", "deny-request")]
+    [ValidateSet("bootstrap", "dispatch", "dispatch-qa", "status", "notify-ready", "requeue", "recover", "add-lock", "archive", "show-approval", "approve-request", "deny-request", "approve-local", "approve-local-session", "deny-local")]
     [string]$Action,
 
     [Parameter(Mandatory=$false)]
@@ -38,6 +42,11 @@ param(
     [string]$RequestId,
 
     [Parameter(Mandatory=$false)]
+    [ValidateSet("auto", "command_approval", "edit_confirm", "menu_approval")]
+    [string]$PromptType = "auto",
+
+
+    [Parameter(Mandatory=$false)]
     [string]$RequeueReason,
 
     [Parameter(Mandatory=$false)]
@@ -54,6 +63,13 @@ param(
     [string]$DispatchEngine
 )
 
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        chcp 65001 | Out-Null
+    }
+} catch {}
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Split-Path -Parent $scriptDir
@@ -62,11 +78,14 @@ $workerMapPath = Join-Path $rootDir "config\worker-map.json"
 $registryPath = Join-Path $rootDir "config\worker-panels.json"
 $bootstrapFlag = Join-Path $env:TEMP "moxton-bootstrap-done.flag"
 $monitorPidFile = Join-Path $env:TEMP "moxton-route-monitor.pid"
-$approvalRouterPidFile = Join-Path $env:TEMP "moxton-approval-router-pids.json"
+$paneApprovalWatcherStatePath = Join-Path $rootDir "config\pane-approval-watchers.json"
+$localApprovalEventsPath = Join-Path $rootDir "config\local-approval-events.jsonl"
+$localApprovalStatePath = Join-Path $rootDir "config\local-approval-state.json"
 $approvalRequestsPath = Join-Path $rootDir "mcp\route-server\data\approval-requests.json"
 $docSyncStatePath = Join-Path $rootDir "config\api-doc-sync-state.json"
 $archiveJobsPath = Join-Path $rootDir "config\archive-jobs.json"
 $taskAttemptHistoryPath = Join-Path $rootDir "config\task-attempt-history.json"
+$notifySentinelReadyPath = Join-Path $rootDir "config\notify-sentinel.ready.json"
 $dispatchMutexName = "Global\MoxtonTeamLeadDispatchMutex"
 $taskLocksMutexName = "Global\MoxtonTaskLocksFileMutex"
 
@@ -83,8 +102,240 @@ function Write-Utf8NoBomFile([string]$path, [string]$content) {
     [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
 }
 
+
+function Append-Utf8Line([string]$path, [string]$line) {
+    if ([string]::IsNullOrWhiteSpace($path) -or [string]::IsNullOrWhiteSpace($line)) { return }
+    $dir = Split-Path -Parent $path
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $writer = New-Object System.IO.StreamWriter($path, $true, $utf8NoBom)
+    try {
+        $writer.WriteLine($line)
+    } finally {
+        $writer.Dispose()
+    }
+}
+
+function Convert-ToObjectMap($source) {
+    $map = @{}
+    if ($null -eq $source) { return $map }
+    if ($source -is [System.Collections.IDictionary]) {
+        foreach ($key in $source.Keys) {
+            $name = [string]$key
+            if ($name) { $map[$name] = $source[$key] }
+        }
+        return $map
+    }
+    foreach ($prop in $source.PSObject.Properties) {
+        $name = [string]$prop.Name
+        if ($name) { $map[$name] = $prop.Value }
+    }
+    return $map
+}
+
+function Read-LocalApprovalState {
+    if (-not (Test-Path $localApprovalStatePath)) {
+        return @{ updated_at = (Get-Date -Format "o"); workers = @{} }
+    }
+    try {
+        $raw = Get-Content $localApprovalStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $raw.workers) {
+            $raw | Add-Member -NotePropertyName workers -NotePropertyValue @{} -Force
+        } elseif (-not ($raw.workers -is [System.Collections.IDictionary])) {
+            $raw.workers = Convert-ToObjectMap $raw.workers
+        }
+        return $raw
+    } catch {
+        return @{ updated_at = (Get-Date -Format "o"); workers = @{} }
+    }
+}
+
+function Write-LocalApprovalState($state) {
+    if (-not $state) {
+        $state = @{ updated_at = (Get-Date -Format "o"); workers = @{} }
+    }
+    if (-not $state.workers) { $state.workers = @{} }
+    if (-not ($state.workers -is [System.Collections.IDictionary])) {
+        $state.workers = Convert-ToObjectMap $state.workers
+    }
+    $state.updated_at = Get-Date -Format "o"
+    Write-Utf8NoBomFile -path $localApprovalStatePath -content ($state | ConvertTo-Json -Depth 10)
+}
+
+function Update-LocalApprovalStateEntry([string]$WorkerName, [scriptblock]$Mutator) {
+    if (-not $WorkerName) { return $null }
+    $state = Read-LocalApprovalState
+    $workers = Convert-ToObjectMap $state.workers
+    $current = $null
+    if ($workers.ContainsKey($WorkerName)) {
+        $current = $workers[$WorkerName]
+    }
+    $next = & $Mutator $current
+    if ($null -eq $next) {
+        if ($workers.ContainsKey($WorkerName)) {
+            $workers.Remove($WorkerName) | Out-Null
+        }
+    } else {
+        $workers[$WorkerName] = $next
+    }
+    $state.workers = $workers
+    Write-LocalApprovalState $state
+    return $next
+}
+
+function Append-LocalApprovalEvent($record) {
+    if (-not $record) { return }
+    Append-Utf8Line -path $localApprovalEventsPath -line ($record | ConvertTo-Json -Compress -Depth 10)
+}
+
+function Mark-LocalApprovalResolved([string]$WorkerName, [string]$Decision, [string]$PromptType, [string]$ResolvedBy) {
+    if (-not $WorkerName) { return }
+    $resolvedAt = Get-Date -Format "o"
+    $entry = Update-LocalApprovalStateEntry -WorkerName $WorkerName -Mutator {
+        param($current)
+        if (-not $current) { return $null }
+        $current.status = "resolved"
+        $current.decision = if ($Decision) { $Decision } else { "" }
+        if ($PromptType) { $current.prompt_type = $PromptType }
+        $current.resolved_at = $resolvedAt
+        $current.resolved_by = if ($ResolvedBy) { $ResolvedBy } else { "teamlead-control" }
+        $current.updated_at = $resolvedAt
+        return $current
+    }
+    if ($entry) {
+        Append-LocalApprovalEvent @{
+            at = $resolvedAt
+            kind = "local_approval_resolution"
+            worker = $WorkerName
+            task = if ($entry.task) { [string]$entry.task } else { "" }
+            pane_id = if ($entry.pane_id) { [string]$entry.pane_id } else { "" }
+            run_id = if ($entry.run_id) { [string]$entry.run_id } else { "" }
+            prompt_type = if ($entry.prompt_type) { [string]$entry.prompt_type } else { "" }
+            decision = if ($Decision) { $Decision } else { "" }
+            resolved_by = if ($ResolvedBy) { $ResolvedBy } else { "teamlead-control" }
+            fingerprint = if ($entry.fingerprint) { [string]$entry.fingerprint } else { "" }
+            preview = if ($entry.preview) { [string]$entry.preview } else { "" }
+            event_id = if ($entry.event_id) { [string]$entry.event_id } else { "" }
+        }
+    }
+}
+
+function Clear-LocalApprovalState([string]$WorkerName) {
+    if (-not $WorkerName) { return }
+    Update-LocalApprovalStateEntry -WorkerName $WorkerName -Mutator { param($current) return $null } | Out-Null
+}
+
+function Read-NotifySentinelReady {
+    if (-not (Test-Path $notifySentinelReadyPath)) { return $null }
+    try {
+        return (Get-Content $notifySentinelReadyPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Write-NotifySentinelReady {
+    param(
+        [string]$Source,
+        [string]$Note,
+        [string]$Wezterm,
+        [int]$Workers = 0
+    )
+    $payload = [ordered]@{
+        at = (Get-Date -Format "o")
+        source = if ($Source) { $Source } else { "manual" }
+        note = if ($Note) { $Note } else { "" }
+        wezterm = if ($Wezterm) { $Wezterm } else { "" }
+        workers = $Workers
+        user = if ($env:USERNAME) { $env:USERNAME } else { "" }
+        pid = [int]$PID
+    }
+    Write-Utf8NoBomFile -path $notifySentinelReadyPath -content ($payload | ConvertTo-Json -Depth 6)
+    return [pscustomobject]$payload
+}
+
+function Get-NotifySentinelAgeMinutes($ready) {
+    if (-not $ready) { return $null }
+    $at = $null
+    try {
+        if ($ready.at) { $at = [DateTimeOffset]::Parse([string]$ready.at) }
+    } catch {}
+    if (-not $at) { return $null }
+    return ((Get-Date).ToUniversalTime() - $at.UtcDateTime).TotalMinutes
+}
+
+function Assert-NotifySentinelReady {
+    $flag = $env:TEAMLEAD_REQUIRE_NOTIFY_SENTINEL
+    if ($flag) {
+        $norm = $flag.Trim().ToLowerInvariant()
+        if ($norm -in @("0","false","no","off")) { return }
+    }
+    $ready = Read-NotifySentinelReady
+    $strictFlag = $env:TEAMLEAD_STRICT_NOTIFY_SENTINEL
+    $strictOn = $true
+    if ($null -ne $strictFlag -and $strictFlag.Trim() -ne "") {
+        $normStrict = $strictFlag.Trim().ToLowerInvariant()
+        if ($normStrict -in @("0","false","no","off")) { $strictOn = $false }
+    }
+    if ($ready) {
+        $readySource = if ($ready.source) { [string]$ready.source } else { "" }
+        $readyWorkers = 0
+        try { if ($ready.workers -ne $null) { $readyWorkers = [int]$ready.workers } } catch {}
+        if ($readySource -ne "notify-sentinel") {
+            Write-Host "[WARN] notify-sentinel 就绪标记来源异常（可能是手动 notify-ready）。" -ForegroundColor Yellow
+            Write-Host "       若 notify-sentinel 正在轮询文件，它会刷新 ready（source=notify-sentinel）。请先发送启动指令使其进入轮询。" -ForegroundColor Yellow
+            if ($strictOn) {
+                Write-Host "[FAIL] strict 模式要求 notify-sentinel 正在轮询并更新 ready。" -ForegroundColor Red
+                exit 1
+            }
+        } elseif ($readyWorkers -le 0) {
+            Write-Host "[WARN] notify-sentinel 已在线，但 workers=0（尚无活跃 worker）。不阻断派遣，仅提示。" -ForegroundColor Yellow
+        }
+    }
+    if (-not $ready) {
+        Write-Host '[FAIL] notify-sentinel 未就绪：派遣前必须先创建通知哨兵并完成自检。' -ForegroundColor Red
+        Write-Host '       解决: 创建 notify-sentinel 后运行:' -ForegroundColor Yellow
+        Write-Host '         powershell -File scripts/teamlead-control.ps1 -Action notify-ready' -ForegroundColor White
+        exit 1
+    }
+    $ttl = Get-EnvIntOrDefault -name "TEAMLEAD_NOTIFY_SENTINEL_TTL_MINUTES" -defaultValue 10
+    $age = Get-NotifySentinelAgeMinutes $ready
+    if ($null -ne $age -and $age -gt $ttl) {
+        Write-Host ('[FAIL] notify-sentinel 就绪标记已过期 (age=' + [Math]::Round($age,1) + 'm, ttl=' + $ttl + 'm).') -ForegroundColor Red
+        Write-Host '       解决: 重建 notify-sentinel 并重新执行 notify-ready。' -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+function Invoke-NotifyReady {
+    $workers = 0
+    if (Test-Path $registryPath) {
+        try {
+            $panel = Get-Content $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($panel -and $panel.workers) {
+                $workers = @($panel.workers.PSObject.Properties | Where-Object { $_.Value.status -eq "active" }).Count
+            }
+        } catch {}
+    }
+    $payload = Write-NotifySentinelReady -Source "manual" -Note "teamlead-control notify-ready" -Workers $workers
+    $age = Get-NotifySentinelAgeMinutes $payload
+    $ageText = if ($null -ne $age) { [Math]::Round($age,1).ToString() + "m" } else { "-" }
+    Write-Host ('[OK] notify-sentinel ready marker updated (age=' + $ageText + ').') -ForegroundColor Green
+    Write-Host "     提示: 该标记仅用于临时补写；strict 模式仍要求 notify-sentinel 轮询并刷新 ready。" -ForegroundColor DarkGray
+    Write-Host ('     path: ' + $notifySentinelReadyPath) -ForegroundColor DarkGray
+}
 function Resolve-TeamLeadPaneId {
     if ($env:TEAM_LEAD_PANE_ID) {
+        return $env:TEAM_LEAD_PANE_ID
+    }
+    if ($env:WEZTERM_PANE) {
+        $env:TEAM_LEAD_PANE_ID = $env:WEZTERM_PANE
+        return $env:TEAM_LEAD_PANE_ID
+    }
+    if ($env:WEZTERM_PANE_ID) {
+        $env:TEAM_LEAD_PANE_ID = $env:WEZTERM_PANE_ID
         return $env:TEAM_LEAD_PANE_ID
     }
     try {
@@ -95,9 +346,16 @@ function Resolve-TeamLeadPaneId {
             return $env:TEAM_LEAD_PANE_ID
         }
     } catch {}
-    Write-Host '[FAIL] Cannot detect Team Lead Pane ID. Set $env:TEAM_LEAD_PANE_ID manually.' -ForegroundColor Red
-    exit 1
-}
+    Write-Host '[FAIL] Cannot detect Team Lead Pane ID.' -ForegroundColor Red
+    Write-Host '请直接在 Team Lead 所在的 WezTerm 窗口执行以下任一方案（自行决定，无需回报输出）:' -ForegroundColor Yellow
+    Write-Host '  方案 A: 取第一个 pane（最省事）' -ForegroundColor DarkGray
+    Write-Host '    $env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Select-Object -First 1).pane_id' -ForegroundColor White
+    Write-Host '  方案 B: 按标题匹配 Claude/Codex pane' -ForegroundColor DarkGray
+    Write-Host '    $env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { $_.title -like ''*claude*'' -or $_.title -like ''*codex*'' } | Select-Object -First 1).pane_id' -ForegroundColor White
+    Write-Host '  方案 C: 直接指定已知 pane_id' -ForegroundColor DarkGray
+    Write-Host '    $env:TEAM_LEAD_PANE_ID = ''<pane_id>''' -ForegroundColor White
+    Write-Host '若 wezterm cli list 为空，请先确认 WezTerm 正在运行。' -ForegroundColor Yellow
+    exit 1}
 
 function Resolve-TaskPrefix($tid) {
     $prefixes = @("ADMIN-FE", "SHOP-FE", "BACKEND")
@@ -590,7 +848,8 @@ function Read-DocSyncState {
 function Get-TaskDependenciesFromFile([string]$TaskFilePath, [string]$CurrentTaskId) {
     if (-not (Test-Path $TaskFilePath)) { return @() }
     $raw = Get-Content $TaskFilePath -Raw -Encoding UTF8
-    $lines = @($raw -split "(`r`n|`n)")
+    $lines = @($raw -split "(
+|`n)")
     $depLines = @($lines | Where-Object { $_ -match "前置依赖|Dependencies|depends on" })
     if ($depLines.Count -eq 0) { return @() }
 
@@ -768,7 +1027,7 @@ function Cleanup-ExpiredApprovalRequests {
 
         # NOTE:
         # pending 请求不能在 Team Lead 侧“静默过期”，否则 worker 仍停在审批交互里。
-        # 这里仅统计 stale pending，真正超时拒绝由 approval-router 负责向 worker 发送 n。
+        # 这里仅统计 stale pending，真正超时拒绝由 pane watcher / Team Lead 负责处理。
         if ($status -eq "pending" -and $ttlSeconds -gt 0) {
             $createdUtc = ConvertTo-UtcDateSafe $req.created_at
             if ($createdUtc) {
@@ -812,14 +1071,30 @@ function Cleanup-ExpiredApprovalRequests {
     }
 }
 
-function Send-ApprovalDecisionToPane($paneId, $decision, $promptType) {
+function Send-ApprovalDecisionToPane($paneId, $decision, $promptType, $approvalMode = "default") {
     $ptype = if ($promptType) { [string]$promptType } else { "command_approval" }
+    $mode = if ($approvalMode) { [string]$approvalMode } else { "default" }
     if ($ptype -eq "edit_confirm") {
         if ($decision -eq 'approve') {
             wezterm cli send-text --pane-id $paneId --no-paste "`r" | Out-Null
             return ($LASTEXITCODE -eq 0)
         }
         wezterm cli send-text --pane-id $paneId --no-paste "`e" | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    }
+
+    if ($ptype -eq "menu_approval") {
+        if ($decision -eq 'approve') {
+            $key = if ($mode -eq 'session') { '2' } else { '1' }
+        } else {
+            $key = '3'
+        }
+        wezterm cli send-text --pane-id $paneId --no-paste $key | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            return $false
+        }
+        Start-Sleep -Milliseconds 200
+        wezterm cli send-text --pane-id $paneId --no-paste "`r" | Out-Null
         return ($LASTEXITCODE -eq 0)
     }
 
@@ -843,6 +1118,34 @@ function Resolve-WorkerPaneByName([string]$workerName) {
         if ($paneId) { return $paneId.ToString().Trim() }
     } catch {}
     return $null
+}
+
+function Get-WorkerPaneTail([string]$paneId, [int]$maxLines = 120) {
+    if (-not $paneId) { return "" }
+    try {
+        $text = wezterm cli get-text --pane-id $paneId 2>$null
+        if (-not $text) { return "" }
+        $parts = @($text -split "`n")
+        if ($parts.Count -gt $maxLines) {
+            $parts = $parts[-$maxLines..-1]
+        }
+        return (($parts -join "`n") -replace "`r", "")
+    } catch {
+        return ""
+    }
+}
+
+function Resolve-LocalPromptType([string]$paneId, [string]$explicitPromptType = "auto") {
+    if ($explicitPromptType -and $explicitPromptType -ne "auto") { return $explicitPromptType }
+    $tail = Get-WorkerPaneTail -paneId $paneId
+    if (-not $tail) { return "command_approval" }
+    if ($tail -match 'Approve Once|Approve this session|Question 1/1|Run the tool and continue|Select an option|enter to submit answer') {
+        return "menu_approval"
+    }
+    if ($tail -match 'Press enter to confirm or esc to cancel|press enter to confirm and save|enter to confirm|esc to cancel|tab to add notes') {
+        return "edit_confirm"
+    }
+    return "command_approval"
 }
 
 function Get-WeztermPanes {
@@ -983,48 +1286,44 @@ function Reconcile-WorkerRegistryFromPanes {
     return $changed
 }
 
-function Read-ApprovalRouterPidStore {
-    if (-not (Test-Path $approvalRouterPidFile)) {
-        return @{ updated_at = (Get-Date -Format "o"); routers = @{} }
+function Read-PaneApprovalWatcherStore {
+    if (-not (Test-Path $paneApprovalWatcherStatePath)) {
+        return @{ updated_at = (Get-Date -Format "o"); watchers = @{} }
     }
     try {
-        $raw = Get-Content $approvalRouterPidFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $raw.routers) {
-            $raw | Add-Member -NotePropertyName routers -NotePropertyValue @{} -Force
+        $raw = Get-Content $paneApprovalWatcherStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $raw.watchers) {
+            $raw | Add-Member -NotePropertyName watchers -NotePropertyValue @{} -Force
+        } elseif (-not ($raw.watchers -is [System.Collections.IDictionary])) {
+            $raw.watchers = Convert-ToObjectMap $raw.watchers
         }
         return $raw
     } catch {
-        return @{ updated_at = (Get-Date -Format "o"); routers = @{} }
+        return @{ updated_at = (Get-Date -Format "o"); watchers = @{} }
     }
 }
 
-function Convert-ToRouterEntryMap($routersObj) {
+function Convert-ToWatcherEntryMap($watchersObj) {
     $map = @{}
-    if ($null -eq $routersObj) { return $map }
-
-    if ($routersObj -is [System.Collections.IDictionary]) {
-        foreach ($k in $routersObj.Keys) {
-            $name = [string]$k
-            if ($name -and $name -match '\|') {
-                $map[$name] = $routersObj[$k]
-            }
-        }
-        return $map
-    }
-
-    foreach ($p in $routersObj.PSObject.Properties) {
-        $name = [string]$p.Name
+    foreach ($entry in (Convert-ToObjectMap $watchersObj).GetEnumerator()) {
+        $name = [string]$entry.Key
         if ($name -and $name -match '\|') {
-            $map[$name] = $p.Value
+            $map[$name] = $entry.Value
         }
     }
     return $map
 }
 
-function Write-ApprovalRouterPidStore($data) {
+function Write-PaneApprovalWatcherStore($data) {
+    if (-not $data) {
+        $data = @{ updated_at = (Get-Date -Format "o"); watchers = @{} }
+    }
+    if (-not $data.watchers) { $data.watchers = @{} }
+    if (-not ($data.watchers -is [System.Collections.IDictionary])) {
+        $data.watchers = Convert-ToObjectMap $data.watchers
+    }
     $data.updated_at = Get-Date -Format "o"
-    $json = ($data | ConvertTo-Json -Depth 10)
-    Write-Utf8NoBomFile -path $approvalRouterPidFile -content $json
+    Write-Utf8NoBomFile -path $paneApprovalWatcherStatePath -content ($data | ConvertTo-Json -Depth 10)
 }
 
 function Get-LivePaneIdSet {
@@ -1038,97 +1337,141 @@ function Get-LivePaneIdSet {
     return $set
 }
 
-function Cleanup-StaleApprovalRouters([string]$KeepTaskId = "", [string]$KeepWorkerName = "", [switch]$Verbose) {
-    $store = Read-ApprovalRouterPidStore
-    $routers = Convert-ToRouterEntryMap $store.routers
-    if ($routers.Keys.Count -eq 0) {
+function Stop-PaneApprovalWatcher([string]$TaskId, [string]$WorkerName, [switch]$Quiet) {
+    if (-not $TaskId -or -not $WorkerName) { return $false }
+    $store = Read-PaneApprovalWatcherStore
+    $watchers = Convert-ToWatcherEntryMap $store.watchers
+    $key = ($TaskId + '|' + $WorkerName).ToUpper()
+    if (-not $watchers.ContainsKey($key)) { return $false }
+    $entry = $watchers[$key]
+    $watcherPid = 0
+    $pidStr = if ($entry.pid) { [string]$entry.pid } else { '' }
+    if ([int]::TryParse($pidStr, [ref]$watcherPid) -and $watcherPid -gt 0) {
+        Stop-Process -Id $watcherPid -Force -ErrorAction SilentlyContinue
+    }
+    $watchers.Remove($key) | Out-Null
+    $store.watchers = $watchers
+    Write-PaneApprovalWatcherStore $store
+    Clear-LocalApprovalState -WorkerName $WorkerName
+    if (-not $Quiet) {
+        Write-Host ('[OK] pane-approval-watcher stopped: ' + $TaskId + ' / ' + $WorkerName) -ForegroundColor Green
+    }
+    return $true
+}
+
+function Cleanup-StalePaneApprovalWatchers([string]$KeepTaskId = '', [string]$KeepWorkerName = '', [switch]$Verbose) {
+    $store = Read-PaneApprovalWatcherStore
+    $watchers = Convert-ToWatcherEntryMap $store.watchers
+    if ($watchers.Keys.Count -eq 0) {
         return @{ removed = 0; killed = 0; kept = 0 }
     }
 
+    $locks = Read-TaskLocks
     $livePanes = Get-LivePaneIdSet
-    $keepKey = ""
+    $keepKey = ''
     if ($KeepTaskId -and $KeepWorkerName) {
-        $keepKey = ($KeepTaskId + "|" + $KeepWorkerName).ToUpper()
+        $keepKey = ($KeepTaskId + '|' + $KeepWorkerName).ToUpper()
     }
-    $keepWorkerUpper = if ($KeepWorkerName) { $KeepWorkerName.ToUpper() } else { "" }
+    $keepWorkerUpper = if ($KeepWorkerName) { $KeepWorkerName.ToUpperInvariant() } else { '' }
 
-    $nextRouters = @{}
+    $nextWatchers = @{}
     $removed = 0
     $killed = 0
     $kept = 0
 
-    foreach ($name in $routers.Keys) {
-        $entry = $routers[$name]
-        $routerPid = 0
-        $pidStr = if ($entry.pid) { [string]$entry.pid } else { "" }
+    foreach ($name in $watchers.Keys) {
+        $entry = $watchers[$name]
+        $watcherPid = 0
+        $pidStr = if ($entry.pid) { [string]$entry.pid } else { '' }
         $proc = $null
         $alive = $false
-        if ([int]::TryParse($pidStr, [ref]$routerPid) -and $routerPid -gt 0) {
-            $proc = Get-Process -Id $routerPid -ErrorAction SilentlyContinue
+        if ([int]::TryParse($pidStr, [ref]$watcherPid) -and $watcherPid -gt 0) {
+            $proc = Get-Process -Id $watcherPid -ErrorAction SilentlyContinue
             $alive = ($null -ne $proc)
         }
 
-        $paneId = if ($entry.worker_pane_id) { [string]$entry.worker_pane_id } else { "" }
+        $paneId = if ($entry.worker_pane_id) { [string]$entry.worker_pane_id } else { '' }
         $paneAlive = $false
         if ($paneId -and $livePanes) {
             try { $paneAlive = [bool]$livePanes.Contains($paneId) } catch { $paneAlive = $false }
         }
-        $entryWorkerUpper = if ($entry.worker) { ([string]$entry.worker).ToUpper() } else { "" }
-        $sameWorkerDifferentTask = ($keepWorkerUpper -and $entryWorkerUpper -eq $keepWorkerUpper -and $name -ne $keepKey)
 
-        $drop = (-not $alive) -or (-not $paneAlive) -or $sameWorkerDifferentTask
+        $entryWorker = if ($entry.worker) { [string]$entry.worker } else { '' }
+        $entryTask = if ($entry.task) { [string]$entry.task } else { '' }
+        $entryRunId = if ($entry.run_id) { [string]$entry.run_id } else { '' }
+        $skipTaskLockGuard = $false
+        try {
+            if ($entry.skip_task_lock_guard -ne $null) { $skipTaskLockGuard = [bool]$entry.skip_task_lock_guard }
+        } catch {}
+
+        $sameWorkerDifferentTask = ($keepWorkerUpper -and $entryWorker.ToUpperInvariant() -eq $keepWorkerUpper -and $name -ne $keepKey)
+        $taskActive = $true
+        if (-not $skipTaskLockGuard) {
+            $taskActive = $false
+            if ($locks.locks.PSObject.Properties.Name -contains $entryTask) {
+                $lock = $locks.locks.$entryTask
+                $lockState = if ($lock.state) { [string]$lock.state } else { '' }
+                $lockWorker = if ($lock.assigned_worker) { [string]$lock.assigned_worker } else { '' }
+                $lockRunId = if ($lock.run_id) { [string]$lock.run_id } else { '' }
+                if ($lockState -in @('in_progress', 'qa', 'archiving') -and $lockWorker -eq $entryWorker) {
+                    if (-not $entryRunId -or -not $lockRunId -or $lockRunId -eq $entryRunId) {
+                        $taskActive = $true
+                    }
+                }
+            }
+        }
+
+        $drop = (-not $alive) -or (-not $paneAlive) -or $sameWorkerDifferentTask -or (-not $taskActive)
         if ($drop) {
-            if ($alive -and $routerPid -gt 0) {
-                Stop-Process -Id $routerPid -Force -ErrorAction SilentlyContinue
+            if ($alive -and $watcherPid -gt 0) {
+                Stop-Process -Id $watcherPid -Force -ErrorAction SilentlyContinue
                 $killed++
             }
             $removed++
+            if ($entryWorker) { Clear-LocalApprovalState -WorkerName $entryWorker }
             if ($Verbose) {
-                Write-Host ('[INFO] Removed stale approval-router: ' + $name + ' pid=' + $pidStr + ' pane=' + $paneId) -ForegroundColor DarkGray
+                Write-Host ('[INFO] Removed stale pane-approval-watcher: ' + $name + ' pid=' + $pidStr + ' pane=' + $paneId) -ForegroundColor DarkGray
             }
             continue
         }
 
-        $nextRouters[$name] = $entry
+        $nextWatchers[$name] = $entry
         $kept++
     }
 
     if ($removed -gt 0) {
-        $store.routers = $nextRouters
-        Write-ApprovalRouterPidStore $store
+        $store.watchers = $nextWatchers
+        Write-PaneApprovalWatcherStore $store
     }
 
-    return @{
-        removed = $removed
-        killed = $killed
-        kept = $kept
-    }
+    return @{ removed = $removed; killed = $killed; kept = $kept }
 }
 
-function Ensure-ApprovalRouter([string]$TaskId, [string]$WorkerName, [string]$WorkerPaneId, [string]$TeamLeadPaneId) {
-    $routerScript = Join-Path $scriptDir "approval-router.ps1"
-    if (-not (Test-Path $routerScript)) {
-        Write-Host '[WARN] approval-router.ps1 not found, skip auto start' -ForegroundColor Yellow
+function Ensure-PaneApprovalWatcher([string]$TaskId, [string]$WorkerName, [string]$WorkerPaneId, [string]$TeamLeadPaneId, [string]$RunId = '', [switch]$SkipTaskLockGuard) {
+    $watcherScript = Join-Path $scriptDir 'pane-approval-watcher.ps1'
+    if (-not (Test-Path $watcherScript)) {
+        Write-Host '[WARN] pane-approval-watcher.ps1 not found, skip auto start' -ForegroundColor Yellow
         return
     }
 
-    $key = ($TaskId + "|" + $WorkerName).ToUpper()
-    $store = Read-ApprovalRouterPidStore
-    $routers = Convert-ToRouterEntryMap $store.routers
+    $key = ($TaskId + '|' + $WorkerName).ToUpper()
+    $store = Read-PaneApprovalWatcherStore
+    $watchers = Convert-ToWatcherEntryMap $store.watchers
 
     $needStart = $true
-    if ($routers.ContainsKey($key)) {
-        $existing = $routers[$key]
+    if ($watchers.ContainsKey($key)) {
+        $existing = $watchers[$key]
         $existingPid = 0
-        $pidStr = if ($existing.pid) { [string]$existing.pid } else { "" }
+        $pidStr = if ($existing.pid) { [string]$existing.pid } else { '' }
         if ([int]::TryParse($pidStr, [ref]$existingPid) -and $existingPid -gt 0) {
             $proc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
             if ($proc) {
                 $samePane = ([string]$existing.worker_pane_id -eq [string]$WorkerPaneId)
                 $sameTl = ([string]$existing.team_lead_pane_id -eq [string]$TeamLeadPaneId)
-                if ($samePane -and $sameTl) {
+                $sameRun = ([string]$existing.run_id -eq [string]$RunId)
+                if ($samePane -and $sameTl -and $sameRun) {
                     $needStart = $false
-                    Write-Host ('[OK] approval-router running (PID ' + $existingPid + ', task=' + $TaskId + ', worker=' + $WorkerName + ')') -ForegroundColor Green
+                    Write-Host ('[OK] pane-approval-watcher running (PID ' + $existingPid + ', task=' + $TaskId + ', worker=' + $WorkerName + ')') -ForegroundColor Green
                 } else {
                     Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue
                 }
@@ -1138,18 +1481,42 @@ function Ensure-ApprovalRouter([string]$TaskId, [string]$WorkerName, [string]$Wo
 
     if (-not $needStart) { return }
 
-    $proc = Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$routerScript,"-WorkerPaneId",$WorkerPaneId,"-WorkerName",$WorkerName,"-TaskId",$TaskId,"-TeamLeadPaneId",$TeamLeadPaneId,"-Timeout","0","-Continuous" -WindowStyle Hidden -PassThru
-    $routers[$key] = @{
+    $cmdParts = New-Object System.Collections.Generic.List[string]
+    foreach ($envName in @('WEZTERM_PANE','WEZTERM_PANE_ID','WEZTERM_UNIX_SOCKET','WEZTERM_EXECUTABLE','WEZTERM_CONFIG_FILE')) {
+        $envValue = [System.Environment]::GetEnvironmentVariable($envName)
+        if (-not [string]::IsNullOrWhiteSpace($envValue)) {
+            $escapedEnvValue = $envValue.Replace("'", "''")
+            $cmdParts.Add("`$env:" + $envName + "='" + $escapedEnvValue + "'") | Out-Null
+        }
+    }
+    $escapedWatcherScript = $watcherScript.Replace("'", "''")
+    $escapedWorkerPaneId = ([string]$WorkerPaneId).Replace("'", "''")
+    $escapedWorkerName = ([string]$WorkerName).Replace("'", "''")
+    $escapedTaskId = ([string]$TaskId).Replace("'", "''")
+    $escapedTlPaneId = ([string]$TeamLeadPaneId).Replace("'", "''")
+    $watcherCommand = "& '" + $escapedWatcherScript + "' -WorkerPaneId '" + $escapedWorkerPaneId + "' -WorkerName '" + $escapedWorkerName + "' -TaskId '" + $escapedTaskId + "' -TeamLeadPaneId '" + $escapedTlPaneId + "'"
+    if ($RunId) {
+        $watcherCommand += " -RunId '" + ([string]$RunId).Replace("'", "''") + "'"
+    }
+    if ($SkipTaskLockGuard) {
+        $watcherCommand += ' -SkipTaskLockGuard'
+    }
+    $cmdParts.Add($watcherCommand) | Out-Null
+    $proc = Start-Process powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',($cmdParts -join '; ')) -WindowStyle Hidden -PassThru
+    $watchers[$key] = @{
         pid = $proc.Id
         task = $TaskId
         worker = $WorkerName
         worker_pane_id = $WorkerPaneId
         team_lead_pane_id = $TeamLeadPaneId
-        started_at = Get-Date -Format "o"
+        run_id = if ($RunId) { $RunId } else { '' }
+        skip_task_lock_guard = [bool]$SkipTaskLockGuard
+        started_at = Get-Date -Format 'o'
+        status = 'active'
     }
-    $store.routers = $routers
-    Write-ApprovalRouterPidStore $store
-    Write-Host ('[OK] approval-router started (PID ' + $proc.Id + ', task=' + $TaskId + ', worker=' + $WorkerName + ')') -ForegroundColor Green
+    $store.watchers = $watchers
+    Write-PaneApprovalWatcherStore $store
+    Write-Host ('[OK] pane-approval-watcher started (PID ' + $proc.Id + ', task=' + $TaskId + ', worker=' + $WorkerName + ')') -ForegroundColor Green
 }
 
 function Convert-CommandOutputToJson($output) {
@@ -1543,6 +1910,15 @@ function Invoke-Bootstrap {
         Write-Host '[WARN] standard-entry check failed, continuing...' -ForegroundColor Yellow
     }
 
+    Write-Host ""
+    Write-Host '--- Notify Sentinel（必开）---' -ForegroundColor Cyan
+    Write-Host '  派遣前必须创建 notify-sentinel 队友并完成自检，否则不会收到审批/回传提醒。' -ForegroundColor Yellow
+    Write-Host '  启用 Agent Teams：CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1' -ForegroundColor DarkGray
+    Write-Host '  创建 notify-sentinel 后，必须立即发送这条启动指令：' -ForegroundColor Yellow
+    Write-Host '    @notify-sentinel 读取 E:\moxton-ccb\.claude\agents\notify-sentinel.md 并立刻进入循环；只要检测到新增 route/approval/local approval 事件，第一动作必须先给我发一条 teammate 消息，再继续轮询；禁止只更新 ready.json 或只在你自己的窗口总结。' -ForegroundColor White
+    Write-Host ('  若 ready 未写入，再执行：powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action notify-ready') -ForegroundColor White
+    Write-Host '  未就绪将阻断 dispatch/dispatch-qa（严格模式）。' -ForegroundColor DarkGray
+
     Write-Host ''
     Write-Host '==========================================' -ForegroundColor Green
     Write-Host '  Bootstrap Complete' -ForegroundColor Green
@@ -1555,8 +1931,12 @@ function Invoke-Bootstrap {
     Write-Host '  requeue     -- powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId <ID> -TargetState <assigned|waiting_qa> -RequeueReason "..."' -ForegroundColor White
     Write-Host '  recover     -- powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction <action>' -ForegroundColor White
     Write-Host '  archive     -- powershell -File scripts/teamlead-control.ps1 -Action archive -TaskId <ID> [-NoPush] [-CommitMessage "..."]' -ForegroundColor White
+    Write-Host '  show-approval  -- powershell -File scripts/teamlead-control.ps1 -Action show-approval -RequestId <ID>' -ForegroundColor White
     Write-Host '  approve-request -- powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId <ID>' -ForegroundColor White
     Write-Host '  deny-request    -- powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId <ID>' -ForegroundColor White
+    Write-Host '  approve-local  -- powershell -File scripts/teamlead-control.ps1 -Action approve-local -WorkerName <WORKER> [-PromptType auto|command_approval|edit_confirm|menu_approval]' -ForegroundColor White
+    Write-Host '  approve-local-session -- powershell -File scripts/teamlead-control.ps1 -Action approve-local-session -WorkerName <WORKER> [-PromptType auto|menu_approval]' -ForegroundColor White
+    Write-Host '  deny-local     -- powershell -File scripts/teamlead-control.ps1 -Action deny-local -WorkerName <WORKER> [-PromptType auto|command_approval|edit_confirm|menu_approval]' -ForegroundColor White
     Write-Host ''
     Write-Host 'Approval Priority Rule:' -ForegroundColor Cyan
     Write-Host '  If pending approval requests exist, do NOT run sleep/wait. Approve or deny first.' -ForegroundColor Yellow
@@ -1581,6 +1961,8 @@ function Invoke-Dispatch {
         exit 1
     }
     Assert-CanonicalTaskId $TaskId
+    Write-Host "[REMIND] 派遣前必须创建 notify-sentinel 队友（Agent Team）并完成自检，否则不会收到审批/回传提醒。" -ForegroundColor Yellow
+    Assert-NotifySentinelReady
 
     $tlPaneId = Resolve-TeamLeadPaneId
     Write-Host '[INFO] Pre-dispatch baseline-clean is disabled by default; controller will preserve pending routes/approvals unless you run recover -RecoverAction baseline-clean manually.' -ForegroundColor DarkGray
@@ -1668,9 +2050,8 @@ function Invoke-Dispatch {
     }
     $paneId = Ensure-WorkerRunning $devWorker $devConfig $tlPaneId -ForceRestart:$forceRestartForEngine
 
-    # 先确保监控已启动，避免 dispatch 阶段出现审批提示但无人接管
+    # 先确保监控已启动，避免 route 回调无人接管
     Ensure-RouteMonitor $tlPaneId
-    Ensure-ApprovalRouter -TaskId $TaskId -WorkerName $devWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId
 
     # Dispatch task (BEFORE updating lock)
     $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
@@ -1679,6 +2060,7 @@ function Invoke-Dispatch {
     if ($dispatchExit -ne 0) {
         Write-Host ('[FAIL] Dispatch failed for ' + $TaskId + ' (worker=' + $devWorker + ', pane=' + $paneId + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
         Write-Host '       Task lock not updated. Please check worker pane output and rerun dispatch.' -ForegroundColor Yellow
+        Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $devWorker -Quiet | Out-Null
         exit 1
     }
 
@@ -1705,19 +2087,16 @@ function Invoke-Dispatch {
 
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
-    Ensure-ApprovalRouter -TaskId $TaskId -WorkerName $devWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId
+    Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $devWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
 
     Write-Host ''
     Write-Host ('[OK] Task ' + $TaskId + ' dispatched to ' + $devWorker + ' (pane ' + $paneId + ')') -ForegroundColor Green
     Write-Host ''
     Write-Host '[NEXT] Background watchers:' -ForegroundColor Cyan
     Write-Host '  route-monitor: auto ensured by controller' -ForegroundColor White
-    Write-Host '  approval-router: auto ensured by controller' -ForegroundColor White
-    Write-Host '  route-watcher: optional (notification trigger only)' -ForegroundColor DarkGray
+    Write-Host '  pane-approval-watcher: auto ensured by controller' -ForegroundColor White
     Write-Host '  dispatch/dispatch-qa commands must still be serial from Team Lead side (no parallel command launch).' -ForegroundColor Yellow
-    $watcherCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\route-watcher.ps1" -FilterTask ' + $TaskId + ' -Timeout 0'
-    Write-Host ('  Optional Bash(run_in_background: true): ' + $watcherCmd) -ForegroundColor DarkGray
-    $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\approval-router.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $devWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -Timeout 0 -Continuous'
+    $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\pane-approval-watcher.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $devWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -RunId ' + $runId
     Write-Host ('  (debug manual start): ' + $approvalCmd) -ForegroundColor DarkGray
     Write-Host ''
 }
@@ -1731,6 +2110,8 @@ function Invoke-DispatchQA {
         exit 1
     }
     Assert-CanonicalTaskId $TaskId
+    Write-Host "[REMIND] 派遣前必须创建 notify-sentinel 队友（Agent Team）并完成自检，否则不会收到审批/回传提醒。" -ForegroundColor Yellow
+    Assert-NotifySentinelReady
 
     $tlPaneId = Resolve-TeamLeadPaneId
     Write-Host '[INFO] Pre-dispatch baseline-clean is disabled by default; controller will preserve pending routes/approvals unless you run recover -RecoverAction baseline-clean manually.' -ForegroundColor DarkGray
@@ -1802,9 +2183,8 @@ function Invoke-DispatchQA {
     $forceRestartQa = $forceFreshQaContext -or $forceRestartForEngine
     $paneId = Ensure-WorkerRunning $qaWorker $qaConfig $tlPaneId -ForceRestart:$forceRestartQa
 
-    # 先确保监控已启动，避免 dispatch 阶段出现审批提示但无人接管
+    # 先确保监控已启动，避免 route 回调无人接管
     Ensure-RouteMonitor $tlPaneId
-    Ensure-ApprovalRouter -TaskId $TaskId -WorkerName $qaWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId
 
     # Dispatch FIRST, then update lock
     $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
@@ -1813,6 +2193,7 @@ function Invoke-DispatchQA {
     if ($dispatchExit -ne 0) {
         Write-Host ('[FAIL] Dispatch QA failed for ' + $TaskId + ' (worker=' + $qaWorker + ', pane=' + $paneId + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
         Write-Host '       Task lock not updated. Please check worker pane output and rerun dispatch-qa.' -ForegroundColor Yellow
+        Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $qaWorker -Quiet | Out-Null
         exit 1
     }
 
@@ -1839,19 +2220,16 @@ function Invoke-DispatchQA {
 
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
-    Ensure-ApprovalRouter -TaskId $TaskId -WorkerName $qaWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId
+    Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $qaWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
 
     Write-Host ''
     Write-Host ('[OK] QA task ' + $TaskId + ' dispatched to ' + $qaWorker + ' (pane ' + $paneId + ')') -ForegroundColor Green
     Write-Host ''
     Write-Host '[NEXT] Background watchers:' -ForegroundColor Cyan
     Write-Host '  route-monitor: auto ensured by controller' -ForegroundColor White
-    Write-Host '  approval-router: auto ensured by controller' -ForegroundColor White
-    Write-Host '  route-watcher: optional (notification trigger only)' -ForegroundColor DarkGray
+    Write-Host '  pane-approval-watcher: auto ensured by controller' -ForegroundColor White
     Write-Host '  dispatch/dispatch-qa commands must still be serial from Team Lead side (no parallel command launch).' -ForegroundColor Yellow
-    $watcherCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\route-watcher.ps1" -FilterTask ' + $TaskId + ' -Timeout 0'
-    Write-Host ('  Optional Bash(run_in_background: true): ' + $watcherCmd) -ForegroundColor DarkGray
-    $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\approval-router.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $qaWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -Timeout 0 -Continuous'
+    $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\pane-approval-watcher.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $qaWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -RunId ' + $runId
     Write-Host ('  (debug manual start): ' + $approvalCmd) -ForegroundColor DarkGray
     Write-Host ''
 }
@@ -1923,6 +2301,9 @@ function Invoke-Requeue {
     }
 
     Update-LatestTaskAttempt -TaskId $TaskId -Phase $phase -Result "requeued" -FinalState $TargetState -EndedAt $now -RequeueReason $RequeueReason -UpdatedBy "teamlead-control/requeue" | Out-Null
+    if ($assignedWorker) {
+        Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $assignedWorker -Quiet | Out-Null
+    }
 
     Write-Host ('[OK] Task ' + $TaskId + ' requeued: ' + $prevState + ' -> ' + $TargetState) -ForegroundColor Green
     Write-Host ('     Reason: ' + $RequeueReason) -ForegroundColor Gray
@@ -1946,6 +2327,7 @@ function Get-TaskRecommendation {
         [string]$TaskId,
         $Lock,
         $PendingApprovals,
+        $PendingLocalApproval,
         $WorkerMap,
         $GateContext
     )
@@ -1965,9 +2347,11 @@ function Get-TaskRecommendation {
     $activityAgeText = Get-TaskActivityAgeText -ActivityUtc $activityUtc
     $pendingApprovalCount = @($PendingApprovals).Count
     $hasPendingApprovals = ($pendingApprovalCount -gt 0)
+    $pendingLocalApproval = $PendingLocalApproval
+    $hasPendingLocalApproval = ($null -ne $pendingLocalApproval -and [string]$pendingLocalApproval.status -eq "pending_teamlead")
     $staleThresholdMinutes = Get-StaleRunThresholdMinutes
     $isStaleRun = $false
-    if ($state -in @("in_progress", "qa") -and $workerAlive -and $activityUtc -and -not $hasPendingApprovals) {
+    if ($state -in @("in_progress", "qa") -and $workerAlive -and $activityUtc -and -not $hasPendingApprovals -and -not $hasPendingLocalApproval) {
         $ageMinutes = ((Get-Date).ToUniversalTime() - $activityUtc).TotalMinutes
         if ($ageMinutes -ge $staleThresholdMinutes) {
             $isStaleRun = $true
@@ -1999,7 +2383,20 @@ function Get-TaskRecommendation {
             $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) | Out-Null
         }
         "in_progress" {
-            if ($hasPendingApprovals) {
+            if ($hasPendingLocalApproval) {
+                $localWorker = if ($pendingLocalApproval.worker) { [string]$pendingLocalApproval.worker } else { $assignedWorker }
+                $localPromptType = if ($pendingLocalApproval.prompt_type) { [string]$pendingLocalApproval.prompt_type } else { 'auto' }
+                $summary = "开发中，但有本地审批待处理"
+                $color = "Red"
+                $priority = 9
+                if ($localWorker) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-local -WorkerName ' + $localWorker + ' -PromptType ' + $localPromptType) | Out-Null
+                    if ($localPromptType -eq 'menu_approval') {
+                        $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-local-session -WorkerName ' + $localWorker + ' -PromptType menu_approval') | Out-Null
+                    }
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-local -WorkerName ' + $localWorker + ' -PromptType ' + $localPromptType) | Out-Null
+                }
+            } elseif ($hasPendingApprovals) {
                 $summary = "开发中，但有待处理审批"
                 $color = "Red"
                 $priority = 10
@@ -2028,7 +2425,20 @@ function Get-TaskRecommendation {
             }
         }
         "qa" {
-            if ($hasPendingApprovals) {
+            if ($hasPendingLocalApproval) {
+                $localWorker = if ($pendingLocalApproval.worker) { [string]$pendingLocalApproval.worker } else { $assignedWorker }
+                $localPromptType = if ($pendingLocalApproval.prompt_type) { [string]$pendingLocalApproval.prompt_type } else { 'auto' }
+                $summary = "QA 中，但有本地审批待处理"
+                $color = "Red"
+                $priority = 9
+                if ($localWorker) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-local -WorkerName ' + $localWorker + ' -PromptType ' + $localPromptType) | Out-Null
+                    if ($localPromptType -eq 'menu_approval') {
+                        $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-local-session -WorkerName ' + $localWorker + ' -PromptType menu_approval') | Out-Null
+                    }
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-local -WorkerName ' + $localWorker + ' -PromptType ' + $localPromptType) | Out-Null
+                }
+            } elseif ($hasPendingApprovals) {
                 $summary = "QA 中，但有待处理审批"
                 $color = "Red"
                 $priority = 10
@@ -2136,6 +2546,8 @@ function Invoke-Status {
     Write-Host ''
     Write-Host '--- Environment ---' -ForegroundColor Cyan
     $tlPaneId = $env:TEAM_LEAD_PANE_ID
+    if (-not $tlPaneId -and $env:WEZTERM_PANE) { $tlPaneId = $env:WEZTERM_PANE }
+    if (-not $tlPaneId -and $env:WEZTERM_PANE_ID) { $tlPaneId = $env:WEZTERM_PANE_ID }
     if (-not $tlPaneId) {
         try {
             $panes = wezterm cli list --format json 2>$null | ConvertFrom-Json
@@ -2156,6 +2568,34 @@ function Invoke-Status {
         Write-Host '  Bootstrap: not done' -ForegroundColor Red
     }
 
+    # Notify sentinel
+    Write-Host ""
+    Write-Host '--- Notify Sentinel ---' -ForegroundColor Cyan
+    $notifyReady = Read-NotifySentinelReady
+    if ($notifyReady) {
+        $age = Get-NotifySentinelAgeMinutes $notifyReady
+        $ageText = if ($null -ne $age) { [Math]::Round($age,1).ToString() + "m" } else { "-" }
+        $ttl = Get-EnvIntOrDefault -name "TEAMLEAD_NOTIFY_SENTINEL_TTL_MINUTES" -defaultValue 10
+        $source = if ($notifyReady.source) { [string]$notifyReady.source } else { "-" }
+        $workers = if ($null -ne $notifyReady.workers) { [string]$notifyReady.workers } else { "-" }
+        $wezterm = if ($notifyReady.wezterm) { [string]$notifyReady.wezterm } else { "-" }
+        $notify = if ($notifyReady.notify) { [string]$notifyReady.notify } else { "-" }
+        $color = "Green"
+        $extra = ""
+        if ($null -ne $age -and $age -gt $ttl) {
+            $color = "Red"
+            $extra = " [EXPIRED]"
+        } elseif ($source -ne "notify-sentinel") {
+            $color = "Yellow"
+            $extra = " [SOURCE-MISMATCH]"
+        }
+        Write-Host ("  ready=yes source=" + $source + " age=" + $ageText + " ttl=" + $ttl + "m workers=" + $workers + " wezterm=" + $wezterm + " notify=" + $notify + $extra) -ForegroundColor $color
+    } else {
+        Write-Host '  ready=no（派遣将被阻断）' -ForegroundColor Red
+        Write-Host '  创建 notify-sentinel 队友后执行：' -ForegroundColor Yellow
+        Write-Host ('    powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action notify-ready') -ForegroundColor White
+    }
+
     # Workers
     Write-Host ''
     Write-Host '--- Workers ---' -ForegroundColor Cyan
@@ -2163,6 +2603,43 @@ function Invoke-Status {
     $regScript = Join-Path $scriptDir "worker-registry.ps1"
     if (Test-Path $regScript) {
         try { & $regScript -Action list } catch { Write-Host '  (registry list error, run health-check)' -ForegroundColor Yellow }
+    }
+
+    Write-Host ''
+    Write-Host '--- Pane Approval Watchers ---' -ForegroundColor Cyan
+    $watcherCleanup = Cleanup-StalePaneApprovalWatchers
+    $watcherStore = Read-PaneApprovalWatcherStore
+    $watcherEntries = @(
+        (Convert-ToWatcherEntryMap $watcherStore.watchers).GetEnumerator() |
+        Sort-Object Name
+    )
+    if ($watcherEntries.Count -eq 0) {
+        Write-Host '  (no active pane approval watchers)' -ForegroundColor Gray
+    } else {
+        foreach ($watcherEntry in $watcherEntries) {
+            $entry = $watcherEntry.Value
+            $statusText = if ($entry.status) { [string]$entry.status } else { 'unknown' }
+            $reasonText = if ($entry.reason) { [string]$entry.reason } else { '' }
+            $lastSeenText = if ($entry.last_seen) { [string]$entry.last_seen } else { '-' }
+            $line = '  ' + ([string]$entry.task).PadRight(18) + ' worker=' + [string]$entry.worker + ' pane=' + [string]$entry.worker_pane_id + ' status=' + $statusText
+            if ($entry.run_id) {
+                $line += ' run=' + [string]$entry.run_id
+            }
+            if ($reasonText) {
+                $line += ' reason=' + $reasonText
+            }
+            $line += ' last_seen=' + $lastSeenText
+            $color = switch ($statusText) {
+                'active' { 'Cyan' }
+                'waiting_wezterm' { 'Yellow' }
+                'stopped' { 'Red' }
+                default { 'Gray' }
+            }
+            Write-Host $line -ForegroundColor $color
+        }
+    }
+    if ($watcherCleanup.removed -gt 0) {
+        Write-Host ('  [auto-cleanup] removed=' + $watcherCleanup.removed + ' killed=' + $watcherCleanup.killed) -ForegroundColor DarkGray
     }
 
     # MCP Route Inbox
@@ -2223,6 +2700,35 @@ function Invoke-Status {
         Write-Host '  (no pending approval requests)' -ForegroundColor Gray
     }
 
+    Write-Host ''
+    Write-Host '--- Local Approval State ---' -ForegroundColor Cyan
+    $localApprovalState = Read-LocalApprovalState
+    $pendingLocalApprovalsByTask = @{}
+    $pendingLocalApprovals = @(
+        (Convert-ToObjectMap $localApprovalState.workers).GetEnumerator() |
+        ForEach-Object { $_.Value } |
+        Where-Object { $_ -and [string]$_.status -eq 'pending_teamlead' } |
+        Sort-Object opened_at
+    )
+    foreach ($local in $pendingLocalApprovals) {
+        $localTask = if ($local.task) { [string]$local.task } else { '' }
+        if (-not $localTask) { continue }
+        $pendingLocalApprovalsByTask[$localTask] = $local
+    }
+    if ($pendingLocalApprovals.Count -eq 0) {
+        Write-Host '  (no pending local pane approvals)' -ForegroundColor Gray
+    } else {
+        foreach ($local in $pendingLocalApprovals) {
+            $worker = if ($local.worker) { [string]$local.worker } else { '-' }
+            $task = if ($local.task) { [string]$local.task } else { '-' }
+            $risk = if ($local.risk) { [string]$local.risk } else { 'unknown' }
+            $prompt = if ($local.prompt_type) { [string]$local.prompt_type } else { 'auto' }
+            $preview = if ($local.preview) { [string]$local.preview } else { '-' }
+            if ($preview.Length -gt 100) { $preview = $preview.Substring(0, 100) + '...' }
+            Write-Host ('  ' + $task.PadRight(18) + ' worker=' + $worker + ' risk=' + $risk + ' prompt=' + $prompt + ' preview=' + $preview) -ForegroundColor Red
+        }
+    }
+
     # Task locks
     Write-Host ''
     Write-Host '--- Task Locks ---' -ForegroundColor Cyan
@@ -2281,7 +2787,11 @@ function Invoke-Status {
             if ($pendingApprovalsByTask.ContainsKey($tid)) {
                 $recApprovals = @($pendingApprovalsByTask[$tid].ToArray())
             }
-            $recommendation = Get-TaskRecommendation -TaskId $tid -Lock $l -PendingApprovals $recApprovals -WorkerMap $workerMapForStatus -GateContext $gate
+            $recLocalApproval = $null
+            if ($pendingLocalApprovalsByTask.ContainsKey($tid)) {
+                $recLocalApproval = $pendingLocalApprovalsByTask[$tid]
+            }
+            $recommendation = Get-TaskRecommendation -TaskId $tid -Lock $l -PendingApprovals $recApprovals -PendingLocalApproval $recLocalApproval -WorkerMap $workerMapForStatus -GateContext $gate
             if ($recommendation) {
                 if ($recommendation.stale -and $stateColor -notin @("Red")) {
                     $line += ' [STALE-RUN>' + $staleThresholdMinutes + 'm]'
@@ -2523,7 +3033,7 @@ function Invoke-BaselineClean {
         routes_marked_processed = 0
         lock_keys_removed = 0
         blocked_to_assigned = 0
-        router_entries_removed = 0
+        watcher_entries_removed = 0
     }
 
     # 1) Worker registry reconcile/health-check
@@ -2532,8 +3042,8 @@ function Invoke-BaselineClean {
     if (Test-Path $regScript) {
         try { & $regScript -Action health-check *> $null } catch {}
     }
-    $routerCleanup = Cleanup-StaleApprovalRouters
-    $summary.router_entries_removed = $routerCleanup.removed
+    $watcherCleanup = Cleanup-StalePaneApprovalWatchers
+    $summary.watcher_entries_removed = $watcherCleanup.removed
 
     # 2) Resolve all pending approval requests (deny)
     $approvals = Read-ApprovalRequests
@@ -2708,9 +3218,9 @@ function Invoke-Recover {
             }
 
             try {
-                $clean = Cleanup-StaleApprovalRouters -Verbose
+                $clean = Cleanup-StalePaneApprovalWatchers -Verbose
                 if ($clean.removed -gt 0) {
-                    Write-Host ('[OK] cleaned stale approval-router entries: removed=' + $clean.removed + ', killed=' + $clean.killed) -ForegroundColor Green
+                    Write-Host ('[OK] cleaned stale pane-approval-watcher entries: removed=' + $clean.removed + ', killed=' + $clean.killed) -ForegroundColor Green
                 }
             } catch {}
             Write-Host '[OK] reap-stale done' -ForegroundColor Green
@@ -2834,9 +3344,9 @@ function Invoke-Recover {
             }
 
             try {
-                $clean = Cleanup-StaleApprovalRouters -Verbose
+                $clean = Cleanup-StalePaneApprovalWatchers -Verbose
                 if ($clean.removed -gt 0) {
-                    Write-Host ('[OK] cleaned stale approval-router entries: removed=' + $clean.removed + ', killed=' + $clean.killed) -ForegroundColor Green
+                    Write-Host ('[OK] cleaned stale pane-approval-watcher entries: removed=' + $clean.removed + ', killed=' + $clean.killed) -ForegroundColor Green
                 }
             } catch {}
 
@@ -2844,6 +3354,57 @@ function Invoke-Recover {
             Invoke-Status
             Write-Host '[OK] full-clean done' -ForegroundColor Green
         }
+    }
+}
+
+# ============================================================
+# Action: show-approval
+# ============================================================
+function Invoke-ShowApproval {
+    if (-not $RequestId) {
+        Write-Host ('[FAIL] ' + $Action + ' requires -RequestId') -ForegroundColor Red
+        exit 1
+    }
+
+    $cleanupResult = Cleanup-ExpiredApprovalRequests -Persist
+    $approvals = $cleanupResult.data
+    $req = $approvals.requests | Where-Object { $_.id -eq $RequestId } | Select-Object -First 1
+    if (-not $req) {
+        Write-Host ('[FAIL] Approval request not found: ' + $RequestId) -ForegroundColor Red
+        exit 1
+    }
+
+    $summary = ''
+    foreach ($candidate in @($req.summary, $req.reason, $req.prompt, $req.message, $req.body)) {
+        if ($candidate) {
+            $summary = [string]$candidate
+            break
+        }
+    }
+    $summary = $summary -replace '\s+', ' '
+    if ($summary.Length -gt 240) {
+        $summary = $summary.Substring(0, 240) + '...'
+    }
+
+    Write-Host ''
+    Write-Host '==========================================' -ForegroundColor Green
+    Write-Host '  Approval Request Detail' -ForegroundColor Green
+    Write-Host '==========================================' -ForegroundColor Green
+    Write-Host ('  id: ' + [string]$req.id) -ForegroundColor White
+    Write-Host ('  status: ' + [string]$req.status) -ForegroundColor White
+    if ($req.task_id) { Write-Host ('  task: ' + [string]$req.task_id) -ForegroundColor White }
+    if ($req.worker) { Write-Host ('  worker: ' + [string]$req.worker) -ForegroundColor White }
+    if ($req.worker_pane_id) { Write-Host ('  pane: ' + [string]$req.worker_pane_id) -ForegroundColor White }
+    if ($req.prompt_type) { Write-Host ('  prompt_type: ' + [string]$req.prompt_type) -ForegroundColor White }
+    if ($req.risk) { Write-Host ('  risk: ' + [string]$req.risk) -ForegroundColor White }
+    if ($req.created_at) { Write-Host ('  created_at: ' + [string]$req.created_at) -ForegroundColor White }
+    if ($req.expires_at) { Write-Host ('  expires_at: ' + [string]$req.expires_at) -ForegroundColor White }
+    if ($summary) { Write-Host ('  summary: ' + $summary) -ForegroundColor White }
+    Write-Host ''
+    if ([string]$req.status -eq 'pending') {
+        Write-Host 'Next:' -ForegroundColor Cyan
+        Write-Host ('  approve  -> powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId ' + [string]$req.id) -ForegroundColor White
+        Write-Host ('  deny     -> powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId ' + [string]$req.id) -ForegroundColor White
     }
 }
 
@@ -2896,6 +3457,39 @@ function Invoke-ApprovalDecision($decision) {
 
     Write-Host ('[OK] Approval request ' + $RequestId + ' -> ' + $decision) -ForegroundColor Green
     Write-Host ('     Decision sent to pane ' + $req.worker_pane_id) -ForegroundColor Gray
+}
+
+# ============================================================
+# Action: approve-local / approve-local-session / deny-local
+# ============================================================
+function Invoke-LocalApprovalDecision([string]$decision, [string]$approvalMode = "default") {
+    if (-not $WorkerName) {
+        Write-Host ('[FAIL] ' + $Action + ' requires -WorkerName') -ForegroundColor Red
+        exit 1
+    }
+
+    $paneId = Resolve-WorkerPaneByName -workerName $WorkerName
+    if (-not $paneId) {
+        Write-Host ('[FAIL] Worker pane not found: ' + $WorkerName) -ForegroundColor Red
+        exit 1
+    }
+
+    $resolvedPromptType = Resolve-LocalPromptType -paneId $paneId -explicitPromptType $PromptType
+    if ($decision -eq 'approve' -and $approvalMode -eq 'session' -and $resolvedPromptType -ne 'menu_approval') {
+        Write-Host ('[FAIL] approve-local-session only supports menu_approval. Resolved prompt type: ' + $resolvedPromptType) -ForegroundColor Red
+        exit 1
+    }
+
+    $sent = Send-ApprovalDecisionToPane -paneId $paneId -decision $decision -promptType $resolvedPromptType -approvalMode $approvalMode
+    if (-not $sent) {
+        Write-Host ('[FAIL] Failed to send local approval decision to pane ' + $paneId + ' (worker=' + $WorkerName + ')') -ForegroundColor Red
+        exit 1
+    }
+
+    $modeLabel = if ($decision -eq 'approve' -and $approvalMode -eq 'session') { 'approve-session' } elseif ($decision -eq 'approve') { 'approve' } else { 'deny' }
+    Mark-LocalApprovalResolved -WorkerName $WorkerName -Decision $modeLabel -PromptType $resolvedPromptType -ResolvedBy ('teamlead-control/' + $Action)
+    Write-Host ('[OK] Local approval ' + $modeLabel + ' sent to worker ' + $WorkerName + ' via pane ' + $paneId) -ForegroundColor Green
+    Write-Host ('     prompt_type=' + $resolvedPromptType) -ForegroundColor Gray
 }
 
 # ============================================================
@@ -3181,9 +3775,9 @@ function Invoke-Archive {
         $docPaneId = [string]$docResp.docUpdaterPane
     }
     if ($docPaneId) {
-        Ensure-ApprovalRouter -TaskId $docTaskId -WorkerName "doc-updater" -WorkerPaneId $docPaneId -TeamLeadPaneId $tlPaneId
+        Ensure-PaneApprovalWatcher -TaskId $docTaskId -WorkerName "doc-updater" -WorkerPaneId $docPaneId -TeamLeadPaneId $tlPaneId -SkipTaskLockGuard
     } else {
-        Write-Host '[WARN] doc-updater pane not returned, cannot auto-attach approval-router.' -ForegroundColor Yellow
+        Write-Host '[WARN] doc-updater pane not returned, cannot auto-attach pane-approval-watcher.' -ForegroundColor Yellow
     }
     & $upsertArchiveJob -status "running" -docId $docTaskId -commitId "" -docStatus "pending" -commitStatus "pending" -note "Doc updater dispatched" -blockedReason ""
 
@@ -3222,9 +3816,9 @@ function Invoke-Archive {
     $commitPaneId = if ($commitResp.paneId) { [string]$commitResp.paneId } else { "" }
     $commitWorker = if ($commitResp.worker) { [string]$commitResp.worker } else { "repo-committer" }
     if ($commitPaneId) {
-        Ensure-ApprovalRouter -TaskId $commitTaskId -WorkerName $commitWorker -WorkerPaneId $commitPaneId -TeamLeadPaneId $tlPaneId
+        Ensure-PaneApprovalWatcher -TaskId $commitTaskId -WorkerName $commitWorker -WorkerPaneId $commitPaneId -TeamLeadPaneId $tlPaneId -SkipTaskLockGuard
     } else {
-        Write-Host '[WARN] repo-committer pane not returned, cannot auto-attach approval-router.' -ForegroundColor Yellow
+        Write-Host '[WARN] repo-committer pane not returned, cannot auto-attach pane-approval-watcher.' -ForegroundColor Yellow
     }
 
     # 记录 archive job，交给 route-monitor 根据回调推进到 completed/blocked
@@ -3253,10 +3847,18 @@ switch ($Action) {
         try { Invoke-DispatchQA } finally { if ($dispatchMutex) { try { $dispatchMutex.ReleaseMutex() | Out-Null } catch {}; try { $dispatchMutex.Dispose() } catch {} } }
     }
     "status"      { Invoke-Status }
+    "notify-ready" { Invoke-NotifyReady }
     "requeue"     { Invoke-Requeue }
     "recover"     { Invoke-Recover }
     "add-lock"    { Invoke-AddLock }
     "archive"     { Invoke-Archive }
+    "show-approval" { Invoke-ShowApproval }
     "approve-request" { Invoke-ApprovalDecision -decision 'approve' }
     "deny-request"    { Invoke-ApprovalDecision -decision 'deny' }
+    "approve-local"         { Invoke-LocalApprovalDecision -decision 'approve' -approvalMode 'default' }
+    "approve-local-session" { Invoke-LocalApprovalDecision -decision 'approve' -approvalMode 'session' }
+    "deny-local"            { Invoke-LocalApprovalDecision -decision 'deny' -approvalMode 'default' }
 }
+
+
+

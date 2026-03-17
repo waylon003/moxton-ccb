@@ -100,6 +100,8 @@ report_route(
 - 不要因为单个测试账号的数据问题就判定 FAIL，先换账号重试。
 - 禁止把“注册新账号”作为默认拿 token 路径；优先使用固定测试凭据直接登录。
 - 跨角色问题必须通过 `report_route(status="blocked", ...)` 发给 Team Lead，禁止自建私有信封协议。
+- `PASS` 后只执行一次 `report_route(status="success", body=<结构化 JSON>)`，然后停止；不要追问用户“归档还是 qa_passed”。
+- 禁止调用 `teamlead-control.ps1`、禁止直接编辑 `01-tasks/TASK-LOCKS.json`、禁止替 Team Lead 做状态编排。
 - 若被阻塞（权限审批、环境、依赖、契约不明），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
   - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`

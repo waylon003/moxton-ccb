@@ -1,4 +1,4 @@
-# QA Tooling Stack (Codex Team Lead)
+﻿# QA Tooling Stack (Claude Code Team Lead)
 
 This guide defines the default QA stack used by Codex role agents.
 
@@ -54,3 +54,4 @@ This guide defines the default QA stack used by Codex role agents.
   - `playwright` (`@playwright/mcp`)
   - `vitest` (`@djankies/vitest-mcp`)
 - If MCP is unavailable, execute equivalent shell commands and include full output in QA evidence.
+

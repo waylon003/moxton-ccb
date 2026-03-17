@@ -190,6 +190,69 @@ function Invoke-WezTermSubmit {
     }
 }
 
+function Get-HasAckForTask([string]$paneText, [string]$taskId) {
+    if (-not $paneText -or -not $taskId) { return $false }
+    return ($paneText -match ('ACK\s+' + [regex]::Escape($taskId)))
+}
+
+function Get-HasProgressSignal([string]$paneText) {
+    if (-not $paneText) { return $false }
+    $patterns = @(
+        "report_route",
+        "mcp__route__report_route",
+        "in_progress",
+        "blocked",
+        "completed",
+        "qa_passed"
+    )
+    foreach ($p in $patterns) {
+        if ($paneText -match $p) { return $true }
+    }
+    return $false
+}
+
+function Maybe-PostAckNudge {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PaneId,
+        [Parameter(Mandatory = $true)]
+        [string]$TaskId,
+        [Parameter(Mandatory = $true)]
+        [string]$Engine
+    )
+
+    $enable = $env:TEAMLEAD_ACK_NUDGE
+    if ($enable -and $enable.Trim() -eq "0") { return }
+
+    $nudge = "continue; read role_definition/protocol/task_file; begin execution now; report_route(in_progress) and proceed per protocol."
+
+    # First nudge after short grace period if still no progress.
+    Start-Sleep -Seconds 6
+    $paneText = Get-PaneTextSafe -PaneId $PaneId
+    if (-not (Get-HasProgressSignal -paneText $paneText)) {
+        Send-PayloadInChunks -PaneId $PaneId -Payload $nudge
+        Start-Sleep -Milliseconds 200
+        Invoke-WezTermSubmit -PaneId $PaneId -Engine $Engine
+    } else {
+        return
+    }
+
+    # Second nudge only if ACK appears but still no progress (covers "ACK then idle").
+    $ackWait = 0
+    while ($ackWait -lt 24) {
+        $paneText = Get-PaneTextSafe -PaneId $PaneId
+        if (Get-HasProgressSignal -paneText $paneText) { return }
+        if (Get-HasAckForTask -paneText $paneText -taskId $TaskId) {
+            Send-PayloadInChunks -PaneId $PaneId -Payload $nudge
+            Start-Sleep -Milliseconds 200
+            Invoke-WezTermSubmit -PaneId $PaneId -Engine $Engine
+            return
+        }
+        Start-Sleep -Seconds 3
+        $ackWait += 3
+    }
+}
+
 function Resolve-RoleDefinitionPath([string]$workerName, [string]$ccbRoot) {
     if (-not $workerName) { return $null }
     $agentsDir = Join-Path $ccbRoot ".claude\agents"
@@ -310,15 +373,16 @@ protocol: $protocolPath
 4) 生命周期按 protocol 执行（in_progress 心跳 / blocked 上报 / 完成回传）
 5) 禁止子代理（sub-agent/background agent），仅主进程执行
 6) 每次调用 `report_route` / `mcp__route__report_route` 时都必须携带 `run_id: "$routeRunId"`
+7) ACK 后必须立即继续执行（不要等待用户“继续/确认”）
 $qaHint
 $inlineSection
-收到后请先回复：ACK $TaskId + first_step
+收到后请先通过 report_route(status=in_progress, body 包含 ack=1 + first_step) 完成 ACK，然后立刻继续执行
 "@
 
 if ($Engine -eq "gemini") {
     # Gemini 对多行粘贴提交不稳定：改为单行派遣，降低“文本留在输入框”概率。
     $inlineHint = if ($hasInlineBody) { " inline_task_body_present=true" } else { "" }
-    $fullTask = "[TASK-DISPATCH] task_id=$TaskId route_run_id=$routeRunId role_definition=$(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" }) protocol=$protocolPath task_file=$taskSource$inlineHint; 按顺序读取 role_definition -> protocol -> $(if ($hasTaskFile) { "task_file" } else { "inline_task_body" }); 每次 report_route/mcp__route__report_route 必须携带 run_id=$routeRunId; 按 protocol 生命周期回传; 禁止子代理; 先回复 ACK $TaskId + first_step"
+    $fullTask = "[TASK-DISPATCH] task_id=$TaskId route_run_id=$routeRunId role_definition=$(if ($roleDefinitionPath) { $roleDefinitionPath } else { "<not-mapped>" }) protocol=$protocolPath task_file=$taskSource$inlineHint; 按顺序读取 role_definition -> protocol -> $(if ($hasTaskFile) { "task_file" } else { "inline_task_body" }); 每次 report_route/mcp__route__report_route 必须携带 run_id=$routeRunId; 按 protocol 生命周期回传; 禁止子代理; ACK 必须用 report_route(status=in_progress, body含ack=1+first_step) 后立即继续执行(不要等待用户继续)"
 }
 
 # 发送到 Worker
@@ -416,5 +480,7 @@ if (-not $deliveryConfirmed) {
     Write-Host '       Do not update task lock. Retry dispatch or restart worker.' -ForegroundColor Yellow
     exit 1
 }
+
+Maybe-PostAckNudge -PaneId $WorkerPaneId -TaskId $TaskId -Engine $Engine
 
 Write-Host "Task dispatched." -ForegroundColor Green

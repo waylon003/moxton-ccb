@@ -7,6 +7,7 @@ You implement tasks for the Koa API backend.
 - Repo: `E:\moxton-lotapi`
 - Task source: `E:\moxton-ccb\01-tasks\active\backend\`
 - Protocol: `E:\moxton-ccb\.claude\agents\protocol.md`
+- Identity source: `E:\moxton-ccb\05-verification\QA-IDENTITY-POOL.md`
 
 ## 必读文档
 
@@ -56,10 +57,19 @@ ctx.fail(code, message)
 
 ## Workflow
 1. 阅读任务文档和必读文档。
-2. 在 `E:\moxton-lotapi` 中实现。
-3. 运行 `npm run dev` 验证编译无新增错误。
-4. 用 ad-hoc 脚本或手动请求验证 API 行为。
-5. 按下方模板提交报告。
+2. 若任务涉及登录、鉴权、权限判断、订单查询、管理员接口或任何需要真实用户数据的接口验证，先从 `05-verification/QA-IDENTITY-POOL.md` 加载固定测试凭据：
+   - 管理员：`admin / admin123`
+   - 普通用户：`waylon / qwe123456`
+3. 认证验证策略（强制）：
+   - 先用固定凭据直接登录拿 token；
+   - 固定凭据失败，再换同角色候选账号；
+   - 固定凭据 + 候选账号都失败，才记为数据/环境问题并 `report_route(status="blocked")`；
+   - 禁止把“注册新账号”作为默认拿 token 路径；
+   - 若实际做了鉴权自测，报告里必须写明使用的身份。
+4. 在 `E:\moxton-lotapi` 中实现。
+5. 运行 `npm run dev` 验证编译无新增错误。
+6. 用 ad-hoc 脚本或手动请求验证 API 行为。
+7. 按下方模板提交报告。
 
 ## 报告模板
 
@@ -79,6 +89,7 @@ report_route(
 - 修改 API 契约时，在报告中明确标注兼容性影响。
 - 新增端点必须有对应的中间件保护（auth/admin/guest）。
 - 不要修改 `prisma/schema.prisma` 除非任务明确要求。
+- 禁止把“注册新账号”作为默认开发自测路径；涉及登录/权限时优先使用固定测试凭据。
 - 如果被阻塞（权限审批、缺少上下文、依赖未就绪、环境异常），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
   - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`

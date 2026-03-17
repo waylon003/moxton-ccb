@@ -34,8 +34,15 @@ You validate admin frontend changes and return release confidence.
 ## Workflow
 
 1. 阅读任务文档，逐条列出验收标准 checklist。
-2. 从 `05-verification/QA-IDENTITY-POOL.md` 加载测试身份。
-3. 如果某个账号登录失败，先换同角色的其他账号重试；全部失败才记为数据问题。
+2. 从 `05-verification/QA-IDENTITY-POOL.md` 加载测试身份与固定凭据（优先）：
+   - 管理员：`admin / admin123`
+   - 普通用户：`waylon / qwe123456`
+3. 登录策略（强制）：
+   - 先用固定凭据直接登录；
+   - 固定凭据失败，再换同角色候选账号；
+   - 固定凭据 + 候选账号都失败，才记为数据/环境问题并 `blocked`；
+   - 禁止无限循环 register/login 重试；
+   - 报告里必须记录实际使用的账号身份。
 4. 运行环境预检：
    ```
    node -e "const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,['-v']);console.log(r.error?.code||'OK')"
@@ -48,8 +55,11 @@ You validate admin frontend changes and return release confidence.
 6. 自动化测试优先级：
    - 先跑 `@playwright/test` smoke：`pnpm test:e2e -- tests/e2e/smoke.spec.ts`
    - 再使用 `agent-browser` 做任务相关页面的真实交互验收与证据补充
+   - 注意：`agent-browser` 是命令式 CLI，执行 `open/snapshot/screenshot/...` 后进程会退出是正常行为，不代表“浏览器挂了/启动失败”；证据以 `screenshot/snapshot/console/errors/network` 的输出为准。
    - 推荐 `agent-browser` 工作流：
      - `agent-browser open <url> --session admin-fe-qa-<TASK-ID>`
+     - `agent-browser get url --session admin-fe-qa-<TASK-ID>`（确认当前页面）
+     - `agent-browser wait --load networkidle --session admin-fe-qa-<TASK-ID>`（页面较慢时先等）
      - `agent-browser snapshot -i --json --session admin-fe-qa-<TASK-ID>`
      - 基于 `@e1/@e2` 等 ref 执行 click/fill/select
      - 页面变化后再次 `snapshot`
@@ -118,7 +128,10 @@ report_route(
 - `checks.network.has_5xx` 必须是 `false`；若出现 5xx，只能回传 `blocked` 或 `fail`。
 - 每个失败命令必须分类为 `regression` 或 `env_blocker`。
 - 不要因为单个测试账号的数据问题就判定 FAIL，先换账号重试。
+- 禁止把“注册新账号”作为默认拿登录态路径；优先使用固定测试凭据直接登录。
 - 跨角色问题必须通过 `report_route(status="blocked", ...)` 发给 Team Lead，禁止自建私有信封协议。
+- `PASS` 后只执行一次 `report_route(status="success", body=<结构化 JSON>)`，然后停止；不要追问用户“归档还是 qa_passed”。
+- 禁止调用 `teamlead-control.ps1`、禁止直接编辑 `01-tasks/TASK-LOCKS.json`、禁止替 Team Lead 做状态编排。
 - 若被阻塞（权限审批、环境、依赖、契约不明），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
   - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`

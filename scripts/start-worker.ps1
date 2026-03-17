@@ -46,6 +46,25 @@ function Normalize-PaneId([string]$value) {
     return $null
 }
 
+function Resolve-CodexNativeBinary {
+    if ($env:CODEX_NATIVE_BIN -and (Test-Path $env:CODEX_NATIVE_BIN)) {
+        return $env:CODEX_NATIVE_BIN
+    }
+    $arch = $env:PROCESSOR_ARCHITECTURE
+    $target = if ($arch -and $arch.ToUpper().Contains("ARM64")) {
+        "aarch64-pc-windows-msvc"
+    } else {
+        "x86_64-pc-windows-msvc"
+    }
+    $npmRoot = ""
+    try { $npmRoot = (npm root -g 2>$null).Trim() } catch {}
+    if (-not $npmRoot) { return $null }
+    $platformSuffix = if ($target -eq "aarch64-pc-windows-msvc") { "arm64" } else { "x64" }
+    $candidate = Join-Path $npmRoot ("@openai\\codex\\node_modules\\@openai\\codex-win32-" + $platformSuffix + "\\vendor\\" + $target + "\\codex\\codex.exe")
+    if (Test-Path $candidate) { return $candidate }
+    return $null
+}
+
 # 验证 TeamLeadPaneId
 if (-not $TeamLeadPaneId) {
     Write-Error "TEAM_LEAD_PANE_ID 未设置。请先设置环境变量。`n示例: `$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { `$_.title -like '*claude*' } | Select-Object -First 1).pane_id"
@@ -81,32 +100,39 @@ Write-Host ""
 
 # 构建引擎启动命令
 $ccbRoot = Split-Path -Parent $PSScriptRoot
-$engineCommand = if ($Engine -eq "codex") {
-    # qa: on-request（模型自主决策是否请求审批）
-    # committer: never（避免 git 提交流程卡在交互审批）
-    # 其他 dev: untrusted（只自动批准可信命令）
-    $approvalFlag = if ($isQaWorker) {
-        "on-request"
-    } elseif ($isCommitterWorker) {
-        "never"
+$engineCommand = ""
+if ($Engine -eq "codex") {
+    # Codex worker 统一使用完全无审批弹窗模式。
+    # 为避免任何审批/沙盒阻塞，统一切到 -a never + danger-full-access。
+    $approvalFlag = "never"
+    $sandboxMode = "danger-full-access"
+    # Managed update strategy:
+    # Team Lead updates Codex before worker startup; worker runs native binary directly
+    # to avoid self-update races on Windows.
+    $useNative = ($env:CODEX_USE_WRAPPER -ne "1")
+    $nativeBin = if ($useNative) { Resolve-CodexNativeBinary } else { $null }
+    if ($useNative -and $nativeBin) {
+        Write-Host ("codex launch: native binary (" + $nativeBin + ")") -ForegroundColor DarkGray
     } else {
-        "untrusted"
+        Write-Host "codex launch: wrapper fallback (native binary not found or CODEX_USE_WRAPPER=1)" -ForegroundColor Yellow
     }
-    # QA 需要稳定运行测试与本地服务，放开沙盒以避免 spawn EPERM 阻塞。
-    $sandboxMode = if ($isQaWorker) { "danger-full-access" } else { "workspace-write" }
-    $codexCmd = "codex -a $approvalFlag --sandbox $sandboxMode --add-dir '$ccbRoot'"
+    $codexCmd = if ($useNative -and $nativeBin) {
+        "`$env:CODEX_MANAGED_BY_NPM='0'; `$env:CODEX_MANAGED_BY_BUN='0'; & '$nativeBin' -a $approvalFlag --sandbox $sandboxMode --add-dir '$ccbRoot' --add-dir '$ccbRoot\05-verification'"
+    } else {
+        "codex -a $approvalFlag --sandbox $sandboxMode --add-dir '$ccbRoot' --add-dir '$ccbRoot\05-verification'"
+    }
     # 前端 worker 启用 js_repl，支持实时调试前端页面
     if ($isFrontendWorker) {
         $codexCmd += " --enable js_repl"
     }
-    $codexCmd
+    $engineCommand = $codexCmd
 } else {
     # Gemini: 去掉 --yolo，默认启用 auto_edit（低风险编辑自动批准）
     $geminiCmd = "gemini --approval-mode auto_edit --include-directories '$ccbRoot'"
     if ($env:GEMINI_ALLOWED_TOOLS) {
         $geminiCmd += " --allowed-tools ""$($env:GEMINI_ALLOWED_TOOLS)"""
     }
-    $geminiCmd
+    $engineCommand = $geminiCmd
 }
 
 # 生成 wrapper 脚本到临时文件（避免 EncodedCommand 编码问题）

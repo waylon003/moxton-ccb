@@ -7,7 +7,7 @@
   },
   "roles": {
     "SHOP-FE": {
-      "provider": "gemini",
+      "provider": "codex",
       "repo": "E:\\nuxt-moxton",
       "task_dir": "01-tasks/active/shop-frontend",
       "mcp": ["playwright"]

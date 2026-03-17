@@ -1,4 +1,4 @@
-# Team Lead 启动检查清单
+﻿# Team Lead 启动检查清单
 
 **每次在 E:\moxton-ccb 启动新的 Claude Code 会话时，必须执行以下步骤：**
 
@@ -20,6 +20,15 @@ Write-Host "Team Lead Pane ID: $env:TEAM_LEAD_PANE_ID"
 wezterm --version  # 应该显示版本信息
 $env:TEAM_LEAD_PANE_ID  # 应该显示 pane ID
 ```
+
+### Agent Teams（可选）
+
+Claude Code UI/手机端建议启用 Agent Teams 通知：
+`powershell
+$env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = \"1\"
+`
+在会话内创建 
+otify-sentinel teammate 并按 E:\moxton-ccb\.claude\agents\notify-sentinel.md 运行。
 
 ---
 
@@ -178,3 +187,4 @@ echo "WezTerm: $(wezterm --version 2>&1 | head -1)"
 # 确认角色
 echo "我是 Team Lead，负责协调而非执行"
 ```
+

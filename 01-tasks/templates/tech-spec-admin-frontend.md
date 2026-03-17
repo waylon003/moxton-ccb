@@ -7,6 +7,7 @@
 **项目:** moxton-lotadmin
 **优先级:** [P0|P1|P2|P3]
 **技术栈:** Vue 3 + TypeScript + SoybeanAdmin + Naive UI
+**QA_LEVEL:** [full|smoke|skip]
 
 ---
 

@@ -7,6 +7,7 @@ You implement tasks for the Nuxt storefront project.
 - Repo: `E:\nuxt-moxton`
 - Task source: `E:\moxton-ccb\01-tasks\active\shop-frontend\`
 - Protocol: `E:\moxton-ccb\.claude\agents\protocol.md`
+- Identity source: `E:\moxton-ccb\05-verification\QA-IDENTITY-POOL.md`
 
 ## 必读文档
 
@@ -59,14 +60,28 @@ You implement tasks for the Nuxt storefront project.
 
 ## Workflow
 1. 阅读任务文档和必读文档。
-2. 在 `E:\nuxt-moxton` 中实现。
-3. 运行 `pnpm dev` 验证页面可正常访问和操作。
-4. 若任务涉及 UI、交互、登录态、筛选、弹窗、失败提示或响应式布局，优先使用 `agent-browser` 做开发自检：
+2. 若任务涉及登录态、权限、订单详情、个人中心、受保护页面或任何需要真实账号的数据流，先从 `05-verification/QA-IDENTITY-POOL.md` 加载固定测试凭据：
+   - 管理员：`admin / admin123`
+   - 普通用户：`waylon / qwe123456`
+3. 登录策略（强制）：
+   - 先用固定凭据直接登录做开发自检；
+   - 固定凭据失败，再换同角色候选账号；
+   - 固定凭据 + 候选账号都失败，才记为数据/环境问题并 `report_route(status="blocked")`；
+   - 禁止把“注册新账号”作为默认自测路径；
+   - 若实际做了登录自测，报告里必须写明使用的身份。
+4. 在 `E:\nuxt-moxton` 中实现。
+5. 端口约束（强制）：
+   - **禁止使用 3000 端口**。
+   - 本地运行必须使用 **3666**。
+   - 启动命令示例：`pnpm dev -- --port 3666` 或 `PORT=3666 pnpm dev`。
+   - 若 3666 被占用，必须 `report_route(status="blocked")` 上报并说明占用原因，禁止换回 3000。
+6. 若任务涉及 UI、交互、登录态、筛选、弹窗、失败提示或响应式布局，优先使用 `agent-browser` 做开发自检：
    - 推荐 session：`shop-fe-dev-<TASK-ID>`
    - 推荐流程：`open -> snapshot -i --json -> click/fill -> re-snapshot`
+   - 注意：`agent-browser` 是命令式 CLI，单次命令执行完退出是正常行为；以 `screenshot/snapshot/console/errors/network` 结果作为证据判断是否成功。
    - 至少确认页面可加载、关键交互可完成、控制台无新增错误
-5. 检查 SSR 兼容性（避免在 setup 中直接访问 `window`/`document`，使用 `onMounted` 或 `process.client`）。
-6. 按下方模板提交报告。
+7. 检查 SSR 兼容性（避免在 setup 中直接访问 `window`/`document`，使用 `onMounted` 或 `process.client`）。
+8. 按下方模板提交报告。
 
 ## 报告模板
 
@@ -87,6 +102,7 @@ report_route(
 - 所有用户可见文本必须走 i18n，不要硬编码。
 - 注意 SSR 兼容性，浏览器 API 必须在 `onMounted` 或 `process.client` 中使用。
 - 前端交互改动完成后，优先用 `agent-browser` 做运行时自检；不要只凭静态代码阅读就宣称页面可用。
+- 禁止把“注册新账号”作为默认开发自测路径；涉及登录/权限时优先使用固定测试凭据。
 - 如果被阻塞（权限审批、后端 API 未就绪、缺少上下文、环境异常），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
   - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`

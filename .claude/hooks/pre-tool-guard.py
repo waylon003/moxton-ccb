@@ -39,10 +39,12 @@ def emit_deny(reason: str) -> None:
 
 def is_safe_approval_send(command: str) -> bool:
     cmd = command.strip()
-    # 仅放行最小审批按键（y/n）与回车，不允许任意文本 send-text
+    # 仅放行最小审批按键（y/n/1/2）与回车，不允许任意文本 send-text
     safe_patterns = [
         r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"y"|\'y\'|y)\s*$',
         r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"n"|\'n\'|n)\s*$',
+        r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"1"|\'1\'|1)\s*$',
+        r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"2"|\'2\'|2)\s*$',
         r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"`r"|\'`r\'|\$\'\\r\')\s*$',
     ]
     for pattern in safe_patterns:
@@ -67,7 +69,7 @@ def deny_if_direct_dispatch(command: str) -> bool:
         emit_deny(
             "禁止直接 send-text 派遣任务文本。审批请优先走 "
             "teamlead-control.ps1 -Action approve-request/deny-request；"
-            "仅允许最小 y/n 回应。"
+            "仅允许最小 y/n/1/2/回车 响应。"
         )
         return True
     return False

@@ -1,7 +1,7 @@
 ﻿# 任务状态总览
 
-**更新时间**: 2026-03-09
-**活跃任务**: 1 个
+**更新时间**: 2026-03-17
+**活跃任务**: 4 个
 
 ## 项目映射
 
@@ -15,10 +15,10 @@
 
 | 角色 | backlog | active | completed | 总计 |
 |------|---------|--------|-----------|------|
-| SHOP-FE | 0 | 1 | 8 | 9 |
+| SHOP-FE | 0 | 2 | 8 | 10 |
 | ADMIN-FE | 0 | 0 | 10 | 10 |
-| BACKEND | 0 | 0 | 18 | 18 |
-| **TOTAL** | **0** | **1** | **36** | **37** |
+| BACKEND | 0 | 2 | 18 | 20 |
+| **TOTAL** | **0** | **4** | **36** | **40** |
 
 ## 目录结构
 
@@ -41,11 +41,19 @@
 
 ## 当前活跃任务
 
+### 后端 (BACKEND)
+
+| 任务ID | 标题 |
+|--------|------|
+| [BACKEND-014](./active/backend/BACKEND-014-order-payment-query-api.md) | order payment query api |
+| [BACKEND-015](./active/backend/BACKEND-015-fix-uuid-esm-require.md) | fix uuid esm require |
+
 ### 独立站前端 (SHOP-FE)
 
 | 任务ID | 标题 |
 |--------|------|
-| [SHOP-FE-012](./active/shop-frontend/SHOP-FE-012-order-checkout-fix.md) | order checkout fix |
+| [SHOP-FE-012](./active/shop-frontend/SHOP-FE-012-order-detail-fixes.md) | order detail fixes |
+| [SHOP-FE-013](./active/shop-frontend/SHOP-FE-013-payment-intent-smart-reuse.md) | payment intent smart reuse |
 
 
 ## backlog 任务

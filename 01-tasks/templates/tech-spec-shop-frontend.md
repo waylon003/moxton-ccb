@@ -7,6 +7,7 @@
 **项目:** nuxt-moxton
 **优先级:** [P0|P1|P2|P3]
 **技术栈:** Vue 3 + Nuxt 3 + TypeScript + Pinia
+**QA_LEVEL:** [full|smoke|skip]
 
 ---
 

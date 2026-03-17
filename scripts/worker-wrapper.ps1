@@ -21,6 +21,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ccbRoot = Split-Path -Parent $PSScriptRoot
+$flag = $env:CCB_ENABLE_WEZTERM_NOTIFY
+$script:enableWeztermNotify = $true
+if ($flag) {
+    $normalized = $flag.Trim().ToLowerInvariant()
+    if ($normalized -in @("0","false","no","off")) {
+        $script:enableWeztermNotify = $false
+    }
+}
 
 # 颜色输出函数
 function Write-Info { param([string]$msg) Write-Host "[INFO] $msg" -ForegroundColor Cyan }
@@ -29,7 +38,7 @@ function Write-Warn { param([string]$msg) Write-Host "[WARN] $msg" -ForegroundCo
 function Write-Err { param([string]$msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
 
 # 验证环境
-if (-not $TeamLeadPaneId) {
+if ($script:enableWeztermNotify -and -not $TeamLeadPaneId) {
     Write-Err "TEAM_LEAD_PANE_ID 未设置。请先设置环境变量或在参数中指定。"
     exit 1
 }
@@ -59,6 +68,7 @@ function Send-NotificationToTeamLead {
         [string]$Body
     )
 
+    if (-not $script:enableWeztermNotify) { Write-Warn "WezTerm 通知已禁用，跳过发送。"; return $false }
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $message = @"
 [ROUTE]
@@ -123,7 +133,7 @@ try {
 
     if ($Engine -eq "codex") {
         $psi.FileName = "codex"
-        $psi.Arguments = "--full-auto"
+        $psi.Arguments = "--full-auto --add-dir `"$ccbRoot`""
     }
     else {
         # Gemini

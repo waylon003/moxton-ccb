@@ -1,4 +1,4 @@
-# Hooks 说明
+﻿# Hooks 说明
 
 本目录包含 Claude Code 的 hooks，用于在 Team Lead 模式下自动化工作流程。
 
@@ -69,7 +69,9 @@ Team Lead 分析并拆分任务
     ↓
 teamlead-control.ps1 dispatch / dispatch-qa 分派给 Worker
     ↓
-控制器自动确保 route-monitor + approval-router 常驻
+控制器自动确保 route-monitor 常驻
+    ↓
+Agent Teams notify-sentinel 负责审批/上报提醒
     ↓
 Worker 完成后返回 [ROUTE] 回执
     ↓
@@ -118,3 +120,5 @@ echo '{}' | python .claude/hooks/on-session-start.py
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action <dispatch|dispatch-qa|recover|add-lock>
 ```
+
+

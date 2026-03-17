@@ -1,11 +1,11 @@
 ---
-last_verified: 2026-03-03
+last_verified: 2026-03-10
 verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
 # 跨项目依赖关系
 
-> **更新时间**: 2026-03-03
+> **更新时间**: 2026-03-10
 > **用途**: 清晰展示三个项目之间的 API 依赖和数据流向
 
 ## 依赖关系图
@@ -21,7 +21,7 @@ verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-0
 ┌──────────────┐              ┌──────────────┐
 │ nuxt-moxton  │              │moxton-lotadmin│
 │  (商城前端)   │              │  (管理后台)   │
-│    :3000     │              │    :3002     │
+│    :3666     │              │    :3002     │
 └──────┬───────┘              └──────┬───────┘
        │                             │
        │ HTTP API                    │ HTTP API

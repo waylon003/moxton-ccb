@@ -7,6 +7,7 @@
 **项目:** moxton-lotapi
 **优先级:** [P0|P1|P2|P3]
 **技术栈:** Node.js + Koa + TypeScript + Prisma + MySQL
+**QA_LEVEL:** [full|smoke|skip]
 
 ---
 

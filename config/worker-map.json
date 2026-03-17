@@ -40,7 +40,8 @@
       "shop-fe-qa",
       "shop-fe-qa-2"
     ],
-    "dev_engine": "gemini",
+    "engine": "codex",
+    "dev_engine": "codex",
     "qa_engine": "codex",
     "workdir": "E:\\nuxt-moxton",
     "domain": "shop-frontend"
