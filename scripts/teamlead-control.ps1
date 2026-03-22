@@ -78,6 +78,9 @@ $workerMapPath = Join-Path $rootDir "config\worker-map.json"
 $registryPath = Join-Path $rootDir "config\worker-panels.json"
 $bootstrapFlag = Join-Path $env:TEMP "moxton-bootstrap-done.flag"
 $monitorPidFile = Join-Path $env:TEMP "moxton-route-monitor.pid"
+$monitorPaneFile = Join-Path $env:TEMP "moxton-route-monitor-pane.id"
+$notifierPidFile = Join-Path $env:TEMP "moxton-route-notifier.pid"
+$notifierPaneFile = Join-Path $env:TEMP "moxton-route-notifier-pane.id"
 $paneApprovalWatcherStatePath = Join-Path $rootDir "config\pane-approval-watchers.json"
 $localApprovalEventsPath = Join-Path $rootDir "config\local-approval-events.jsonl"
 $localApprovalStatePath = Join-Path $rootDir "config\local-approval-state.json"
@@ -86,6 +89,10 @@ $docSyncStatePath = Join-Path $rootDir "config\api-doc-sync-state.json"
 $archiveJobsPath = Join-Path $rootDir "config\archive-jobs.json"
 $taskAttemptHistoryPath = Join-Path $rootDir "config\task-attempt-history.json"
 $notifySentinelReadyPath = Join-Path $rootDir "config\notify-sentinel.ready.json"
+$routeMonitorStatePath = Join-Path $rootDir "config\route-monitor-state.json"
+$routeNotifierStatePath = Join-Path $rootDir "config\route-notifier-state.json"
+$teamLeadDeliveryLogPath = Join-Path $rootDir "config\teamlead-delivery.jsonl"
+$teamLeadDeliveryFailureLogPath = Join-Path $rootDir "config\teamlead-delivery-failures.jsonl"
 $dispatchMutexName = "Global\MoxtonTeamLeadDispatchMutex"
 $taskLocksMutexName = "Global\MoxtonTaskLocksFileMutex"
 
@@ -256,75 +263,63 @@ function Write-NotifySentinelReady {
     return [pscustomobject]$payload
 }
 
-function Get-NotifySentinelAgeMinutes($ready) {
-    if (-not $ready) { return $null }
-    $at = $null
+function Read-JsonLinesFile {
+    param(
+        [string]$Path,
+        [int]$Tail = 0
+    )
+    if (-not (Test-Path $Path)) { return @() }
     try {
-        if ($ready.at) { $at = [DateTimeOffset]::Parse([string]$ready.at) }
-    } catch {}
-    if (-not $at) { return $null }
-    return ((Get-Date).ToUniversalTime() - $at.UtcDateTime).TotalMinutes
+        $lines = if ($Tail -gt 0) {
+            @(Get-Content $Path -Encoding UTF8 -Tail $Tail)
+        } else {
+            @(Get-Content $Path -Encoding UTF8)
+        }
+    } catch {
+        return @()
+    }
+
+    $items = New-Object System.Collections.Generic.List[object]
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try {
+            $items.Add(($line | ConvertFrom-Json)) | Out-Null
+        } catch {}
+    }
+    return @($items.ToArray())
 }
 
+function Get-TeamLeadDeliverySnapshot {
+    $monitor = Read-RouteMonitorState
+    $notifier = Read-RouteNotifierState
+
+    $records = @(Read-JsonLinesFile -Path $teamLeadDeliveryLogPath -Tail 200)
+    $failureRecords = @(Read-JsonLinesFile -Path $teamLeadDeliveryFailureLogPath -Tail 80 | Sort-Object at -Descending)
+    $latestByEvent = @{}
+    foreach ($record in @($records | Sort-Object at)) {
+        $eventId = if ($record.event_id) { [string]$record.event_id } else { 'event-' + [guid]::NewGuid().ToString('N') }
+        $latestByEvent[$eventId] = $record
+    }
+
+    $unresolved = @($latestByEvent.Values | Where-Object { -not [bool]$_.sent } | Sort-Object at -Descending)
+    $successCount = @($records | Where-Object { [bool]$_.sent }).Count
+    $failureCount = @($records | Where-Object { -not [bool]$_.sent }).Count
+
+    return [pscustomobject]@{
+        monitor = $monitor
+        notifier = $notifier
+        success_count = $successCount
+        failure_count = $failureCount
+        unresolved = $unresolved
+        recent_failures = $failureRecords
+    }
+}
 function Assert-NotifySentinelReady {
-    $flag = $env:TEAMLEAD_REQUIRE_NOTIFY_SENTINEL
-    if ($flag) {
-        $norm = $flag.Trim().ToLowerInvariant()
-        if ($norm -in @("0","false","no","off")) { return }
-    }
-    $ready = Read-NotifySentinelReady
-    $strictFlag = $env:TEAMLEAD_STRICT_NOTIFY_SENTINEL
-    $strictOn = $true
-    if ($null -ne $strictFlag -and $strictFlag.Trim() -ne "") {
-        $normStrict = $strictFlag.Trim().ToLowerInvariant()
-        if ($normStrict -in @("0","false","no","off")) { $strictOn = $false }
-    }
-    if ($ready) {
-        $readySource = if ($ready.source) { [string]$ready.source } else { "" }
-        $readyWorkers = 0
-        try { if ($ready.workers -ne $null) { $readyWorkers = [int]$ready.workers } } catch {}
-        if ($readySource -ne "notify-sentinel") {
-            Write-Host "[WARN] notify-sentinel 就绪标记来源异常（可能是手动 notify-ready）。" -ForegroundColor Yellow
-            Write-Host "       若 notify-sentinel 正在轮询文件，它会刷新 ready（source=notify-sentinel）。请先发送启动指令使其进入轮询。" -ForegroundColor Yellow
-            if ($strictOn) {
-                Write-Host "[FAIL] strict 模式要求 notify-sentinel 正在轮询并更新 ready。" -ForegroundColor Red
-                exit 1
-            }
-        } elseif ($readyWorkers -le 0) {
-            Write-Host "[WARN] notify-sentinel 已在线，但 workers=0（尚无活跃 worker）。不阻断派遣，仅提示。" -ForegroundColor Yellow
-        }
-    }
-    if (-not $ready) {
-        Write-Host '[FAIL] notify-sentinel 未就绪：派遣前必须先创建通知哨兵并完成自检。' -ForegroundColor Red
-        Write-Host '       解决: 创建 notify-sentinel 后运行:' -ForegroundColor Yellow
-        Write-Host '         powershell -File scripts/teamlead-control.ps1 -Action notify-ready' -ForegroundColor White
-        exit 1
-    }
-    $ttl = Get-EnvIntOrDefault -name "TEAMLEAD_NOTIFY_SENTINEL_TTL_MINUTES" -defaultValue 10
-    $age = Get-NotifySentinelAgeMinutes $ready
-    if ($null -ne $age -and $age -gt $ttl) {
-        Write-Host ('[FAIL] notify-sentinel 就绪标记已过期 (age=' + [Math]::Round($age,1) + 'm, ttl=' + $ttl + 'm).') -ForegroundColor Red
-        Write-Host '       解决: 重建 notify-sentinel 并重新执行 notify-ready。' -ForegroundColor Yellow
-        exit 1
-    }
+    return
 }
 
 function Invoke-NotifyReady {
-    $workers = 0
-    if (Test-Path $registryPath) {
-        try {
-            $panel = Get-Content $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($panel -and $panel.workers) {
-                $workers = @($panel.workers.PSObject.Properties | Where-Object { $_.Value.status -eq "active" }).Count
-            }
-        } catch {}
-    }
-    $payload = Write-NotifySentinelReady -Source "manual" -Note "teamlead-control notify-ready" -Workers $workers
-    $age = Get-NotifySentinelAgeMinutes $payload
-    $ageText = if ($null -ne $age) { [Math]::Round($age,1).ToString() + "m" } else { "-" }
-    Write-Host ('[OK] notify-sentinel ready marker updated (age=' + $ageText + ').') -ForegroundColor Green
-    Write-Host "     提示: 该标记仅用于临时补写；strict 模式仍要求 notify-sentinel 轮询并刷新 ready。" -ForegroundColor DarkGray
-    Write-Host ('     path: ' + $notifySentinelReadyPath) -ForegroundColor DarkGray
+    Write-Host '[INFO] notify-ready 已弃用。当前由 route-monitor 写事件、route-notifier 独立通知 Team Lead，无需 notify-sentinel ready 标记。' -ForegroundColor Yellow
 }
 function Resolve-TeamLeadPaneId {
     if ($env:TEAM_LEAD_PANE_ID) {
@@ -356,6 +351,87 @@ function Resolve-TeamLeadPaneId {
     Write-Host '    $env:TEAM_LEAD_PANE_ID = ''<pane_id>''' -ForegroundColor White
     Write-Host '若 wezterm cli list 为空，请先确认 WezTerm 正在运行。' -ForegroundColor Yellow
     exit 1}
+
+function Normalize-PaneId([string]$value) {
+    if (-not $value) { return $null }
+    $trimmed = $value.Trim()
+    if ($trimmed -match '(\d+)') {
+        return $Matches[1]
+    }
+    return $null
+}
+
+function Read-ProcessStateFile([string]$Path) {
+    if (-not $Path -or -not (Test-Path $Path)) { return $null }
+    try {
+        return (Get-Content $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Read-RouteMonitorState {
+    return (Read-ProcessStateFile -Path $routeMonitorStatePath)
+}
+
+function Read-RouteNotifierState {
+    return (Read-ProcessStateFile -Path $routeNotifierStatePath)
+}
+
+function Get-TrackedPaneId([string]$PaneFile, [string]$StatePath, [string]$StateField) {
+    if ($PaneFile -and (Test-Path $PaneFile)) {
+        try {
+            $paneId = Normalize-PaneId ((Get-Content $PaneFile -Raw -Encoding UTF8).Trim())
+            if ($paneId) { return $paneId }
+        } catch {}
+    }
+    $state = Read-ProcessStateFile -Path $StatePath
+    if ($state -and $StateField -and $state.PSObject.Properties.Name -contains $StateField) {
+        $value = $state.$StateField
+        if ($value) { return (Normalize-PaneId ([string]$value)) }
+    }
+    return $null
+}
+
+function Get-RouteMonitorPaneId {
+    return (Get-TrackedPaneId -PaneFile $monitorPaneFile -StatePath $routeMonitorStatePath -StateField 'monitor_pane_id')
+}
+
+function Get-RouteNotifierPaneId {
+    return (Get-TrackedPaneId -PaneFile $notifierPaneFile -StatePath $routeNotifierStatePath -StateField 'notifier_pane_id')
+}
+
+function Get-LockRouteBodyPreview($Lock) {
+    if (-not $Lock) { return '' }
+    if ($Lock.routeUpdate -and $Lock.routeUpdate.bodyPreview) {
+        return [string]$Lock.routeUpdate.bodyPreview
+    }
+    foreach ($candidate in @($Lock.note, $Lock.message, $Lock.reason)) {
+        if ($candidate) { return [string]$candidate }
+    }
+    return ''
+}
+
+function Get-BlockedDecision([string]$body) {
+    if (-not $body) { return 'unknown' }
+    $text = $body.ToLowerInvariant()
+    if ($text -match '3033|health' -or $text -match 'connection refused|econnrefused|port .* closed|service unavailable|server not started|unreachable') {
+        return 'service_down'
+    }
+    if ($text -match 'pre-existing|dirty state|working tree|uncommitted|git status|modified files|already modified|baseline') {
+        return 'dirty_state'
+    }
+    if ($text -match 'credential|credentials|token|login|password|no credentials|sec_e_no_credentials|auth') {
+        return 'missing_credentials'
+    }
+    return 'unknown'
+}
+
+function Get-BackendServiceRestoreTaskId {
+    $candidate = Join-Path $rootDir '01-tasks\active\backend\BACKEND-016-start-backend-dev-server.md'
+    if (Test-Path $candidate) { return 'BACKEND-016' }
+    return $null
+}
 
 function Resolve-TaskPrefix($tid) {
     $prefixes = @("ADMIN-FE", "SHOP-FE", "BACKEND")
@@ -1652,31 +1728,250 @@ function Ensure-WorkerRunning($wName, $wConfig, $tlPaneId, [switch]$ForceRestart
 }
 
 function Ensure-RouteMonitor($tlPaneId) {
+    $monitorScript = Join-Path $scriptDir "route-monitor.ps1"
     $monitorRunning = $false
+    $needsRestart = $false
+    $savedPid = ""
+    $savedPaneId = Get-RouteMonitorPaneId
+    $proc = $null
+    $monitorState = Read-RouteMonitorState
+
     if (Test-Path $monitorPidFile) {
         $savedPid = (Get-Content $monitorPidFile -Raw).Trim()
+    } elseif ($monitorState -and $monitorState.pid) {
+        $savedPid = [string]$monitorState.pid
+    }
+    if ($savedPid) {
         try {
             $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
             $monitorRunning = ($null -ne $proc)
         } catch {}
-        if (-not $monitorRunning) {
-            Remove-Item $monitorPidFile -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $monitorRunning) {
+        Remove-Item $monitorPidFile -Force -ErrorAction SilentlyContinue
+    } elseif (Test-Path $monitorScript) {
+        try {
+            $scriptWriteTime = (Get-Item $monitorScript).LastWriteTime
+            if ($scriptWriteTime -gt $proc.StartTime) {
+                $needsRestart = $true
+                Write-Host ('[WARN] route-monitor binary drift detected: script=' + $scriptWriteTime.ToString("yyyy-MM-dd HH:mm:ss") + ' > process=' + $proc.StartTime.ToString("yyyy-MM-dd HH:mm:ss")) -ForegroundColor Yellow
+            }
+        } catch {}
+    }
+
+    if ($monitorState) {
+        if ($monitorState.note -and ([string]$monitorState.note).StartsWith('wezterm_cli_unavailable')) {
+            $needsRestart = $true
+            Write-Host '[WARN] route-monitor lost WezTerm GUI socket, will restart inside WezTerm pane.' -ForegroundColor Yellow
         }
+        if ($tlPaneId -and $monitorState.teamlead_pane_id -and ([string]$monitorState.teamlead_pane_id -ne [string]$tlPaneId)) {
+            $needsRestart = $true
+            Write-Host ('[WARN] route-monitor pane target drift detected: state=' + [string]$monitorState.teamlead_pane_id + ' expected=' + [string]$tlPaneId) -ForegroundColor Yellow
+        }
+    }
+
+    if ($monitorRunning -and $needsRestart) {
+        try {
+            Stop-Process -Id $savedPid -Force -ErrorAction Stop
+            Start-Sleep -Milliseconds 300
+        } catch {
+            Write-Host ('[WARN] Failed to stop stale route-monitor PID ' + $savedPid + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+        }
+        $monitorRunning = $false
+        Remove-Item $monitorPidFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($savedPaneId -and (-not $monitorRunning -or $needsRestart)) {
+        try {
+            wezterm cli kill-pane --pane-id $savedPaneId 2>$null | Out-Null
+            Write-Host ('[INFO] Closed stale route-monitor pane ' + $savedPaneId) -ForegroundColor DarkGray
+        } catch {
+            Write-Host ('[WARN] Failed to close stale route-monitor pane ' + $savedPaneId + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+        }
+        Remove-Item $monitorPaneFile -Force -ErrorAction SilentlyContinue
     }
 
     if (-not $monitorRunning) {
         Write-Host '[INFO] Starting route-monitor...' -ForegroundColor Yellow
-        $monitorScript = Join-Path $scriptDir "route-monitor.ps1"
         if (Test-Path $monitorScript) {
-            $proc = Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$monitorScript,"-Continuous","-TeamLeadPaneId",$tlPaneId -WindowStyle Hidden -PassThru
-            Set-Content $monitorPidFile $proc.Id -Force
-            $monPid = $proc.Id
-            Write-Host ('[OK] route-monitor started (PID ' + $monPid + ')') -ForegroundColor Green
+            $panes = Get-WeztermPanes
+            if (-not $panes -or @($panes).Count -eq 0) {
+                Write-Host '[FAIL] Cannot start route-monitor: wezterm cli is unavailable in current session.' -ForegroundColor Red
+                Write-Host '       请在正在运行的 WezTerm Team Lead 窗口中执行 bootstrap / dispatch。' -ForegroundColor Yellow
+                exit 1
+            }
+
+            $spawnArgs = @(
+                'cli', 'spawn',
+                '--cwd', $rootDir,
+                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', $monitorScript,
+                '-Continuous',
+                '-TeamLeadPaneId', $tlPaneId
+            )
+            $spawnOutput = & wezterm @spawnArgs 2>&1
+            $newPaneId = Normalize-PaneId ([string]$spawnOutput)
+            if ($LASTEXITCODE -ne 0 -or -not $newPaneId) {
+                Write-Host ('[FAIL] route-monitor spawn failed: ' + [string]$spawnOutput) -ForegroundColor Red
+                exit 1
+            }
+
+            Set-Content $monitorPaneFile $newPaneId -Force -Encoding UTF8
+            $launchDeadline = (Get-Date).AddSeconds(8)
+            $launchedPid = $null
+            do {
+                Start-Sleep -Milliseconds 300
+                $latestState = Read-RouteMonitorState
+                if ($latestState -and $latestState.pid) {
+                    $statePane = $null
+                    if ($latestState.monitor_pane_id) {
+                        $statePane = Normalize-PaneId ([string]$latestState.monitor_pane_id)
+                    }
+                    if ((-not $statePane) -or $statePane -eq $newPaneId) {
+                        $launchedPid = [string]$latestState.pid
+                    }
+                }
+            } while ((-not $launchedPid) -and (Get-Date) -lt $launchDeadline)
+
+            if ($launchedPid) {
+                Set-Content $monitorPidFile $launchedPid -Force -Encoding UTF8
+                Write-Host ('[OK] route-monitor started (pane ' + $newPaneId + ', PID ' + $launchedPid + ')') -ForegroundColor Green
+            } else {
+                Remove-Item $monitorPidFile -Force -ErrorAction SilentlyContinue
+                Write-Host ('[WARN] route-monitor pane started (pane ' + $newPaneId + '), but PID sync timed out. Check status.') -ForegroundColor Yellow
+            }
         } else {
             Write-Host '[WARN] route-monitor.ps1 not found, skipping' -ForegroundColor Yellow
         }
     } else {
-        Write-Host ('[OK] route-monitor running (PID ' + $savedPid + ')') -ForegroundColor Green
+        if ($savedPaneId) {
+            Write-Host ('[OK] route-monitor running (PID ' + $savedPid + ', pane ' + $savedPaneId + ')') -ForegroundColor Green
+        } else {
+            Write-Host ('[OK] route-monitor running (PID ' + $savedPid + ')') -ForegroundColor Green
+        }
+    }
+}
+
+function Ensure-RouteNotifier($tlPaneId) {
+    $notifierScript = Join-Path $scriptDir "route-notifier.ps1"
+    $notifierRunning = $false
+    $needsRestart = $false
+    $savedPid = ""
+    $savedPaneId = Get-RouteNotifierPaneId
+    $proc = $null
+    $notifierState = Read-RouteNotifierState
+
+    if (Test-Path $notifierPidFile) {
+        $savedPid = (Get-Content $notifierPidFile -Raw).Trim()
+    } elseif ($notifierState -and $notifierState.pid) {
+        $savedPid = [string]$notifierState.pid
+    }
+    if ($savedPid) {
+        try {
+            $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
+            $notifierRunning = ($null -ne $proc)
+        } catch {}
+    }
+    if (-not $notifierRunning) {
+        Remove-Item $notifierPidFile -Force -ErrorAction SilentlyContinue
+    } elseif (Test-Path $notifierScript) {
+        try {
+            $scriptWriteTime = (Get-Item $notifierScript).LastWriteTime
+            if ($scriptWriteTime -gt $proc.StartTime) {
+                $needsRestart = $true
+                Write-Host ('[WARN] route-notifier binary drift detected: script=' + $scriptWriteTime.ToString("yyyy-MM-dd HH:mm:ss") + ' > process=' + $proc.StartTime.ToString("yyyy-MM-dd HH:mm:ss")) -ForegroundColor Yellow
+            }
+        } catch {}
+    }
+
+    if ($notifierState) {
+        if ($notifierState.note -and ([string]$notifierState.note).StartsWith('wezterm_cli_unavailable')) {
+            $needsRestart = $true
+            Write-Host '[WARN] route-notifier lost WezTerm GUI socket, will restart inside WezTerm pane.' -ForegroundColor Yellow
+        }
+        if ($tlPaneId -and $notifierState.teamlead_pane_id -and ([string]$notifierState.teamlead_pane_id -ne [string]$tlPaneId)) {
+            $needsRestart = $true
+            Write-Host ('[WARN] route-notifier pane target drift detected: state=' + [string]$notifierState.teamlead_pane_id + ' expected=' + [string]$tlPaneId) -ForegroundColor Yellow
+        }
+    }
+
+    if ($notifierRunning -and $needsRestart) {
+        try {
+            Stop-Process -Id $savedPid -Force -ErrorAction Stop
+            Start-Sleep -Milliseconds 300
+        } catch {
+            Write-Host ('[WARN] Failed to stop stale route-notifier PID ' + $savedPid + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+        }
+        $notifierRunning = $false
+        Remove-Item $notifierPidFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($savedPaneId -and (-not $notifierRunning -or $needsRestart)) {
+        try {
+            wezterm cli kill-pane --pane-id $savedPaneId 2>$null | Out-Null
+            Write-Host ('[INFO] Closed stale route-notifier pane ' + $savedPaneId) -ForegroundColor DarkGray
+        } catch {
+            Write-Host ('[WARN] Failed to close stale route-notifier pane ' + $savedPaneId + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+        }
+        Remove-Item $notifierPaneFile -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not $notifierRunning) {
+        Write-Host '[INFO] Starting route-notifier...' -ForegroundColor Yellow
+        if (Test-Path $notifierScript) {
+            $panes = Get-WeztermPanes
+            if (-not $panes -or @($panes).Count -eq 0) {
+                Write-Host '[FAIL] Cannot start route-notifier: wezterm cli is unavailable in current session.' -ForegroundColor Red
+                Write-Host '       请在正在运行的 WezTerm Team Lead 窗口中执行 bootstrap / dispatch。' -ForegroundColor Yellow
+                exit 1
+            }
+
+            $spawnArgs = @(
+                'cli', 'spawn',
+                '--cwd', $rootDir,
+                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', $notifierScript,
+                '-Continuous',
+                '-TeamLeadPaneId', $tlPaneId
+            )
+            $spawnOutput = & wezterm @spawnArgs 2>&1
+            $newPaneId = Normalize-PaneId ([string]$spawnOutput)
+            if ($LASTEXITCODE -ne 0 -or -not $newPaneId) {
+                Write-Host ('[FAIL] route-notifier spawn failed: ' + [string]$spawnOutput) -ForegroundColor Red
+                exit 1
+            }
+
+            Set-Content $notifierPaneFile $newPaneId -Force -Encoding UTF8
+            $launchDeadline = (Get-Date).AddSeconds(8)
+            $launchedPid = $null
+            do {
+                Start-Sleep -Milliseconds 300
+                $latestState = Read-RouteNotifierState
+                if ($latestState -and $latestState.pid) {
+                    $statePane = $null
+                    if ($latestState.notifier_pane_id) {
+                        $statePane = Normalize-PaneId ([string]$latestState.notifier_pane_id)
+                    }
+                    if ((-not $statePane) -or $statePane -eq $newPaneId) {
+                        $launchedPid = [string]$latestState.pid
+                    }
+                }
+            } while ((-not $launchedPid) -and (Get-Date) -lt $launchDeadline)
+
+            if ($launchedPid) {
+                Set-Content $notifierPidFile $launchedPid -Force -Encoding UTF8
+                Write-Host ('[OK] route-notifier started (pane ' + $newPaneId + ', PID ' + $launchedPid + ')') -ForegroundColor Green
+            } else {
+                Remove-Item $notifierPidFile -Force -ErrorAction SilentlyContinue
+                Write-Host ('[WARN] route-notifier pane started (pane ' + $newPaneId + '), but PID sync timed out. Check status.') -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host '[WARN] route-notifier.ps1 not found, skipping' -ForegroundColor Yellow
+        }
+    } else {
+        if ($savedPaneId) {
+            Write-Host ('[OK] route-notifier running (PID ' + $savedPid + ', pane ' + $savedPaneId + ')') -ForegroundColor Green
+        } else {
+            Write-Host ('[OK] route-notifier running (PID ' + $savedPid + ')') -ForegroundColor Green
+        }
     }
 }
 
@@ -1896,6 +2191,7 @@ function Invoke-Bootstrap {
     Write-Host ''
     Write-Host '--- Route Monitor ---' -ForegroundColor Cyan
     Ensure-RouteMonitor $tlPaneId
+    Ensure-RouteNotifier $tlPaneId
 
     Set-Content $bootstrapFlag ('bootstrapped=' + (Get-Date -Format 'o')) -Force
     Write-Host ''
@@ -1911,13 +2207,10 @@ function Invoke-Bootstrap {
     }
 
     Write-Host ""
-    Write-Host '--- Notify Sentinel（必开）---' -ForegroundColor Cyan
-    Write-Host '  派遣前必须创建 notify-sentinel 队友并完成自检，否则不会收到审批/回传提醒。' -ForegroundColor Yellow
-    Write-Host '  启用 Agent Teams：CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1' -ForegroundColor DarkGray
-    Write-Host '  创建 notify-sentinel 后，必须立即发送这条启动指令：' -ForegroundColor Yellow
-    Write-Host '    @notify-sentinel 读取 E:\moxton-ccb\.claude\agents\notify-sentinel.md 并立刻进入循环；只要检测到新增 route/approval/local approval 事件，第一动作必须先给我发一条 teammate 消息，再继续轮询；禁止只更新 ready.json 或只在你自己的窗口总结。' -ForegroundColor White
-    Write-Host ('  若 ready 未写入，再执行：powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action notify-ready') -ForegroundColor White
-    Write-Host '  未就绪将阻断 dispatch/dispatch-qa（严格模式）。' -ForegroundColor DarkGray
+    Write-Host '--- Route Notifications ---' -ForegroundColor Cyan
+    Write-Host '  route-monitor 只负责收口 MCP route、写锁与写事件；route-notifier 独立负责 WezTerm 唤醒 Team Lead。' -ForegroundColor Yellow
+    Write-Host '  默认开启；如需关闭可设置：CCB_ROUTE_MONITOR_NOTIFY=0' -ForegroundColor DarkGray
+    Write-Host '  仅对关键 route 变化提醒；普通 in_progress 心跳不会持续刷屏。' -ForegroundColor DarkGray
 
     Write-Host ''
     Write-Host '==========================================' -ForegroundColor Green
@@ -1961,9 +2254,6 @@ function Invoke-Dispatch {
         exit 1
     }
     Assert-CanonicalTaskId $TaskId
-    Write-Host "[REMIND] 派遣前必须创建 notify-sentinel 队友（Agent Team）并完成自检，否则不会收到审批/回传提醒。" -ForegroundColor Yellow
-    Assert-NotifySentinelReady
-
     $tlPaneId = Resolve-TeamLeadPaneId
     Write-Host '[INFO] Pre-dispatch baseline-clean is disabled by default; controller will preserve pending routes/approvals unless you run recover -RecoverAction baseline-clean manually.' -ForegroundColor DarkGray
 
@@ -2052,6 +2342,7 @@ function Invoke-Dispatch {
 
     # 先确保监控已启动，避免 route 回调无人接管
     Ensure-RouteMonitor $tlPaneId
+    Ensure-RouteNotifier $tlPaneId
 
     # Dispatch task (BEFORE updating lock)
     $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
@@ -2087,6 +2378,7 @@ function Invoke-Dispatch {
 
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
+    Ensure-RouteNotifier $tlPaneId
     Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $devWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
 
     Write-Host ''
@@ -2110,9 +2402,6 @@ function Invoke-DispatchQA {
         exit 1
     }
     Assert-CanonicalTaskId $TaskId
-    Write-Host "[REMIND] 派遣前必须创建 notify-sentinel 队友（Agent Team）并完成自检，否则不会收到审批/回传提醒。" -ForegroundColor Yellow
-    Assert-NotifySentinelReady
-
     $tlPaneId = Resolve-TeamLeadPaneId
     Write-Host '[INFO] Pre-dispatch baseline-clean is disabled by default; controller will preserve pending routes/approvals unless you run recover -RecoverAction baseline-clean manually.' -ForegroundColor DarkGray
 
@@ -2185,6 +2474,7 @@ function Invoke-DispatchQA {
 
     # 先确保监控已启动，避免 route 回调无人接管
     Ensure-RouteMonitor $tlPaneId
+    Ensure-RouteNotifier $tlPaneId
 
     # Dispatch FIRST, then update lock
     $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
@@ -2220,6 +2510,7 @@ function Invoke-DispatchQA {
 
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
+    Ensure-RouteNotifier $tlPaneId
     Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $qaWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
 
     Write-Host ''
@@ -2365,6 +2656,10 @@ function Get-TaskRecommendation {
         $archiveBlocking += @($GateContext.other_active | Where-Object { -not $_.StartsWith($TaskId + ":") })
     }
 
+    $blockedBodyPreview = Get-LockRouteBodyPreview -Lock $Lock
+    $blockedDecision = Get-BlockedDecision -body $blockedBodyPreview
+    $serviceRestoreTaskId = Get-BackendServiceRestoreTaskId
+
     $summary = ""
     $color = "Gray"
     $priority = 500
@@ -2488,6 +2783,14 @@ function Get-TaskRecommendation {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId ' + [string]$req.id) | Out-Null
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId ' + [string]$req.id) | Out-Null
                 }
+            } elseif ($phase -eq "qa" -and $blockedDecision -eq 'service_down') {
+                $summary = "QA 因 3033/health 不可达而 blocked，先恢复后端服务再重派 QA"
+                $color = "Red"
+                $priority = 22
+                $commands.Add('powershell -Command "curl.exe -sS http://localhost:3033/health"') | Out-Null
+                if ($serviceRestoreTaskId) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $serviceRestoreTaskId) | Out-Null
+                }
             } elseif ($phase -eq "qa") {
                 $summary = "QA 驳回后待回开发"
                 $color = "Red"
@@ -2568,33 +2871,18 @@ function Invoke-Status {
         Write-Host '  Bootstrap: not done' -ForegroundColor Red
     }
 
-    # Notify sentinel
+    # Route notifications
     Write-Host ""
-    Write-Host '--- Notify Sentinel ---' -ForegroundColor Cyan
-    $notifyReady = Read-NotifySentinelReady
-    if ($notifyReady) {
-        $age = Get-NotifySentinelAgeMinutes $notifyReady
-        $ageText = if ($null -ne $age) { [Math]::Round($age,1).ToString() + "m" } else { "-" }
-        $ttl = Get-EnvIntOrDefault -name "TEAMLEAD_NOTIFY_SENTINEL_TTL_MINUTES" -defaultValue 10
-        $source = if ($notifyReady.source) { [string]$notifyReady.source } else { "-" }
-        $workers = if ($null -ne $notifyReady.workers) { [string]$notifyReady.workers } else { "-" }
-        $wezterm = if ($notifyReady.wezterm) { [string]$notifyReady.wezterm } else { "-" }
-        $notify = if ($notifyReady.notify) { [string]$notifyReady.notify } else { "-" }
-        $color = "Green"
-        $extra = ""
-        if ($null -ne $age -and $age -gt $ttl) {
-            $color = "Red"
-            $extra = " [EXPIRED]"
-        } elseif ($source -ne "notify-sentinel") {
-            $color = "Yellow"
-            $extra = " [SOURCE-MISMATCH]"
-        }
-        Write-Host ("  ready=yes source=" + $source + " age=" + $ageText + " ttl=" + $ttl + "m workers=" + $workers + " wezterm=" + $wezterm + " notify=" + $notify + $extra) -ForegroundColor $color
-    } else {
-        Write-Host '  ready=no（派遣将被阻断）' -ForegroundColor Red
-        Write-Host '  创建 notify-sentinel 队友后执行：' -ForegroundColor Yellow
-        Write-Host ('    powershell -NoProfile -ExecutionPolicy Bypass -File "' + $scriptDir + '\teamlead-control.ps1" -Action notify-ready') -ForegroundColor White
+    Write-Host '--- Route Notifications ---' -ForegroundColor Cyan
+    $routeNotifyEnabled = $true
+    $routeFlag = $env:CCB_ROUTE_MONITOR_NOTIFY
+    if ($routeFlag) {
+        $routeNorm = $routeFlag.Trim().ToLowerInvariant()
+        if ($routeNorm -in @("0","false","no","off")) { $routeNotifyEnabled = $false }
     }
+    $routeColor = if ($routeNotifyEnabled) { 'Green' } else { 'Yellow' }
+    $routeText = if ($routeNotifyEnabled) { 'enabled' } else { 'disabled' }
+    Write-Host ('  mode=route-monitor-write + route-notifier-wake notify=' + $routeText + ' scope=mcp-route-only') -ForegroundColor $routeColor
 
     # Workers
     Write-Host ''
@@ -2660,6 +2948,78 @@ function Invoke-Status {
         }
     } else {
         Write-Host '  (inbox not created yet)' -ForegroundColor Gray
+    }
+
+        Write-Host '--- Team Lead Deliveries ---' -ForegroundColor Cyan
+    $delivery = Get-TeamLeadDeliverySnapshot
+    if ($delivery.monitor) {
+        $monitorStatus = if ($delivery.monitor.status) { [string]$delivery.monitor.status } else { 'unknown' }
+        $monitorColor = switch ($monitorStatus) {
+            'running' { 'Green' }
+            'starting' { 'Yellow' }
+            'error' { 'Red' }
+            default { 'Gray' }
+        }
+        $paneText = if ($delivery.monitor.teamlead_pane_id) { [string]$delivery.monitor.teamlead_pane_id } else { '-' }
+        $lastLoopText = '-'
+        if ($delivery.monitor.last_loop_at) {
+            $lastLoopUtc = ConvertTo-UtcDateSafe $delivery.monitor.last_loop_at
+            if ($lastLoopUtc) { $lastLoopText = Get-TaskActivityAgeText -ActivityUtc $lastLoopUtc }
+        }
+        $monitorPaneText = if ($delivery.monitor.monitor_pane_id) { [string]$delivery.monitor.monitor_pane_id } else { '-' }
+        Write-Host ('  route-monitor status=' + $monitorStatus + ' target=' + $paneText + ' monitor_pane=' + $monitorPaneText + ' role=lock-writer last_loop=' + $lastLoopText) -ForegroundColor $monitorColor
+        if ($delivery.monitor.note) {
+            Write-Host ('  monitor note=' + [string]$delivery.monitor.note) -ForegroundColor DarkGray
+        }
+    } else {
+        Write-Host '  (route-monitor state not found)' -ForegroundColor Yellow
+    }
+    if ($delivery.notifier) {
+        $notifierStatus = if ($delivery.notifier.status) { [string]$delivery.notifier.status } else { 'unknown' }
+        $notifierColor = switch ($notifierStatus) {
+            'running' { 'Green' }
+            'starting' { 'Yellow' }
+            'error' { 'Red' }
+            default { 'Gray' }
+        }
+        $notifierTarget = if ($delivery.notifier.teamlead_pane_id) { [string]$delivery.notifier.teamlead_pane_id } else { '-' }
+        $notifierPaneText = if ($delivery.notifier.notifier_pane_id) { [string]$delivery.notifier.notifier_pane_id } else { '-' }
+        $notifierLastLoop = '-'
+        if ($delivery.notifier.last_loop_at) {
+            $notifierLastLoopUtc = ConvertTo-UtcDateSafe $delivery.notifier.last_loop_at
+            if ($notifierLastLoopUtc) { $notifierLastLoop = Get-TaskActivityAgeText -ActivityUtc $notifierLastLoopUtc }
+        }
+        Write-Host ('  route-notifier status=' + $notifierStatus + ' target=' + $notifierTarget + ' notifier_pane=' + $notifierPaneText + ' role=teamlead-wake last_loop=' + $notifierLastLoop) -ForegroundColor $notifierColor
+        if ($delivery.notifier.note) {
+            Write-Host ('  notifier note=' + [string]$delivery.notifier.note) -ForegroundColor DarkGray
+        }
+    } else {
+        Write-Host '  (route-notifier state not found)' -ForegroundColor Yellow
+    }
+    Write-Host ('  recent delivery attempts: ok=' + $delivery.success_count + ' fail=' + $delivery.failure_count) -ForegroundColor DarkGray
+    $unresolvedDeliveries = @($delivery.unresolved | Select-Object -First 5)
+    if ($unresolvedDeliveries.Count -eq 0) {
+        if ($delivery.failure_count -gt 0) {
+            Write-Host '  (recent notify failures recovered by retry)' -ForegroundColor DarkGray
+        } else {
+            Write-Host '  (no unresolved delivery failures)' -ForegroundColor Gray
+        }
+    } else {
+        foreach ($entry in $unresolvedDeliveries) {
+            $task = if ($entry.task) { [string]$entry.task } else { '-' }
+            $worker = if ($entry.worker) { [string]$entry.worker } else { '-' }
+            $status = if ($entry.status) { [string]$entry.status } else { '-' }
+            $action = if ($entry.action) { [string]$entry.action } else { '-' }
+            $attempt = if ($entry.attempt) { [string]$entry.attempt } else { '1' }
+            $error = if ($entry.error) { [string]$entry.error } else { 'unknown' }
+            if ($error.Length -gt 100) { $error = $error.Substring(0, 100) + '...' }
+            $age = '-'
+            if ($entry.at) {
+                $ageUtc = ConvertTo-UtcDateSafe $entry.at
+                if ($ageUtc) { $age = Get-TaskActivityAgeText -ActivityUtc $ageUtc }
+            }
+            Write-Host ('  ' + $task.PadRight(18) + ' worker=' + $worker + ' status=' + $status + ' action=' + $action + ' attempt=' + $attempt + ' last=' + $age + ' err=' + $error) -ForegroundColor Yellow
+        }
     }
 
     # Approval requests

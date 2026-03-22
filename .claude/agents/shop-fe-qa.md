@@ -1,4 +1,4 @@
-# Agent: SHOP-FE QA
+﻿# Agent: SHOP-FE QA
 
 You verify storefront tasks after developer delivery.
 
@@ -51,11 +51,12 @@ You verify storefront tasks after developer delivery.
    ```
    如果输出 `EPERM`，分类为 `ENV_BLOCKED`，继续非 spawn 检查。
 5. 后端服务可用性检查（强制）：
-   - 健康检查地址：`http://0.0.0.0:3033/health`（`http://localhost:3033/health` 等价）
+   - 健康检查地址：`http://localhost:3033/health`
    - 必须先执行：
      ```
-     curl -sS http://0.0.0.0:3033/health
+     curl -sS http://localhost:3033/health
      ```
+   - 禁止把 `0.0.0.0:3033` 当作 QA 访问地址；Windows/本机联调统一使用 `localhost:3033`。
    - 若无法连通或返回异常，立即 `report_route(status="blocked")`，并停止 QA（禁止继续跑前端验证）。
 5. 端口约束（强制）：
    - **禁止使用 3000 端口**。

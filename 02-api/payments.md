@@ -1,7 +1,7 @@
 # Moxton Lot API - 支付系统接口文档
 
-**版本**: v1.15.1
-**最后更新**: 2026-03-13
+**版本**: v1.15.3
+**最后更新**: 2026-03-20
 **服务地址**: http://localhost:3033
 
 ---
@@ -38,6 +38,11 @@ Models (Payment.ts) + Prisma ORM
 **认证**: Optional (支持游客和登录用户)
 
 **说明**: 创建 Stripe 支付意图，返回 `clientSecret` 供前端 Stripe Elements 使用
+
+**接入顺序**:
+1. 支付页应先调用 `GET /payments/order/:orderId`
+2. 若返回 `activePayment`，直接复用其中的 `clientSecret`
+3. 仅当 `activePayment=null` 时，再调用当前接口创建新的支付意图
 
 **请求头**:
 ```http
@@ -84,9 +89,11 @@ X-Guest-ID: <guest-session-id>     // 游客必填，用于验证订单归属
 
 **错误码**:
 - `400`: `orderId is required` - 缺少订单ID
+- `400`: `X-Guest-ID header is required for guest payments` - 游客支付缺少访客标识
 - `400`: `Failed to create payment intent: Order not found` - 订单不存在
 - `400`: `Failed to create payment intent: Order is not eligible for payment` - 订单状态不允许支付
-- `400`: `Failed to create payment intent: Payment already in progress` - 支付已在进行中
+- `400`: `Failed to create payment intent: Payment already in progress` - 存在未过期且仍处于活跃/处理中状态的支付意图
+- `403`: `Access denied: This is not a guest order` - 访客请求试图为用户订单创建支付意图
 - `403`: `Access denied: Order does not belong to user` - 订单不属于当前登录用户
 - `403`: `Access denied: Order does not belong to this guest session` - 游客订单与 X-Guest-ID 不匹配
 
@@ -111,6 +118,7 @@ X-Guest-ID: <guest-session-id>     // 游客必填，用于验证订单归属
 - 提取设备信息（`user-agent`, `ip`）用于安全追踪
 - 游客订单：验证 `X-Guest-ID` 与订单 `metadata.guestId` 匹配
 - 当存在已过期的支付记录（`expiresAt` 早于当前时间，或未设置 `expiresAt` 且 `createdAt` 超过 24 小时）时，后端会先将其标记为 `CANCELLED`，并允许创建新的支付意图
+- 以上过期重建行为已由 `05-verification/BACKEND-014/failure-path-20260320-1227.json` 验证通过
 
 ---
 
@@ -170,12 +178,27 @@ X-Guest-ID: <guest-session-id>     // 游客必填，用于验证订单归属
 - 若支付记录 `expiresAt` 为空，服务端按 `createdAt + 24h` 计算有效过期时间用于返回与活跃判断
 - 游客订单校验依赖订单 `metadata.guestId`；创建订单时未携带 `X-Guest-ID` 会导致该接口返回 403
 
-**错误响应**:
+**闭环行为（依据 `BACKEND-014` QA）**:
+- 已过期的 `PENDING` 支付记录仍会出现在 `payments` 列表中，但 `activePayment` 返回 `null`
+- 当随后调用 `POST /payments/stripe/create-intent` 成功后，新支付记录会排在列表首位，历史过期记录会被标记为 `CANCELLED`
+- 相关证据：`05-verification/BACKEND-014/contract-check-20260320-1227.json`、`05-verification/BACKEND-014/failure-path-20260320-1227.json`
+
+**错误响应示例 1：游客缺少 `X-Guest-ID`**:
 ```json
 {
   "code": 403,
-  "message": "Access denied: Order does not belong to this guest session",
+  "message": "X-Guest-ID header is required for guest payments",
   "timestamp": "2026-03-09T10:00:00.000Z",
+  "success": false
+}
+```
+
+**错误响应示例 2：订单不存在**:
+```json
+{
+  "code": 404,
+  "message": "Order not found",
+  "timestamp": "2026-03-20T04:28:23.250Z",
   "success": false
 }
 ```
@@ -805,11 +828,10 @@ ctx.forbidden(message)
 
 ## 版本历史
 
-### v1.14.0 (2026-02-09)
-- 添加 `X-Guest-ID` 请求头到创建支付意图接口
-- 添加游客支付权限校验：验证 `X-Guest-ID` 与订单 `metadata.guestId` 匹配
-- 添加 403 错误码：`Access denied: Order does not belong to this guest session`
-- 更新权限验证逻辑说明
+### v1.15.3 (2026-03-20)
+- 基于 `BACKEND-014` QA 结果补充“先查询后创建”的支付页接入顺序
+- 明确 `GET /payments/order/:orderId` 的 403/404 错误示例与闭环行为
+- 补充已过期支付记录被标记为 `CANCELLED` 后允许重新创建 intent 的验证依据
 
 ### v1.15.2 (2026-03-16)
 - 修复 create-intent 对已过期支付记录的阻塞，过期判断统一基于 expiresAt / createdAt+24h
@@ -822,6 +844,12 @@ ctx.forbidden(message)
 - 新增 `GET /payments/order/:orderId`，用于查询订单最近 5 条支付记录
 - 返回 `activePayment` 字段，供前端复用未过期的活跃支付意图
 - 明确该接口同时支持登录用户和游客用户的订单归属校验
+
+### v1.14.0 (2026-02-09)
+- 添加 `X-Guest-ID` 请求头到创建支付意图接口
+- 添加游客支付权限校验：验证 `X-Guest-ID` 与订单 `metadata.guestId` 匹配
+- 添加 403 错误码：`Access denied: Order does not belong to this guest session`
+- 更新权限验证逻辑说明
 
 ### v1.13.0 (2026-02-04)
 - 完全重写支付系统，从 Stripe Checkout Session 升级为 Stripe Elements + Payment Intent API

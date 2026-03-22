@@ -492,42 +492,10 @@ CLIENT_URL="http://localhost:3000"
 PORT=3033
 NODE_ENV="production"
 ```
-### 健康检查
-**GET** `/health`
-**认证**: None (公开接口)
-**说明**: 检查服务器运行状态，用于负载均衡器健康检查和监控
-**响应**:
-```json
-{
-  "code": 200,
-  "message": "Server is healthy",
-  "data": {
-    "status": "ok",
-    "timestamp": "2025-12-02T10:00:00.000Z",
-    "uptime": 3600,
-    "environment": "development"
-  },
-  "success": true
-}
-```
-### API版本信息
-**GET** `/version`
-**认证**: None (公开接口)
-**说明**: 获取当前API版本信息和环境配置
-**响应**:
-```json
-{
-  "code": 200,
-  "message": "Version information retrieved successfully",
-  "data": {
-    "version": "1.0.0",
-    "name": "Moxton Lot API",
-    "environment": "development",
-    "timestamp": "2025-12-02T10:00:00.000Z"
-  },
-  "success": true
-}
-```
+### 系统级服务探针
+根路由 `GET /health` 与 `GET /version` 属于全局系统接口，不属于地址模块。
+
+自 2026-03-19 起，这两个接口统一维护在 [system.md](system.md)，依据为 `BACKEND-016` QA `PASS` 与 `05-verification/BACKEND-016/` 中的探活证据。
 ---
 ## 📞 技术支持
 ### API版本控制

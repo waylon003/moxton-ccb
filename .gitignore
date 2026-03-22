@@ -1,4 +1,4 @@
-﻿.npm-cache/
+.npm-cache/
 .pw-browsers/
 nul
 node_modules/
@@ -28,6 +28,8 @@ _temp_*.txt
 # Local diagnostics
 *.log
 config/teamlead-alerts.jsonl
+config/teamlead-delivery.jsonl
+config/teamlead-delivery-failures.jsonl
 config/notify-sentinel.ready.json
 config/route-monitor-state.json
 config/auto-decision-state.json

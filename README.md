@@ -8,66 +8,59 @@
 
 ```mermaid
 flowchart TD
-  %% 规划/任务
   subgraph Planning["规划/任务"]
-    U["用户/需求"] --> TL["Team Lead"]
+    U["用户/需求"] --> TL["Team Lead (Claude Code)"]
     TL --> PG["planning-gate"]
     PG --> Spec["01-tasks/active/*.md"]
     PG --> Locks["TASK-LOCKS.json"]
   end
 
-  %% 派遣/执行
   subgraph Dispatch["派遣/执行"]
-    TL -->|teamlead-control.ps1| D{"dispatch / dispatch-qa"}
+    TL --> CTRL["teamlead-control.ps1"]
+    CTRL --> D{"dispatch / dispatch-qa / archive"}
     D --> WM["worker-map.json"]
-    D --> WR["worker registry / WezTerm pane"]
-    WR --> W["Worker (Codex/Gemini)"]
+    D --> WR["worker-panels.json / WezTerm pane"]
+    WR --> W["Workers (Codex)"]
+    D --> PAW["pane-approval-watcher"]
   end
 
-  %% 执行/QA
-  subgraph Work["执行/QA"]
-    W --> Repo["业务仓库 (lotapi/lotadmin/nuxt)"]
+  subgraph Work["执行/验收"]
+    W --> Repo["业务仓库"]
     W --> Evidence["05-verification/*"]
     W -->|report_route| Inbox["route-inbox.json"]
-    W -->|审批提示| Approvals["approval-requests.json"]
+    W -->|本地审批提示| PAW
+    PAW --> Alerts["teamlead-alerts.jsonl"]
   end
 
-  %% 收口/更新
-  subgraph Monitor["收口/更新"]
+  subgraph Monitor["收口/通知"]
     Inbox --> RM["route-monitor"]
     RM --> Locks
-    RM --> Alerts["teamlead-alerts.jsonl"]
-    RM -->|QA success| Doc["doc-updater"]
-    RM -->|archive 触发| ArchiveJobs["archive-jobs"]
-    RM -.兜底唤醒.-> TL
+    RM --> DocState["api-doc-sync-state.json"]
+    RM --> ArchiveJobs["archive-jobs.json"]
+    RM --> Alerts
+    Alerts --> RN["route-notifier"]
+    RN -->|send-text 唤醒| TL
   end
 
-  %% 通知/转发
-  subgraph Notify["通知/转发"]
-    Req["notify-sentinel 必开(严格门槛)"] --> NS["notify-sentinel"]
-    Alerts --> NS
-    Approvals --> NS
-    NS -->|提醒| TL
-    NS -.low risk auto-approve.-> W
-  end
-
-  %% 归档/提交
-  subgraph Archive["归档/提交"]
+  subgraph Archive["文档/归档"]
+    RM -->|backend QA success| Doc["doc-updater"]
+    ArchiveJobs --> Committer["repo-committer"]
+    Doc -->|report_route| Inbox
+    Committer -->|report_route| Inbox
     TL -->|archive| Move["active -> completed"]
     Move --> ArchiveJobs
-    ArchiveJobs --> Committer["repo-committer"]
-    Committer --> Git["commit / push"]
   end
 ```
 
-
 - **Team Lead**：Claude Code 会话（本仓库）— 需求拆分、任务分派、进度监控
 - **主指挥约束**：Team Lead 只能使用 Claude Code（禁止 Codex 作为主指挥）
-- **Workers**：Codex / Gemini CLI — 在 WezTerm 多窗口中执行开发和 QA
-- **通信**：MCP `report_route` 回调 + Agent Teams 通知（审批/上报）+ WezTerm CLI `send-text`（仅 CLI/WezTerm 场景，Team Lead 唤醒默认开启（可用 CCB_ENABLE_WEZTERM_NOTIFY=0 关闭））
+- **Workers**：Codex CLI — 在 WezTerm 多窗口中执行开发、QA、`doc-updater` 与 `repo-committer`
+- **通信**：统一走 MCP `report_route` 回传 + WezTerm CLI `send-text` 唤醒。`route-monitor` 负责收口、写锁、文档/归档状态更新与事件落盘；`route-notifier` 独立负责唤醒 Team Lead；`pane-approval-watcher` 负责 worker pane 本地审批兼容。
+
 - **控制入口**：`scripts/teamlead-control.ps1`（业务动作统一入口）
 
 ## 业务仓库
+
 
 | 前缀 | 仓库 | Dev 引擎 | QA 引擎 |
 |------|------|---------|---------|
@@ -110,8 +103,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - QA 复审驳回后，默认 `requeue -> dispatch-qa`，并使用 fresh QA context。
 - 每次 `dispatch/dispatch-qa` 都会生成新的 `run_id`；Worker 回传 `report_route` 时必须原样带回。
 - `route-monitor` 会基于 `run_id + 当前锁状态` 忽略旧 worker 迟到 route，避免状态被写回漂移。
-- `dispatch/dispatch-qa` 只自动确保 `route-monitor` 常驻；审批/上报通知由 Agent Teams 通知队友负责。
-- `route-monitor` 负责状态收口与任务锁更新；通知队友只做提醒，不写状态。
+- `dispatch/dispatch-qa` 会自动确保 `route-monitor` 与 `route-notifier` 常驻；MCP route 上报先由 `route-monitor` 收口，再由 `route-notifier` 唤醒 Team Lead。`doc-updater` / `repo-committer` 也走同一条链路。
+- 所有通过 Team Lead 派遣的 worker 都必须按协议回传 `in_progress` 与终态（`success` / `blocked` / `fail`）；其中 `doc-updater` / `repo-committer` 的 `in_progress` 也会触发提醒，避免文档/归档链路静默运行。
+- `route-monitor` 只负责状态收口、任务锁更新和事件落盘；`route-notifier` 独立负责 Team Lead 唤醒。`config/teamlead-delivery.jsonl` / `config/teamlead-delivery-failures.jsonl` 用于区分“route 已收口”与“最后一跳通知失败”。
 - 前端链路保留 `Playwright` 作为 smoke/回归基座，同时加入 `agent-browser` 作为真实浏览器交互验收增强层；不做替换。
 - `agent-browser` 是命令式 CLI：单次 `open/snapshot/screenshot/...` 执行完就退出是正常行为；验收证据以输出文件（截图/console/network）为准。
 - `agent-browser` 统一全局安装在 worker 所在机器环境中，不分别安装到 `nuxt-moxton` / `moxton-lotadmin` 仓库。
@@ -137,25 +131,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start
 局域网访问时，用 `http://<你的电脑内网IP>:3001` 打开；如需 WezTerm pane 启动，追加 `-UseWezTerm`。
 
 
-## Agent Teams 通知（推荐）
+## Team Lead 通知
 
-
-默认严格门槛：派遣前必须创建 notify-sentinel；未创建将被控制器阻断。
-若禁用 route-monitor 唤醒（`CCB_ROUTE_MONITOR_NOTIFY=0`），通知完全依赖 notify-sentinel。
-解决 Claude Code UI/手机端无法接收 WezTerm `send-text` 唤醒的问题。通知队友只做提醒，不改状态。
-
-启用方式（实验特性）：
-- 在 settings.json 或环境变量中设置 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-- 推荐 teammateMode: in-process（不打开新窗口）
-- WezTerm 通知唤醒默认开启，如需关闭设置 `CCB_ENABLE_WEZTERM_NOTIFY=0`
-
-启动方式（Team Lead 会话内自然语言即可）：
-- 创建团队，添加一个 notify-sentinel teammate
-- 指令其阅读 E:\moxton-ccb\.claude\agents\notify-sentinel.md 并开始循环监听
-- notify-sentinel 启动后必须输出一次 `[WATCH-READY]` 并写入 `config/notify-sentinel.ready.json`
-- 若未写入，执行 `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action notify-ready` 补写（dispatch/dispatch-qa 门禁依赖该标记）
+默认由 `route-notifier` 通过 WezTerm `send-text` 唤醒 Team Lead；`route-monitor` 不再直接发送唤醒，只负责事件落盘。
+所有经 Team Lead 派遣的 worker（含 `doc-updater` / `repo-committer`）只要按协议走 `report_route`，都会先被 `route-monitor` 收口，再由 `route-notifier` 唤醒 Team Lead。
+本地 pane 审批由 `pane-approval-watcher` 负责兼容处理；高风险/未知审批会追加到 `teamlead-alerts.jsonl` 后再提醒 Team Lead。
+如需关闭直接唤醒，设置 `CCB_ROUTE_MONITOR_NOTIFY=0`。
+Agent Teams / `notify-sentinel` 已从主链移除，不再作为派遣前置门槛。
 
 ## 技能链路（Team Lead）
+
+
 
 - **规划阶段**：`planning-gate`
   - 需求澄清 -> 方案对比 -> 任务文档落地
@@ -172,7 +158,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start
 
 ## 关键约束
 
-- 禁止 Team Lead 使用子代理（`Task(...)` / `Backgrounded agent`）执行派遣；允许 Agent Teams `notify-sentinel` 仅做通知。
+- 禁止 Team Lead 使用子代理（`Task(...)` / `Backgrounded agent`）执行派遣。
 - 禁止直接调用控制器子脚本（如 `dispatch-task.ps1` / `start-worker.ps1`）。
 - 禁止 Team Lead 直接使用 `assign_task.py` 执行写入动作（建任务/改锁/拆分）；仅允许只读诊断参数。
 - Worker 遇阻塞必须 `report_route(status=blocked, ...)`，不得静默等待。
@@ -180,9 +166,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start
 - QA worker 不得调用 `teamlead-control.ps1`、不得直接编辑 `TASK-LOCKS.json`、不得向用户询问“归档还是 qa_passed”这类编排决策。
 - QA 通过不自动提交；仅在 `archive` 成功迁移 `active -> completed` 后触发提交发布流程。
 - QA 通过后若复审不通过，先 `requeue -TargetState waiting_qa`，不要把驳回原因直接发到旧 QA 窗口。
+- QA 若以 `blocked` 回传环境/服务阻塞（如 `localhost:3033/health` 不可达），先恢复环境或派发环境恢复任务，再回到原任务继续 `requeue + dispatch-qa`；不要直接重派同一 QA。
 - 前端 QA 默认顺序：`Playwright smoke -> agent-browser 真实交互验收 -> playwright-mcp/截图/网络证据补充`。
 - Team Lead 监控 Worker 时禁止无限轮询：同一 `get-text/check_routes` 无变化最多 3 轮，随后必须转 `status/recover`。
-- 高风险审批与 MCP 上报由 Agent Teams 通知队友发送提醒（示例格式见 CLAUDE.md）。
+- MCP 上报由 `route-notifier` 独立发送提醒；高风险审批相关命令仅做兼容保留。
 
 ## 目录结构
 

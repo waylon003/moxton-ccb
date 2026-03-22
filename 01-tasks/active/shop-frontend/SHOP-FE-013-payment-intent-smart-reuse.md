@@ -486,3 +486,13 @@ checkout: {
 - [项目状态](../../04-projects/nuxt-moxton.md)
 - [项目协调](../../04-projects/COORDINATION.md)
 - [前置依赖任务](../backend/BACKEND-014-order-payment-query-api.md)
+
+<!-- AUTO-QA-SUMMARY:BEGIN -->
+## QA 摘要（自动回写）
+
+- 最后更新: `2026-03-22T21:47:06+08:00`
+- QA Worker: `shop-fe-qa`
+- 路由状态: `blocked`
+- 回传摘要: blocker_type=env; question=backend service required by QA is unavailable because http://localhost:3033/health is unreachable, should Team Lead start or restore the lot API before storefront QA reruns?; attempted=ACK sent + read role_definition/protocol/task_file + read CLAUDE.md/AGENTS.md/payments.md/QA-IDENTITY-POOL.md + captured pre-existing changes via gi...
+- 原始证据仍以 `05-verification/` 中的文件为准。
+<!-- AUTO-QA-SUMMARY:END -->

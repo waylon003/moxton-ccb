@@ -103,6 +103,14 @@ Instead change the require of index.js in E:\moxton-lotapi\src\middleware\reques
 
 ---
 
+## QA 失败原因与修复要求（Team Lead 更新）
+
+- QA 结论已确认 **uuid ESM require 报错已消失**，但 **`/health` 与 `/version` 响应结构不符合公开契约**，导致 QA 失败。
+- **修复要求**：保持 `requestId` 修复不回退，同时将 `/health`、`/version` 响应统一为公开 API 文档中的标准结构（`code/message/data/success/timestamp`）。
+  - 参考：`E:\moxton-ccb\02-api\orders.md` 的统一响应格式示例。
+
+---
+
 **相关文档:**
 - `E:\moxton-lotapi\CLAUDE.md`
 - `E:\moxton-lotapi\AGENTS.md`
@@ -110,26 +118,22 @@ Instead change the require of index.js in E:\moxton-lotapi\src\middleware\reques
 <!-- AUTO-QA-SUMMARY:BEGIN -->
 ## QA 摘要（自动回写）
 
-- 最后更新: `2026-03-17T15:17:14+08:00`
+- 最后更新: `2026-03-20T12:21:04+08:00`
 - QA Worker: `backend-qa`
-- 路由状态: `fail`
-- 验收结论: `FAIL`
-- 结论摘要: requestId 的 uuid ESM 启动问题已修复并通过任务级运行时验收：npm run dev 可启动、/health 返回 200、响应头含 X-Request-ID；但当前仓库仍存在契约不一致和 2 个支付服务回归用例失败，因此本轮 QA 不能判定 PASS。
+- 路由状态: `success`
+- 验收结论: `PASS`
+- 结论摘要: uuid ESM require 报错未复现，npm run dev 可启动，/health 与 /version 已符合统一响应契约且携带 X-Request-ID。
 - 证据索引:
-  - `build`: `PASS` -> `05-verification/BACKEND-015/build.log`, `05-verification/BACKEND-015/dev.stdout.20260317-151311.log`, `05-verification/BACKEND-015/dev.stderr.20260317-151311.log`, `05-verification/BACKEND-015/dev-process.json`
-  - `contract`: `FAIL` -> `05-verification/BACKEND-015/contract-check.json`
-  - `failure_path`: `PASS` -> `05-verification/BACKEND-015/failure-path.json`, `05-verification/BACKEND-015/health-post-response.txt`
-  - `network`: `PASS` -> `05-verification/BACKEND-015/network.json`, `05-verification/BACKEND-015/health-response.txt`, `05-verification/BACKEND-015/version-response.txt`
-  - `pre_existing_changes`: `PASS` -> `05-verification/BACKEND-015/pre-existing-changes.json`
-  - `tests`: `FAIL` -> `05-verification/BACKEND-015/vitest.json`
+  - `contract`: `PASS` -> `05-verification/BACKEND-015/contract-check.json`
+  - `failure_path`: `PASS` -> `05-verification/BACKEND-015/failure-path.json`
+  - `network`: `PASS` -> `05-verification/BACKEND-015/network.json`
 - 验证命令:
   - `node -e "const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,['-v']);console.log(r.error?.code||'OK')"`
   - `npm run build`
-  - `npx vitest run tests\api`
-  - `npx vitest run tests\api\health.spec.ts`
+  - `vitest-mcp run_tests target=./tests/api/health.spec.ts format=detailed showLogs=true`
   - `npm run dev`
-  - `curl.exe -sS -i http://localhost:3033/health`
-  - `curl.exe -sS -i http://localhost:3033/version`
-  - `curl.exe -sS -i -X POST http://localhost:3033/health`
+  - `curl.exe -sS -D 05-verification/BACKEND-015/curl-health.headers.txt -o 05-verification/BACKEND-015/curl-health.body.txt -w "%{http_code}" http://localhost:3033/health`
+  - `curl.exe -sS -D 05-verification/BACKEND-015/curl-version.headers.txt -o 05-verification/BACKEND-015/curl-version.body.txt -w "%{http_code}" http://localhost:3033/version`
+  - `curl.exe -sS -D 05-verification/BACKEND-015/curl-missing.headers.txt -o 05-verification/BACKEND-015/curl-missing.body.txt -w "%{http_code}" http://localhost:3033/__qa_missing__`
 - 原始证据仍以 `05-verification/` 中的文件为准。
 <!-- AUTO-QA-SUMMARY:END -->

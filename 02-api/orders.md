@@ -1301,6 +1301,13 @@ PENDING → CANCELLED (用户取消)
 2. 使用 X-Guest-ID 查看订单列表
 3. 使用邮箱/电话/订单号查询订单
 
+### 4. 支付页接入顺序（2026-03-20 补充）
+
+1. 订单创建成功后，先调用 `GET /payments/order/:orderId`
+2. 若返回 `activePayment`，前端应直接复用该 `clientSecret`
+3. 若 `activePayment=null`，再调用 `POST /payments/stripe/create-intent`
+4. 依据 `BACKEND-014` QA，历史已过期支付不会再阻塞重新创建 intent；重新创建后，旧记录会在支付列表中显示为 `CANCELLED`
+
 ---
 
 ## 更新日志
@@ -1354,3 +1361,7 @@ PENDING → CANCELLED (用户取消)
 **2026-03-03**:
 - ✅ 修复 `GET /orders/guest/query` 示例中的历史遗漏：`items[].product` 补充 `images: string[]`
 - ✅ 与 `OrderResponseDTO` 契约保持一致（依据：`BACKEND-013`、`SHOP-FE-008`）
+
+**2026-03-20**:
+- ✅ 补充订单支付页接入顺序：先查 `GET /payments/order/:orderId`，再决定是否创建新 intent
+- ✅ 补充 `BACKEND-014` 已验证闭环：历史过期支付不会阻塞重新发起支付

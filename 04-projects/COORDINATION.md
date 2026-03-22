@@ -1,19 +1,19 @@
 ---
-last_verified: 2026-03-10
-verified_against: [BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
+last_verified: 2026-03-20
+verified_against: [BACKEND-016, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
 # 项目协调状态
 
 > **用途**: Team Lead 通过此文件感知三个项目的协调状态
 > **更新频率**: 每次修改跨项目接口时更新
-> **最后更新**: 2026-03-10
+> **最后更新**: 2026-03-20
 
 ## 📊 项目概览
 
 | 项目 | 路径 | 类型 | 端口 | 状态 |
 |------|------|------|------|------|
-| 后端 API | `E:\moxton-lotapi` | Koa/TypeScript | 3006 | 🟢 活跃 |
+| 后端 API | `E:\moxton-lotapi` | Koa/TypeScript | 3033 | 🟢 活跃 |
 | 管理后台 | `E:\moxton-lotadmin` | Vue3/Soybean | 3002 | 🟢 活跃 |
 | 前端商城 | `E:\nuxt-moxton` | Nuxt3 | 3666 | 🟢 活跃 |
 
@@ -55,6 +55,8 @@ verified_against: [BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 
 ### 认证
 ```typescript
+GET  /health           // 服务健康检查
+GET  /version          // 版本与环境信息
 POST /auth/register    // 用户注册
 POST /auth/login       // 用户登录 → 返回 JWT Token
 GET  /auth/profile     // 获取用户信息 (Bearer Token)
@@ -82,12 +84,12 @@ POST   /cart/merge     // 合并游客购物车（登录后）
 ### 在线订单
 ```typescript
 POST /orders                        // 创建订单（结账）
-GET  /orders                        // 用户订单列表
+GET  /orders/user                   // 用户订单列表
 GET  /orders/:id                    // 用户订单详情
 GET  /orders/admin                  // 管理员订单列表（keyword 多字段搜索）
 GET  /orders/admin/:id              // 管理员订单详情（含 metadata）
 PUT  /orders/admin/:id/status       // 更新订单状态
-POST /orders/admin/:id/ship         // 发货（物流信息可选）
+PUT  /orders/admin/:id/ship         // 发货（物流信息可选）
 PATCH /orders/admin/:id/shipping-info // 补充物流信息（仅 SHIPPED）
 GET  /orders/admin/:id/history      // 操作历史
 ```
@@ -95,10 +97,13 @@ GET  /orders/admin/:id/history      // 操作历史
 ### 支付 (Stripe)
 ```typescript
 POST /payments/stripe/create-intent // 创建支付意图
+GET  /payments/order/:orderId       // 查询订单支付记录
+GET  /payments/stripe/status/:paymentIntentId // 查询支付状态
 POST /payments/stripe/webhook       // Stripe Webhook 回调
-GET  /payments/:orderId             // 查询支付状态
-POST /payments/:paymentId/refund    // 退款 (admin)
 ```
+
+- 商城支付页接入顺序已固定为“先查 `GET /payments/order/:orderId`，再决定是否调用 `POST /payments/stripe/create-intent`”
+- 依据 `BACKEND-014` QA，已过期支付不会再阻塞重新创建 intent
 
 ### 收货地址
 ```typescript
@@ -111,17 +116,21 @@ PUT    /addresses/:id/default  // 设为默认
 
 ### 通知
 ```typescript
-GET    /notifications           // 通知列表
+GET    /notifications/user      // 通知列表
 PUT    /notifications/:id/read  // 标记已读
-PUT    /notifications/read-all  // 全部已读
+PUT    /notifications/all/read  // 全部已读
 DELETE /notifications/:id       // 删除通知
 ```
 
 ### 咨询订单
 ```typescript
 POST /offline-orders                      // 提交咨询订单
+GET  /offline-orders/guest                // 游客咨询订单列表
+GET  /offline-orders/user                 // 用户咨询订单列表
+GET  /offline-orders/user/:id             // 用户咨询订单详情
 GET  /offline-orders/admin                // 咨询订单列表 (admin)
-PUT  /offline-orders/admin/:id/status     // 更新状态 (admin)
+GET  /offline-orders/admin/:id            // 咨询订单详情 (admin)
+PUT  /offline-orders/admin/:id            // 更新状态/备注 (admin)
 POST /offline-orders/admin/batch/delete   // 批量删除 (admin)
 ```
 
@@ -146,7 +155,7 @@ POST /upload/image  // 图片上传
 ┌────────┴────────┐
 │  moxton-lotapi  │
 │  (后端 API)      │
-│    :3006        │
+│    :3033        │
 └────────┬────────┘
          │
          │ HTTP API
@@ -162,10 +171,14 @@ POST /upload/image  // 图片上传
 
 ## 🚨 待同步事项
 
-### 已知质量问题
-- 后端 TypeScript 编译 242 条错误（功能不受影响，需系统性修复）
-- 管理后台 lint 102 errors / 76 warnings
-- 构建环境 spawn EPERM 权限问题
+### 运行基线（2026-03-19 / BACKEND-016）
+- 本地联调与 QA 统一以 `http://localhost:3033` 作为后端入口
+- 可用性探针为 `GET /health`、`GET /version`
+- 未知根路由错误路径已复核：`GET /health-not-found` 返回标准 `404` JSON 包（见 `05-verification/BACKEND-016/failure-path.json`）
+
+### 当前后端基线
+- `BACKEND-014`（2026-03-20）已确认支付闭环可用：`activePayment=null` 时可继续创建新的 Stripe intent
+- `BACKEND-014` 与 `BACKEND-016` 已确认后端 `npm run build`、`tests/api`、运行时探活均为绿色，旧的“后端编译 242 条错误”结论不再适用
 
 ### 缺失功能
 - 管理后台：用户管理模块未实现

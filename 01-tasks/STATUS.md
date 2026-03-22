@@ -1,7 +1,7 @@
 ﻿# 任务状态总览
 
-**更新时间**: 2026-03-17
-**活跃任务**: 4 个
+**更新时间**: 2026-03-20
+**活跃任务**: 5 个
 
 ## 项目映射
 
@@ -17,8 +17,8 @@
 |------|---------|--------|-----------|------|
 | SHOP-FE | 0 | 2 | 8 | 10 |
 | ADMIN-FE | 0 | 0 | 10 | 10 |
-| BACKEND | 0 | 2 | 18 | 20 |
-| **TOTAL** | **0** | **4** | **36** | **40** |
+| BACKEND | 0 | 3 | 18 | 21 |
+| **TOTAL** | **0** | **5** | **36** | **41** |
 
 ## 目录结构
 
@@ -47,6 +47,7 @@
 |--------|------|
 | [BACKEND-014](./active/backend/BACKEND-014-order-payment-query-api.md) | order payment query api |
 | [BACKEND-015](./active/backend/BACKEND-015-fix-uuid-esm-require.md) | fix uuid esm require |
+| [BACKEND-016](./active/backend/BACKEND-016-start-backend-dev-server.md) | start backend dev server |
 
 ### 独立站前端 (SHOP-FE)
 

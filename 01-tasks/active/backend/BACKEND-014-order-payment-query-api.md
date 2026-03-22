@@ -464,22 +464,21 @@ async getOrderPayments(orderId: string, userId: string | null, guestId?: string)
 <!-- AUTO-QA-SUMMARY:BEGIN -->
 ## QA 摘要（自动回写）
 
-- 最后更新: `2026-03-17T11:04:40+08:00`
+- 最后更新: `2026-03-20T12:29:27+08:00`
 - QA Worker: `backend-qa`
-- 路由状态: `fail`
-- 验收结论: `FAIL`
-- 结论摘要: 运行时接口契约、网络检查、过期支付后重新 create-intent 闭环均通过，npm run build 通过；但新增 Vitest 文件 tests/api/payments.service.spec.ts 仍有 2 个失败用例，属于测试回归，当前分支不满足 QA 通过条件。
+- 路由状态: `success`
+- 验收结论: `PASS`
+- 结论摘要: 新增订单支付查询 API 契约、权限校验、过期支付后重新创建 intent 的闭环已通过验证，当前构建与 Vitest 也为绿色。
 - 证据索引:
-  - `build`: `PASS` -> `05-verification/BACKEND-014/build-20260317-105358.txt`, `05-verification/BACKEND-014/runtime-precheck-20260317-105358.txt`
-  - `contract`: `PASS` -> `05-verification/BACKEND-014/contract-check-20260317-105358.json`
-  - `failure_path`: `PASS` -> `05-verification/BACKEND-014/failure-path-20260317-105358.json`
-  - `network`: `PASS` -> `05-verification/BACKEND-014/network-20260317-105358.json`
-  - `tests`: `FAIL` -> `05-verification/BACKEND-014/vitest-20260317-105358.json`
+  - `build`: `PASS` -> `05-verification/BACKEND-014/runtime-precheck-20260320-1223.txt`, `05-verification/BACKEND-014/build-20260320-1223.txt`
+  - `contract`: `PASS` -> `05-verification/BACKEND-014/contract-check-20260320-1227.json`
+  - `failure_path`: `PASS` -> `05-verification/BACKEND-014/failure-path-20260320-1227.json`
+  - `network`: `PASS` -> `05-verification/BACKEND-014/network-20260320-1227.json`
+  - `tests`: `PASS` -> `05-verification/BACKEND-014/vitest-20260320-1224.json`
 - 验证命令:
   - `node -e "const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,['-v']);console.log(r.error?.code||'OK')"`
   - `npm run build`
-  - `npx vitest run tests\api`
-  - `curl GET /payments/order/:orderId (user/guest/error cases)`
-  - `curl POST /payments/stripe/create-intent (expired-query-followed-by-create-intent scenario)`
+  - `vitest-mcp: run_tests ./tests/api`
+  - `node E:/moxton-ccb/05-verification/BACKEND-014/run-runtime-20260320-1227.js`
 - 原始证据仍以 `05-verification/` 中的文件为准。
 <!-- AUTO-QA-SUMMARY:END -->

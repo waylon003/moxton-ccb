@@ -1,4 +1,4 @@
----
+﻿---
 name: teamlead-controller
 description: Team Lead 统一控制器 - 所有操作的单一入口
 triggers:
@@ -27,7 +27,7 @@ triggers:
 
 1. 先执行 bootstrap（每个新会话一次）
 2. 再执行 status 确认当前锁、路由与审批
-3. 在 Claude Code UI/手机端务必手动创建 notify-sentinel（见下文）
+3. 默认由 `route-monitor` 直接通知 Team Lead，无需再创建 notify-sentinel
 
 ## 控制器动作表
 
@@ -56,13 +56,11 @@ recover 可用动作：
 - `baseline-clean`
 - `full-clean`
 
-## notify-sentinel（强制提醒）
+## Route Notifications
 
-- notify-sentinel 不会随 dispatch 自动启动；每个新会话必须手动创建并让其阅读 `E:\moxton-ccb\.claude\agents\notify-sentinel.md`
-- Claude Code UI/手机端审批与回调提醒依赖 notify-sentinel（非 WezTerm 注入）
-- WezTerm 注入默认启用；如需关闭，设置 `CCB_ENABLE_WEZTERM_NOTIFY=0`
-- notify-sentinel 启动后必须输出一次 [WATCH-READY]；未出现则重建 teammate
-- dispatch/dispatch-qa 前必须有 notify-sentinel ready 标记；若无，先执行 `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action notify-ready`
+- 默认由 `route-monitor.ps1` 直接通知 Team Lead，只处理 MCP route 上报。
+- 如需关闭直接唤醒，设置 `CCB_ROUTE_MONITOR_NOTIFY=0`。
+- 不再依赖 Agent Teams / `notify-sentinel`。
 
 ## 关键规则
 

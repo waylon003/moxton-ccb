@@ -297,12 +297,72 @@ interface OrderResponseDTO {
   2) 保留已通过的修复：两处“去支付”跳转已统一到 `/checkout?step=payment&orderId=...`，以及 500 错误文案已本地化。
      - 证据：`E:\nuxt-moxton\05-verification\SHOP-FE-012\qa-order-detail-failure-zh.png` / `E:\nuxt-moxton\05-verification\SHOP-FE-012\shop-fe-qa-order-detail-failure-en.png`
 
+- 必须修复（本轮）：
+  1) **订单详情数据兼容映射**必须覆盖 QA 证据里的字段差异（`items[].price`、`address` 字符串、`addresses[]`）。
+  2) **checkout payment step 必须能基于 orderId 恢复订单摘要**（确保支付页摘要不为空）。
+  3) 若 `http://localhost:3033/health` 不可达，需按阻塞上报并说明无法完成联调。
+
 <!-- AUTO-QA-SUMMARY:BEGIN -->
 ## QA 摘要（自动回写）
 
-- 最后更新: `2026-03-17T15:39:02+08:00`
+- 最后更新: `2026-03-20T02:11:42+08:00`
 - QA Worker: `shop-fe-qa`
-- 路由状态: `blocked`
-- 回传摘要: blocker_type=env; question=QA required backend health endpoint http://localhost:3033/health is unreachable, should Team Lead start or restore the API service before QA rerun?; attempted=read role_definition + protocol + task_file + CLAUDE.md + AGENTS.md + E:\moxton-ccb\02-api\orders.md + QA identity pool; collected git status --porcelain and git diff --name-...
+- 路由状态: `success`
+- 验收结论: `PASS`
+- 结论摘要: 订单详情页已正确兼容真实接口字段差异，订单列表/详情页的去支付均跳转到 checkout payment step 并基于 orderId 恢复订单摘要，500 错误中英文文案已本地化。
+- 证据索引:
+  - `component_api`: `PASS` -> `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-context7-nuxt.md`
+  - `console`: `PASS` -> `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-normal-console.txt`
+  - `detail_items_address`: `PASS` -> `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-api-response.json`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-desktop.png`
+  - `detail_redirect`: `PASS` -> `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-paynow-url.txt`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-paynow-checkout.png`
+  - `failure_path`: `PASS` -> `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-failure-zh.png`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-failure-en.png`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-failure-zh.txt`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-failure-en.txt`
+  - `list_redirect`: `PASS` -> `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-orders-list-paynow-url.txt`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-orders-list-paynow-checkout.png`
+  - `network`: `PASS` -> `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-normal-network.txt`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-api-response.json`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-orders-user.json`
+  - `ui`: `PASS` -> `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-desktop.png`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-tablet.png`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-mobile.png`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-orders-list-desktop.png`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-order-detail-paynow-checkout.png`, `E:/nuxt-moxton/05-verification/SHOP-FE-012/qa-run-orders-list-paynow-checkout.png`
+- 验证命令:
+  - `node -e "const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,['-v']);console.log(r.error?.code||'OK')"`
+  - `curl.exe -sS http://localhost:3033/health`
+  - `pnpm type-check`
+  - `pnpm build`
+  - `PLAYWRIGHT_SKIP_WEBSERVER=1 PLAYWRIGHT_BASE_URL=http://localhost:3666 pnpm test:e2e -- tests/e2e/smoke.spec.ts`
+  - `agent-browser install`
+  - `agent-browser --session shop-fe-qa-SHOP-FE-012 --json open http://localhost:3666/login`
+- 原始证据仍以 `05-verification/` 中的文件为准。
+<!-- AUTO-QA-SUMMARY:END -->
+.00，未按 orderId 恢复订单，任务未满足验收标准。
+- 证据索引:
+  - `baseline`: `PASS` -> `05-verification/SHOP-FE-012/qa-check-type-check.log`, `05-verification/SHOP-FE-012/qa-check-build.log`, `05-verification/SHOP-FE-012/qa-check-smoke.log`
+  - `component_api`: `PASS` -> `05-verification/SHOP-FE-012/qa-check-context7-nuxt.md`
+  - `console`: `FAIL` -> `05-verification/SHOP-FE-012/qa-check-order-detail-normal-console.txt`, `05-verification/SHOP-FE-012/qa-check-order-detail-failure-en-console.txt`, `05-verification/SHOP-FE-012/qa-check-order-detail-failure-zh-console.txt`
+  - `detail_redirect`: `PASS` -> `05-verification/SHOP-FE-012/qa-check-order-detail-paynow-url.txt`, `05-verification/SHOP-FE-012/qa-check-order-detail-paynow-checkout.png`
+  - `failure_path`: `PASS` -> `05-verification/SHOP-FE-012/qa-check-order-detail-failure-en.png`, `05-verification/SHOP-FE-012/qa-check-order-detail-failure-en.txt`, `05-verification/SHOP-FE-012/qa-check-order-detail-failure-zh.png`, `05-verification/SHOP-FE-012/qa-check-order-detail-failure-zh.txt`
+  - `list_redirect`: `PASS` -> `05-verification/SHOP-FE-012/qa-check-orders-list-paynow-url.txt`, `05-verification/SHOP-FE-012/qa-check-orders-list-paynow-checkout.png`
+  - `network`: `FAIL` -> `05-verification/SHOP-FE-012/qa-check-orders-user.json`, `05-verification/SHOP-FE-012/qa-check-order-detail-network.txt`, `05-verification/SHOP-FE-012/qa-check-order-detail-paynow-network.txt`, `05-verification/SHOP-FE-012/qa-check-orders-list-paynow-network.txt`
+  - `resume_checkout_from_order`: `FAIL` -> `05-verification/SHOP-FE-012/qa-check-order-detail-paynow-text.txt`, `05-verification/SHOP-FE-012/qa-check-orders-list-paynow-text.txt`, `05-verification/SHOP-FE-012/qa-check-order-detail-paynow-checkout.png`, `05-verification/SHOP-FE-012/qa-check-orders-list-paynow-checkout.png`
+  - `ui`: `PASS` -> `05-verification/SHOP-FE-012/qa-check-order-detail-desktop.png`, `05-verification/SHOP-FE-012/qa-check-order-detail-tablet.png`, `05-verification/SHOP-FE-012/qa-check-order-detail-mobile.png`, `05-verification/SHOP-FE-012/qa-check-orders-list-desktop.png`
+- 验证命令:
+  - `node -e "const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,['-v']);console.log(r.error?.code||'OK')"`
+  - `curl.exe -sS http://localhost:3033/health`
+  - `pnpm type-check`
+  - `pnpm build`
+  - `PLAYWRIGHT_SKIP_WEBSERVER=1 PLAYWRIGHT_BASE_URL=http://127.0.0.1:3666 pnpm test:e2e -- tests/e2e/smoke.spec.ts`
+  - `curl.exe -sS -X POST http://localhost:3033/auth/login -H "Content-Type: application/json" -d '{\"username\":\"waylon\",\"password\":\"qwe123456\"}'`
+  - `curl.exe -sS http://localhost:3033/orders/user?pageNum=1&pageSize=20 -H "Authorization: Bearer <waylon-token>"`
+  - `agent-browser --profile ... open/fill/click/screenshot/network/console`
+- 原始证据仍以 `05-verification/` 中的文件为准。
+<!-- AUTO-QA-SUMMARY:END -->
+.00，任务未满足‘orderId 用于恢复订单’要求。
+- 证据索引:
+  - `baseline`: `PASS` -> `05-verification/SHOP-FE-012/qa-run-type-check.log`, `05-verification/SHOP-FE-012/qa-run-build.log`, `05-verification/SHOP-FE-012/qa-run-smoke.log`
+  - `component_api`: `PASS` -> `05-verification/SHOP-FE-012/qa-run-context7-nuxt.md`
+  - `detail_items_address`: `PASS` -> `05-verification/SHOP-FE-012/qa-run-order-detail-api-response.json`, `05-verification/SHOP-FE-012/qa-run-order-detail-desktop.png`, `05-verification/SHOP-FE-012/qa-run-order-detail-tablet.png`, `05-verification/SHOP-FE-012/qa-run-order-detail-mobile.png`
+  - `detail_redirect_url`: `PASS` -> `05-verification/SHOP-FE-012/qa-run-order-detail-paynow-checkout.png`
+  - `failure_path_i18n`: `PASS` -> `05-verification/SHOP-FE-012/qa-run-order-detail-failure-zh.png`, `05-verification/SHOP-FE-012/qa-run-failure-zh.json`, `05-verification/SHOP-FE-012/qa-run-order-detail-failure-en.png`, `05-verification/SHOP-FE-012/qa-run-failure-en.json`
+  - `list_redirect_url`: `PASS` -> `05-verification/SHOP-FE-012/qa-run-orders-list-desktop.png`, `05-verification/SHOP-FE-012/qa-run-orders-list-paynow-checkout.png`
+  - `resume_checkout_from_order`: `FAIL` -> `05-verification/SHOP-FE-012/qa-run-order-detail-paynow-missing-summary.png`, `05-verification/SHOP-FE-012/qa-run-order-detail-paynow-missing-summary.txt`, `05-verification/SHOP-FE-012/qa-run-checkout-payment-debug.json`
+- 验证命令:
+  - `@{command=pnpm type-check; result=pass}`
+  - `@{command=pnpm build; result=pass}`
+  - `@{command=pnpm test:e2e -- tests/e2e/smoke.spec.ts; result=pass}`
 - 原始证据仍以 `05-verification/` 中的文件为准。
 <!-- AUTO-QA-SUMMARY:END -->

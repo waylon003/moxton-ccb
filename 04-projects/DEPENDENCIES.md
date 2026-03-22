@@ -1,11 +1,11 @@
 ---
-last_verified: 2026-03-10
-verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
+last_verified: 2026-03-20
+verified_against: [BACKEND-016, BACKEND-014, SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
 # 跨项目依赖关系
 
-> **更新时间**: 2026-03-10
+> **更新时间**: 2026-03-20
 > **用途**: 清晰展示三个项目之间的 API 依赖和数据流向
 
 ## 依赖关系图
@@ -30,9 +30,9 @@ verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-0
                      │
                      ▼
             ┌──────────────┐
-            │ moxton-lotapi│
-            │  (后端 API)   │
-            │    :3006      │
+│ moxton-lotapi│
+│  (后端 API)   │
+│    :3033      │
             └──────┬───────┘
                    │
                    ▼
@@ -43,6 +43,8 @@ verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-0
 ```
 
 ## API 依赖详情
+
+联调与 QA 的公共可用性探针统一为 `GET http://localhost:3033/health` 与 `GET http://localhost:3033/version`，依据 `BACKEND-016` QA `PASS`。
 
 ### nuxt-moxton → moxton-lotapi
 
@@ -57,14 +59,22 @@ verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-0
 | `/categories/tree/active` | GET | 获取分类树 | ✅ 同步 |
 | `/cart/*` | GET/POST/PUT/DELETE | 购物车操作 | ✅ 同步 |
 | `/cart/merge` | POST | 合并游客购物车 | ✅ 同步 |
-| `/orders` | POST/GET | 创建订单 / 订单列表（订单项图片字段为 `items.product.images[]`） | ✅ 同步 |
+| `/orders` | POST | 创建订单 | ✅ 同步 |
+| `/orders/user` | GET | 订单列表（订单项图片字段为 `items.product.images[]`） | ✅ 同步 |
 | `/orders/:id` | GET | 订单详情（订单项图片字段为 `items.product.images[]`） | ✅ 同步 |
-| `/payments/stripe/create-intent` | POST | 创建 Stripe 支付意图 | ✅ 同步 |
-| `/payments/:orderId` | GET | 查询支付状态 | ✅ 同步 |
+| `/payments/stripe/create-intent` | POST | 当 `activePayment=null` 时创建新的 Stripe 支付意图 | ✅ 同步 |
+| `/payments/order/:orderId` | GET | 支付页首调接口，用于查询并复用订单活跃支付记录 | ✅ 同步 |
+| `/payments/stripe/status/:paymentIntentId` | GET | 查询支付状态 | ✅ 同步 |
 | `/addresses` | GET/POST/PUT/DELETE | 收货地址管理 | ✅ 同步 |
 | `/addresses/:id/default` | PUT | 设为默认地址 | ✅ 同步 |
-| `/notifications` | GET/PUT/DELETE | 通知管理 | ✅ 同步 |
+| `/notifications/user` | GET | 通知列表 | ✅ 同步 |
+| `/notifications/:id/read` | PUT | 标记单条已读 | ✅ 同步 |
+| `/notifications/all/read` | PUT | 全部已读 | ✅ 同步 |
+| `/notifications/:id` | DELETE | 删除通知 | ✅ 同步 |
 | `/offline-orders` | POST | 提交咨询订单 | ✅ 同步 |
+| `/offline-orders/guest` | GET | 游客咨询订单列表 | ✅ 同步 |
+| `/offline-orders/user` | GET | 用户咨询订单列表 | ✅ 同步 |
+| `/offline-orders/user/:id` | GET | 用户咨询订单详情 | ✅ 同步 |
 | `/upload/image` | POST | 图片上传 | ✅ 同步 |
 
 #### 契约补充（2026-03-03）
@@ -77,6 +87,12 @@ verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-0
 - 依据 `SHOP-FE-011`，移动端地址页改造仅涉及前端布局与弹窗交互优化，不新增地址接口、字段或状态码
 - 依据 `SHOP-FE-011` QA `PASS` 回传，地址失败路径（`/addresses` 相关 `500`）前端展示层需输出本地化文案，不透传后端原始错误文本
 
+#### 契约补充（2026-03-20）
+
+- 依据 `BACKEND-014` QA，支付页链路调整为：先调用 `GET /payments/order/:orderId`，仅在 `activePayment=null` 时调用 `POST /payments/stripe/create-intent`
+- 游客调用 `GET /payments/order/:orderId` 缺少 `X-Guest-ID` 时返回 `403`；订单不存在时返回 `404`
+- 对已过期的历史 `PENDING` 支付，查询接口会返回 `activePayment=null`；创建新 intent 后，旧记录会被标记为 `CANCELLED`
+
 ### moxton-lotadmin → moxton-lotapi
 
 | API 端点 | 方法 | 用途 | 状态 |
@@ -87,11 +103,12 @@ verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-0
 | `/orders/admin` | GET | 订单列表（keyword 搜索） | ✅ 同步 |
 | `/orders/admin/:id` | GET | 订单详情（含 metadata） | ✅ 同步 |
 | `/orders/admin/:id/status` | PUT | 更新订单状态 | ✅ 同步 |
-| `/orders/admin/:id/ship` | POST | 发货 | ✅ 同步 |
+| `/orders/admin/:id/ship` | PUT | 发货 | ✅ 同步 |
+| `/orders/admin/:id/deliver` | PUT | 确认收货 | ✅ 同步 |
 | `/orders/admin/:id/shipping-info` | PATCH | 补充物流信息 | ✅ 同步 |
 | `/orders/admin/:id/history` | GET | 操作历史 | ✅ 同步 |
 | `/offline-orders/admin` | GET | 咨询订单列表 | ✅ 同步 |
-| `/offline-orders/admin/:id/status` | PUT | 更新咨询订单状态 | ✅ 同步 |
+| `/offline-orders/admin/:id` | GET/PUT | 咨询订单详情 / 更新状态与备注 | ✅ 同步 |
 | `/offline-orders/admin/batch/delete` | POST | 批量删除咨询订单 | ✅ 同步 |
 | `/upload/image` | POST | 图片上传 | ✅ 同步 |
 
@@ -99,7 +116,7 @@ verified_against: [SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-0
 
 | 事件 | 端点 | 用途 | 状态 |
 |------|------|------|------|
-| `payment_intent.succeeded` | `POST /payments/stripe/webhook` | 支付成功回调，更新订单为 PAID | ✅ 同步 |
+| `payment_intent.succeeded` | `POST /payments/stripe/webhook` | 支付成功回调，更新订单为 PAID 并自动推进到 CONFIRMED | ✅ 同步 |
 
 ## 数据模型依赖
 

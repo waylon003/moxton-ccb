@@ -15,6 +15,7 @@
 | 分类管理 | [categories.md](categories.md) | ✅ |
 | 线下咨询订单 | [offline-orders.md](offline-orders.md) | ✅ |
 | 地址管理 | [addresses.md](addresses.md) | ✅ |
+| 系统与诊断 | [system.md](system.md) | ✅ |
 | 文件上传 | [upload.md](upload.md) | ✅ |
 | 通知系统 | [notifications.md](notifications.md) | ✅ |
 
@@ -24,6 +25,8 @@
 - **认证方式**: Bearer Token / X-Guest-ID
 - **数据格式**: JSON
 - **字符编码**: UTF-8
+- **运行探针**: `GET /health`、`GET /version`（已于 2026-03-19 17:49-17:50 +08:00 基于 `BACKEND-016` QA 结果复核，字段/状态码/错误包以 [system.md](system.md) 为准）
+- **历史说明**: `05-verification/BACKEND-016/contract-check.json` 中 `api_doc` 仍指向 `addresses.md`，该字段为旧校验脚本残留，不代表系统探针归属
 
 ## 📝 使用指南
 
@@ -51,7 +54,9 @@ Headers: {
 {
   "code": 200,
   "message": "Success",
-  "data": { ... }
+  "data": { ... },
+  "timestamp": "2026-03-19T09:50:07.845Z",
+  "success": true
 }
 ```
 
@@ -61,7 +66,9 @@ Headers: {
 {
   "code": 400,
   "message": "Error message",
-  "data": null
+  "data": null,
+  "timestamp": "2026-03-19T09:50:07.846Z",
+  "success": false
 }
 ```
 

@@ -24,6 +24,8 @@ $archiveJobsFile = Join-Path $scriptDir "config\archive-jobs.json"
 $taskAttemptHistoryFile = Join-Path $scriptDir "config\task-attempt-history.json"
 $monitorStateFile = Join-Path $scriptDir "config\route-monitor-state.json"
 $teamLeadAlertsFile = Join-Path $scriptDir "config\teamlead-alerts.jsonl"
+$teamLeadDeliveryLogFile = Join-Path $scriptDir "config\teamlead-delivery.jsonl"
+$teamLeadDeliveryFailureLogFile = Join-Path $scriptDir "config\teamlead-delivery-failures.jsonl"
 
 $notifySentinelReadyPath = Join-Path $scriptDir "config\\notify-sentinel.ready.json"
 $workerSamplesLogFile = Join-Path $scriptDir "config\worker-samples.log"
@@ -38,6 +40,8 @@ $lastStaleSampleScanAt = Get-Date "1970-01-01T00:00:00Z"
 $workerRegistryPath = Join-Path $scriptDir "config\worker-panels.json"
 $autoDecisionStatePath = Join-Path $scriptDir "config\auto-decision-state.json"
 $script:monitorStartedAt = Get-Date -Format "o"
+$script:weztermCliHealthy = $true
+$script:weztermCliLastError = ""
 $flag = $env:CCB_ENABLE_WEZTERM_NOTIFY
 $script:enableWeztermNotify = $true
 if ($flag) {
@@ -72,17 +76,28 @@ function Append-Utf8Line([string]$path, [string]$line) {
 }
 
 function Write-MonitorState([string]$status, [string]$note = "") {
+    $resolvedNote = if ($note) { [string]$note } else { "" }
+    if ([string]::IsNullOrWhiteSpace($resolvedNote) -and $script:enableWeztermNotify -and (-not $script:weztermCliHealthy)) {
+        $resolvedNote = if ($script:weztermCliLastError) { 'wezterm_cli_unavailable: ' + [string]$script:weztermCliLastError } else { 'wezterm_cli_unavailable' }
+    }
+    $monitorPaneId = ""
+    if ($env:WEZTERM_PANE) {
+        $monitorPaneId = [string]$env:WEZTERM_PANE
+    } elseif ($env:WEZTERM_PANE_ID) {
+        $monitorPaneId = [string]$env:WEZTERM_PANE_ID
+    }
     $state = [ordered]@{
         status = if ([string]::IsNullOrWhiteSpace($status)) { "unknown" } else { $status }
         pid = [int]$PID
         teamlead_pane_id = if ($TeamLeadPaneId) { [string]$TeamLeadPaneId } else { "" }
+        monitor_pane_id = $monitorPaneId
         wezterm_notify_enabled = [bool]$script:enableWeztermNotify
         continuous = [bool]$Continuous
         poll_interval_seconds = [int]$PollIntervalSeconds
         started_at = $script:monitorStartedAt
         last_loop_at = (Get-Date -Format "o")
         script_path = $PSCommandPath
-        note = if ($note) { [string]$note } else { "" }
+        note = $resolvedNote
     }
     Write-Utf8NoBomFile -path $monitorStateFile -content ($state | ConvertTo-Json -Depth 6)
 }
@@ -171,9 +186,17 @@ function Mark-AutoDecisionNotified {
 function Get-WeztermPanes {
     try {
         $raw = wezterm cli list --format json 2>$null
-        if (-not $raw) { return @() }
+        if (-not $raw) {
+            $script:weztermCliHealthy = $false
+            $script:weztermCliLastError = 'wezterm_cli_empty_result'
+            return @()
+        }
+        $script:weztermCliHealthy = $true
+        $script:weztermCliLastError = ''
         return @($raw | ConvertFrom-Json)
     } catch {
+        $script:weztermCliHealthy = $false
+        $script:weztermCliLastError = $_.Exception.Message
         return @()
     }
 }
@@ -220,29 +243,84 @@ function Resolve-TeamLeadPaneId([string]$preferredPaneId) {
     return $null
 }
 
-function Notify-TeamLeadWake([string]$message) {
-    if ([string]::IsNullOrWhiteSpace($message)) { return $false }
-    if (-not (Should-NotifyTeamLeadWake)) { return }
-    if (-not $script:enableWeztermNotify) { return $false }
-    $targetPane = Resolve-TeamLeadPaneId -preferredPaneId $TeamLeadPaneId
-    if (-not $targetPane) { return $false }
-    try {
-        wezterm cli send-text --pane-id $targetPane --no-paste $message | Out-Null
-        Start-Sleep -Milliseconds 80
-        wezterm cli send-text --pane-id $targetPane --no-paste "`r" | Out-Null
-        return $true
-    } catch {
-        $targetPane = Resolve-TeamLeadPaneId -preferredPaneId ""
-        if (-not $targetPane) { return $false }
-        try {
-            wezterm cli send-text --pane-id $targetPane --no-paste $message | Out-Null
-            Start-Sleep -Milliseconds 80
-            wezterm cli send-text --pane-id $targetPane --no-paste "`r" | Out-Null
+function Invoke-TeamLeadSendText([string]$PaneId, [string]$Message) {
+    if ([string]::IsNullOrWhiteSpace($PaneId) -or [string]::IsNullOrWhiteSpace($Message)) { return $false }
+    wezterm cli send-text --pane-id $PaneId --no-paste $Message | Out-Null
+    Start-Sleep -Milliseconds 80
+    wezterm cli send-text --pane-id $PaneId --no-paste "`r" | Out-Null
+    return $true
+}
+
+function Notify-TeamLeadWake {
+    param(
+        [string]$Message,
+        [string]$EventId,
+        [string]$TaskId,
+        [string]$Worker,
+        [string]$Status,
+        [string]$Action,
+        [string]$RunId,
+        [string]$LockState,
+        [int]$RetryCount = 0,
+        [int]$RetryDelayMs = 0
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Message)) { return $false }
+
+    if (-not (Should-NotifyTeamLeadWake)) {
+        Write-TeamLeadDelivery -EventId $EventId -TaskId $TaskId -Worker $Worker -Status $Status -Action $Action -RunId $RunId -LockState $LockState -PaneId '' -Attempt 1 -Sent $false -Error 'route_monitor_notify_disabled' -Message $Message
+        return $false
+    }
+
+    $attemptLimit = 1
+    if ($RetryCount -gt 0) {
+        $attemptLimit += $RetryCount
+    }
+
+    for ($attempt = 1; $attempt -le $attemptLimit; $attempt++) {
+        $paneCandidates = New-Object System.Collections.Generic.List[string]
+        $preferredPane = Resolve-TeamLeadPaneId -preferredPaneId $TeamLeadPaneId
+        if ($preferredPane) { $paneCandidates.Add([string]$preferredPane) | Out-Null }
+        $fallbackPane = Resolve-TeamLeadPaneId -preferredPaneId ''
+        if ($fallbackPane -and -not $paneCandidates.Contains([string]$fallbackPane)) {
+            $paneCandidates.Add([string]$fallbackPane) | Out-Null
+        }
+
+        $targetPane = ''
+        $lastError = ''
+        $sent = $false
+
+        if (-not $script:enableWeztermNotify) {
+            $lastError = 'wezterm_notify_disabled'
+        } elseif ($paneCandidates.Count -eq 0) {
+            $lastError = 'teamlead_pane_unresolved'
+        } else {
+            foreach ($candidate in $paneCandidates) {
+                $targetPane = [string]$candidate
+                try {
+                    if (Invoke-TeamLeadSendText -PaneId $targetPane -Message $Message) {
+                        $sent = $true
+                        $lastError = ''
+                        break
+                    }
+                } catch {
+                    $lastError = $_.Exception.Message
+                }
+            }
+        }
+
+        Write-TeamLeadDelivery -EventId $EventId -TaskId $TaskId -Worker $Worker -Status $Status -Action $Action -RunId $RunId -LockState $LockState -PaneId $targetPane -Attempt $attempt -Sent $sent -Error $lastError -Message $Message
+
+        if ($sent) {
             return $true
-        } catch {
-            return $false
+        }
+
+        if ($attempt -lt $attemptLimit -and $RetryDelayMs -gt 0) {
+            Start-Sleep -Milliseconds $RetryDelayMs
         }
     }
+
+    return $false
 }
 
 function Read-NotifySentinelReady {
@@ -262,28 +340,91 @@ function Get-NotifySentinelWakeGraceMinutes {
     return Get-EnvIntOrDefault -name "CCB_NOTIFY_SENTINEL_WAKE_GRACE_MINUTES" -defaultValue 3
 }
 
+function Get-TeamLeadNotifyRetryCount {
+    return Get-EnvIntOrDefault -name "CCB_TEAMLEAD_NOTIFY_RETRY_COUNT" -defaultValue 2
+}
+
+function Get-TeamLeadNotifyRetryDelayMs {
+    return Get-EnvIntOrDefault -name "CCB_TEAMLEAD_NOTIFY_RETRY_DELAY_MS" -defaultValue 1200
+}
+
+function New-TeamLeadDeliveryEventId {
+    param(
+        [string]$TaskId,
+        [string]$Worker,
+        [string]$Status,
+        [string]$Action,
+        [string]$RunId
+    )
+    $seedParts = New-Object System.Collections.Generic.List[string]
+    $taskValue = if ($TaskId) { [string]$TaskId } else { '' }
+    $workerValue = if ($Worker) { [string]$Worker } else { '' }
+    $statusValue = if ($Status) { [string]$Status } else { '' }
+    $actionValue = if ($Action) { [string]$Action } else { '' }
+    $runIdValue = if ($RunId) { [string]$RunId } else { '' }
+    $seedParts.Add($taskValue) | Out-Null
+    $seedParts.Add($workerValue) | Out-Null
+    $seedParts.Add($statusValue) | Out-Null
+    $seedParts.Add($actionValue) | Out-Null
+    $seedParts.Add($runIdValue) | Out-Null
+    $seedParts.Add((Get-Date -Format 'o')) | Out-Null
+    $seedParts.Add(([string](Get-Random))) | Out-Null
+    $seed = $seedParts -join '|'
+    return ('delivery-' + (Get-ShortHash $seed))
+}
+
+function Write-TeamLeadDelivery {
+    param(
+        [string]$EventId,
+        [string]$TaskId,
+        [string]$Worker,
+        [string]$Status,
+        [string]$Action,
+        [string]$RunId,
+        [string]$LockState,
+        [string]$PaneId,
+        [int]$Attempt,
+        [bool]$Sent,
+        [string]$Error,
+        [string]$Message
+    )
+
+    $resolvedEventId = if ([string]::IsNullOrWhiteSpace($EventId)) {
+        New-TeamLeadDeliveryEventId -TaskId $TaskId -Worker $Worker -Status $Status -Action $Action -RunId $RunId
+    } else {
+        $EventId
+    }
+
+    $record = [ordered]@{
+        at = (Get-Date -Format 'o')
+        event_id = $resolvedEventId
+        task = if ($TaskId) { $TaskId } else { '' }
+        worker = if ($Worker) { $Worker } else { '' }
+        status = if ($Status) { $Status } else { '' }
+        action = if ($Action) { $Action } else { '' }
+        run_id = if ($RunId) { $RunId } else { '' }
+        lock = if ($LockState) { $LockState } else { '' }
+        pane_id = if ($PaneId) { $PaneId } else { '' }
+        attempt = if ($Attempt -gt 0) { $Attempt } else { 1 }
+        sent = [bool]$Sent
+        error = if ($Error) { $Error } else { '' }
+        message = if ($Message) { $Message } else { '' }
+    }
+
+    $json = $record | ConvertTo-Json -Compress -Depth 8
+    Append-Utf8Line -path $teamLeadDeliveryLogFile -line $json
+    if (-not $Sent) {
+        Append-Utf8Line -path $teamLeadDeliveryFailureLogFile -line $json
+    }
+}
+
 function Should-NotifyTeamLeadWake {
     $flag = $env:CCB_ROUTE_MONITOR_NOTIFY
     if ($flag) {
         $norm = $flag.Trim().ToLowerInvariant()
-        if ($norm -in @("0","false","no","off")) { return $false }
-        if ($norm -in @("1","true","yes","on")) { return $true }
+        if ($norm -in @('0','false','no','off')) { return $false }
     }
-
-    $ready = Read-NotifySentinelReady
-    if (-not $ready) { return $true }
-
-    $source = if ($ready.source) { [string]$ready.source } else { "" }
-    if ($source -ne "notify-sentinel") { return $true }
-
-    $notifyState = if ($ready.notify) { ([string]$ready.notify).Trim().ToLowerInvariant() } else { "" }
-    if ($notifyState -notin @("on", "1", "true", "yes")) { return $true }
-
-    $age = Get-NotifySentinelAgeMinutes $ready
-    if ($null -eq $age) { return $true }
-
-    $grace = Get-NotifySentinelWakeGraceMinutes
-    return ($age -gt $grace)
+    return $true
 }
 
 function Write-TeamLeadAlert {
@@ -295,21 +436,69 @@ function Write-TeamLeadAlert {
         [string]$Action,
         [string]$RunId,
         [string]$LockState,
+        [string]$Detail,
+        [string]$EventId,
+        [string]$Message,
+        [bool]$Reliable = $false,
+        [int]$RetryCount = 0,
+        [int]$RetryDelayMs = 0
+    )
+
+    $resolvedKind = if ($Kind) { $Kind } else { 'route' }
+    $resolvedEventId = if ($EventId) {
+        $EventId
+    } else {
+        'alert-' + (Get-ShortHash (($resolvedKind + '|' + $TaskId + '|' + $Worker + '|' + $Status + '|' + $Action + '|' + $RunId + '|' + $LockState + '|' + $Detail)))
+    }
+
+    $safeTaskText = if ($TaskId) { [string]$TaskId } else { '-' }
+    $safeWorkerText = if ($Worker) { [string]$Worker } else { '-' }
+    $safeStatusText = if ($Status) { [string]$Status } else { '-' }
+    $safeRouteActionText = if ($Action) { [string]$Action } else { 'processed' }
+    $safeAutoActionText = if ($Action) { [string]$Action } else { '-' }
+
+    $resolvedMessage = if ($Message) {
+        $Message
+    } elseif ($resolvedKind -eq 'auto-decision') {
+        '[ROUTE-AUTO] task=' + $safeTaskText + ' worker=' + $safeWorkerText + ' status=' + $safeStatusText + ' action=' + $safeAutoActionText + '. next=status/check_routes'
+    } else {
+        '[ROUTE] task=' + $safeTaskText + ' status=' + $safeStatusText + ' from=' + $safeWorkerText + ' action=' + $safeRouteActionText + '. next=status/check_routes'
+    }
+
+    $record = [ordered]@{
+        at = (Get-Date -Format 'o')
+        event_id = $resolvedEventId
+        kind = $resolvedKind
+        task = if ($TaskId) { $TaskId } else { '' }
+        worker = if ($Worker) { $Worker } else { '' }
+        status = if ($Status) { $Status } else { '' }
+        action = if ($Action) { $Action } else { '' }
+        run_id = if ($RunId) { $RunId } else { '' }
+        lock = if ($LockState) { $LockState } else { '' }
+        detail = if ($Detail) { $Detail } else { '' }
+        message = $resolvedMessage
+        reliable = [bool]$Reliable
+        retry_count = if ($RetryCount -gt 0) { $RetryCount } else { 0 }
+        retry_delay_ms = if ($RetryDelayMs -gt 0) { $RetryDelayMs } else { 0 }
+    }
+    Append-Utf8Line -path $teamLeadAlertsFile -line ($record | ConvertTo-Json -Compress -Depth 8)
+}
+
+function Test-TeamLeadRouteNeedsReliableNotify {
+    param(
+        [object]$Route,
+        [string]$Action,
         [string]$Detail
     )
 
-    $record = [ordered]@{
-        at = (Get-Date -Format "o")
-        kind = if ($Kind) { $Kind } else { "route" }
-        task = if ($TaskId) { $TaskId } else { "" }
-        worker = if ($Worker) { $Worker } else { "" }
-        status = if ($Status) { $Status } else { "" }
-        action = if ($Action) { $Action } else { "" }
-        run_id = if ($RunId) { $RunId } else { "" }
-        lock = if ($LockState) { $LockState } else { "" }
-        detail = if ($Detail) { $Detail } else { "" }
-    }
-    Append-Utf8Line -path $teamLeadAlertsFile -line ($record | ConvertTo-Json -Compress -Depth 6)
+    if (-not $Route) { return $false }
+    $status = if ($Route.status) { ([string]$Route.status).ToLowerInvariant() } else { '' }
+    $actionText = if ([string]::IsNullOrWhiteSpace($Action)) { 'processed' } else { $Action.ToLowerInvariant() }
+
+    if ($actionText -eq 'error') { return $true }
+    if ($status -in @('success', 'blocked', 'fail', 'error')) { return $true }
+    if ($Detail -and $Detail.IndexOf('ack=1', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+    return $false
 }
 
 function Get-RouteDetailPreview([string]$detail) {
@@ -334,10 +523,23 @@ function Should-NotifyTeamLeadRouteEvent {
     $actionText = if ([string]::IsNullOrWhiteSpace($Action)) { "processed" } else { $Action.ToLower() }
     $lockText = if ([string]::IsNullOrWhiteSpace($LockState)) { "" } else { $LockState.ToLower() }
 
-    # 正常 in_progress 心跳不直接唤醒 Team Lead，避免刷屏；状态变化通知交由 Agent Teams 或 Team Lead 主动查看。
-    # 但如果是 ACK 上报（body 含 ack=1），允许通知一次。
+    if ($actionText -eq "ignored") {
+        if ($status -in @("success", "blocked", "fail", "error")) {
+            # terminal route ignored 仍需唤醒 Team Lead，避免静默吞回传。
+        } else {
+            return $false
+        }
+    }
+
+    $workerText = if ($Route.from) { ([string]$Route.from).ToLower() } else { "" }
+    $isOrchestrationWorker = ($workerText -in @("doc-updater", "repo-committer"))
+
+    # 正常 in_progress 心跳不直接唤醒 Team Lead，避免刷屏；只对关键 MCP route 变化做提醒。
+    # 编排 worker（doc-updater / repo-committer）例外：它们的 in_progress 也要唤醒，避免文档/归档链路静默运行。
     if ($actionText -eq "applied" -and $status -eq "in_progress" -and $lockText -eq "in_progress") {
-        if ($Detail -and $Detail.IndexOf("ack=1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        if ($isOrchestrationWorker) {
+            # allow
+        } elseif ($Detail -and $Detail.IndexOf("ack=1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
             # allow
         } else {
             return $false
@@ -382,16 +584,20 @@ function Notify-TeamLeadRouteEvent {
 
     if (-not $Route) { return }
     if (-not (Should-NotifyTeamLeadRouteEvent -Route $Route -Action $Action -LockState $LockState -Detail $Detail)) { return }
-    $taskId = if ($Route.task) { [string]$Route.task } else { "-" }
-    $worker = if ($Route.from) { [string]$Route.from } else { "-" }
-    $status = if ($Route.status) { [string]$Route.status } else { "-" }
-    $runId = if ($Route.PSObject.Properties.Name -contains "run_id" -and $Route.run_id) { [string]$Route.run_id } else { "-" }
-    $lockText = if ([string]::IsNullOrWhiteSpace($LockState)) { "-" } else { $LockState }
-    $actionText = if ([string]::IsNullOrWhiteSpace($Action)) { "processed" } else { $Action }
+    $taskId = if ($Route.task) { [string]$Route.task } else { '-' }
+    $worker = if ($Route.from) { [string]$Route.from } else { '-' }
+    $status = if ($Route.status) { [string]$Route.status } else { '-' }
+    $runId = if ($Route.PSObject.Properties.Name -contains 'run_id' -and $Route.run_id) { [string]$Route.run_id } else { '-' }
+    $lockText = if ([string]::IsNullOrWhiteSpace($LockState)) { '-' } else { $LockState }
+    $actionText = if ([string]::IsNullOrWhiteSpace($Action)) { 'processed' } else { $Action }
     $preview = Get-RouteDetailPreview -detail $Detail
-    Write-TeamLeadAlert -Kind "route" -TaskId $taskId -Worker $worker -Status $status -Action $actionText -RunId $runId -LockState $lockText -Detail $preview
+    $eventId = New-TeamLeadDeliveryEventId -TaskId $taskId -Worker $worker -Status $status -Action $actionText -RunId $runId
+    $needsReliable = Test-TeamLeadRouteNeedsReliableNotify -Route $Route -Action $Action -Detail $Detail
+    $retryCount = if ($needsReliable) { Get-TeamLeadNotifyRetryCount } else { 0 }
+    $retryDelayMs = if ($needsReliable) { Get-TeamLeadNotifyRetryDelayMs } else { 0 }
     $message = "[ROUTE] task=$taskId status=$status from=$worker action=$actionText. next=status/check_routes"
-    Notify-TeamLeadWake -message $message | Out-Null
+
+    Write-TeamLeadAlert -Kind 'route' -TaskId $taskId -Worker $worker -Status $status -Action $actionText -RunId $runId -LockState $lockText -Detail $preview -EventId $eventId -Message $message -Reliable:$needsReliable -RetryCount $retryCount -RetryDelayMs $retryDelayMs
 }
 
 function Get-EnvIntOrDefault([string]$name, [int]$defaultValue) {
@@ -1610,6 +1816,7 @@ function Apply-QaSuccessGate {
         task = $Route.task
         status = "blocked"
         body = $blockedBody
+        run_id = $Route.run_id
         created_at = $Route.created_at
         processed = $Route.processed
     }
