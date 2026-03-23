@@ -40,3 +40,4 @@ config/pane-approval-watchers.json
 config/local-approval-events.jsonl
 config/local-approval-state.json
 config/route-notifier-state.json
+runtime/

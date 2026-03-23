@@ -1,9 +1,6 @@
 ﻿#!/usr/bin/env pwsh
 # Doc-Updater 自动触发器
-# 支持三种触发：
-# 1) backend_qa：后端 QA 成功后实时触发
-# 2) archive_move：任务从 active -> completed 归档时触发
-# 3) round_complete：保留兼容（历史兜底触发）
+# Phase 1: doc-updater 改为 headless codex worker。
 
 param(
     [Parameter(Mandatory = $true)]
@@ -13,8 +10,8 @@ param(
     [string]$TeamLeadPaneId = $env:TEAM_LEAD_PANE_ID,
 
     [Parameter(Mandatory = $false)]
-    [ValidateSet("backend_qa", "archive_move", "round_complete", "manual")]
-    [string]$Reason = "backend_qa",
+    [ValidateSet('backend_qa', 'archive_move', 'round_complete', 'manual')]
+    [string]$Reason = 'backend_qa',
 
     [Parameter(Mandatory = $false)]
     [switch]$Force,
@@ -23,7 +20,7 @@ param(
     [switch]$EmitJson
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot
 $rootDir = Split-Path $scriptDir -Parent
 
@@ -34,7 +31,7 @@ function Exit-WithResult([int]$Code, [string]$Status, [string]$Message, [hashtab
             message = $Message
             taskId = $TaskId
             reason = $Reason
-            timestamp = (Get-Date -Format "o")
+            timestamp = (Get-Date -Format 'o')
         }
         foreach ($k in $Extra.Keys) {
             $payload[$k] = $Extra[$k]
@@ -83,22 +80,22 @@ function Resolve-TaskFile([string]$id) {
     return $null
 }
 
-Write-Host ""
-Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "      Doc-Updater 自动触发检查" -ForegroundColor Cyan
-Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "任务: $TaskId" -ForegroundColor White
-Write-Host "触发原因: $Reason" -ForegroundColor White
-Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host ""
+Write-Host ''
+Write-Host '==============================================' -ForegroundColor Cyan
+Write-Host '      Doc-Updater 自动触发检查' -ForegroundColor Cyan
+Write-Host '==============================================' -ForegroundColor Cyan
+Write-Host ('任务: ' + $TaskId) -ForegroundColor White
+Write-Host ('触发原因: ' + $Reason) -ForegroundColor White
+Write-Host '==============================================' -ForegroundColor Cyan
+Write-Host ''
 
 $taskFile = Resolve-TaskFile -id $TaskId
-$taskContent = ""
+$taskContent = ''
 if ($taskFile) {
     $taskContent = Get-Content -Path $taskFile.FullName -Raw -Encoding UTF8
 }
 
-$requiresDocUpdate = $Force.IsPresent -or ($Reason -eq "round_complete") -or ($Reason -eq "archive_move")
+$requiresDocUpdate = $Force.IsPresent -or ($Reason -eq 'round_complete') -or ($Reason -eq 'archive_move')
 if (-not $requiresDocUpdate) {
     $apiKeywords = @('API', '接口', 'endpoint', 'controller', 'route', 'REST', 'GraphQL')
     foreach ($kw in $apiKeywords) {
@@ -111,74 +108,66 @@ if (-not $requiresDocUpdate) {
 }
 
 if (-not $requiresDocUpdate) {
-    Write-Host "✅ 任务不涉及 API/文档变更，无需触发 doc-updater" -ForegroundColor Green
-    Exit-WithResult -Code 0 -Status "noop" -Message "no_doc_update_needed"
+    Write-Host '✅ 任务不涉及 API/文档变更，无需触发 doc-updater' -ForegroundColor Green
+    Exit-WithResult -Code 0 -Status 'noop' -Message 'no_doc_update_needed'
 }
 
-Write-Host "📝 需要触发 doc-updater" -ForegroundColor Yellow
+Write-Host '📝 需要触发 doc-updater' -ForegroundColor Yellow
 
-# 检查后端变更（仅 backend_qa 场景，失败不阻断）
-if ($Reason -eq "backend_qa") {
-    $backendDir = if (Test-Path "$rootDir\..\moxton-lotapi") { "$rootDir\..\moxton-lotapi" } else { "E:\moxton-lotapi" }
+if ($Reason -eq 'backend_qa') {
+    $backendDir = if (Test-Path "$rootDir\..\moxton-lotapi") { "$rootDir\..\moxton-lotapi" } else { 'E:\moxton-lotapi' }
     if (Test-Path $backendDir) {
         try {
             $recentApiFiles = Get-ChildItem -Path "$backendDir\src\routes\*" -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
                 $_.LastWriteTime -gt (Get-Date).AddHours(-2)
             }
             if ($recentApiFiles.Count -gt 0) {
-                Write-Host ("检测到最近变更的 API 文件: " + $recentApiFiles.Count) -ForegroundColor Gray
+                Write-Host ('检测到最近变更的 API 文件: ' + $recentApiFiles.Count) -ForegroundColor Gray
             }
         } catch {}
     }
 }
 
-# 生成 doc-updater 任务内容（内联派遣，不落地 active 任务文件）
 $safeTaskToken = ($TaskId -replace '[^A-Za-z0-9\-]', '-')
-$docTaskId = if ($Reason -eq "round_complete") {
-    "DOC-UPDATE-ROUND-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+$docTaskId = if ($Reason -eq 'round_complete') {
+    'DOC-UPDATE-ROUND-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
 } else {
-    "DOC-UPDATE-$safeTaskToken"
+    'DOC-UPDATE-' + $safeTaskToken
 }
-$docTaskFile = ""
-$taskFileRef = if ($taskFile) { $taskFile.FullName } else { "(task file not found)" }
-$historyFile = Join-Path $rootDir "config\doc-update-history.json"
+$taskFileRef = if ($taskFile) { $taskFile.FullName } else { '(task file not found)' }
+$historyFile = Join-Path $rootDir 'config\doc-update-history.json'
 $history = Read-Json -path $historyFile
 $historyList = @(Normalize-ToList -value $history)
 
 $reasonText = switch ($Reason) {
-    "backend_qa" { "后端 QA 成功后实时同步 API 文档" }
-    "archive_move" { "开发任务归档（active -> completed）后触发文档一致性同步" }
-    "round_complete" { "当前无活跃任务，执行全量文档一致性兜底检查" }
-    default { "手动触发文档同步" }
+    'backend_qa' { '后端 QA 成功后实时同步 API 文档' }
+    'archive_move' { '开发任务归档（active -> completed）后触发文档一致性同步' }
+    'round_complete' { '当前无活跃任务，执行全量文档一致性兜底检查' }
+    default { '手动触发文档同步' }
 }
 
-$docContentTemplate = @'
-# {DOC_TASK_ID}
+$docLines = @(
+    "# $docTaskId",
+    '',
+    '## 触发信息',
+    "- 原任务: $TaskId",
+    "- 触发原因: $reasonText",
+    "- 参考任务文件: $taskFileRef",
+    '',
+    '## 必做事项',
+    '1. 检查并同步 `02-api/`（接口、字段、状态码、错误示例）。',
+    '2. 检查并同步 `04-projects/`（模块说明、依赖关系、`last_verified`）。',
+    '3. 若发现历史遗漏，补充到对应文档并注明依据。',
+    '4. 完成后通过 `report_route` 回传 Team Lead，列出修改文件与摘要。',
+    '',
+    '## 参考',
+    '- Agent 规则: `E:\moxton-ccb\.claude\agents\doc-updater.md`',
+    '- 文档根目录: `E:\moxton-ccb`'
+)
+$docContent = $docLines -join "`n"
 
-## 触发信息
-- 原任务: {TASK_ID}
-- 触发原因: {REASON_TEXT}
-- 参考任务文件: {TASK_FILE_REF}
-
-## 必做事项
-1. 检查并同步 `02-api/`（接口、字段、状态码、错误示例）。
-2. 检查并同步 `04-projects/`（模块说明、依赖关系、`last_verified`）。
-3. 若发现历史遗漏，补充到对应文档并注明依据。
-4. 完成后通过 `report_route` 回传 Team Lead，列出修改文件与摘要。
-
-## 参考
-- Agent 规则: `E:\moxton-ccb\.claude\agents\doc-updater.md`
-- 文档根目录: `E:\moxton-ccb`
-'@
-$docContent = $docContentTemplate.
-    Replace('{DOC_TASK_ID}', $docTaskId).
-    Replace('{TASK_ID}', $TaskId).
-    Replace('{REASON_TEXT}', $reasonText).
-    Replace('{TASK_FILE_REF}', $taskFileRef)
-
-# 去重：同一 docTaskId 在短时间内已派发，直接复用，避免 archive + route-monitor 双触发重复分派
 $recentExisting = $historyList | Where-Object {
-    $_.docTaskId -eq $docTaskId -and $_.status -in @("dispatched", "in_progress", "success")
+    $_.docTaskId -eq $docTaskId -and $_.status -in @('dispatched', 'in_progress', 'success')
 } | Sort-Object triggeredAt -Descending | Select-Object -First 1
 if ($recentExisting) {
     $recentAt = $null
@@ -186,98 +175,86 @@ if ($recentExisting) {
     if ($recentAt) {
         $ageSec = ([DateTimeOffset]::Now - $recentAt).TotalSeconds
         if ($ageSec -lt 120) {
-            Write-Host ("跳过重复触发 doc-updater: " + $docTaskId + " (age=" + [int]$ageSec + "s)") -ForegroundColor Yellow
-            Exit-WithResult -Code 0 -Status "already_dispatched" -Message "doc_updater_recently_dispatched" -Extra @{
+            Write-Host ('跳过重复触发 doc-updater: ' + $docTaskId + ' (age=' + [int]$ageSec + 's)') -ForegroundColor Yellow
+            Exit-WithResult -Code 0 -Status 'already_dispatched' -Message 'doc_updater_recently_dispatched' -Extra @{
                 docTaskId = $docTaskId
-                dispatchMode = "inline"
+                dispatchMode = 'headless'
+                runId = if ($recentExisting.runId) { [string]$recentExisting.runId } else { '' }
+                runDir = if ($recentExisting.runDir) { [string]$recentExisting.runDir } else { '' }
             }
         }
     }
 }
 
-Write-Host "使用 inline 派遣 doc-updater（不写入 active 任务文件）" -ForegroundColor Gray
+Write-Host '使用 headless 派遣 doc-updater（不写入 active 任务文件）' -ForegroundColor Gray
 
-# 获取/启动 doc-updater worker
-$registryScript = Join-Path $scriptDir "worker-registry.ps1"
-$startWorkerScript = Join-Path $scriptDir "start-worker.ps1"
-$docUpdaterPane = & $registryScript -Action get -WorkerName "doc-updater" 2>$null
-
-if (-not $docUpdaterPane) {
-    Write-Host "doc-updater worker 未在线，尝试自动启动..." -ForegroundColor Yellow
-    if (-not $TeamLeadPaneId) {
-        try {
-            $panes = wezterm cli list --format json 2>$null | ConvertFrom-Json
-            $tlPane = $panes | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1
-            if ($tlPane) { $TeamLeadPaneId = $tlPane.pane_id.ToString() }
-        } catch {}
-    }
-    if ($TeamLeadPaneId -and (Test-Path $startWorkerScript)) {
-        try {
-            & $startWorkerScript -WorkDir $rootDir -WorkerName "doc-updater" -Engine codex -TeamLeadPaneId $TeamLeadPaneId | Out-Null
-            Start-Sleep -Seconds 3
-            $docUpdaterPane = & $registryScript -Action get -WorkerName "doc-updater" 2>$null
-        } catch {}
+$headlessScript = Join-Path $scriptDir 'start-headless-run.ps1'
+if (-not (Test-Path $headlessScript)) {
+    Write-Host ('❌ 缺少 headless runner: ' + $headlessScript) -ForegroundColor Red
+    Exit-WithResult -Code 1 -Status 'dispatch_failed' -Message 'headless_runner_missing' -Extra @{
+        docTaskId = $docTaskId
+        dispatchMode = 'headless'
     }
 }
 
-if (-not $docUpdaterPane) {
-    Write-Host "⚠️ 无法获取 doc-updater worker，记录待处理队列" -ForegroundColor Yellow
-    $pendingFile = Join-Path $rootDir "config\pending-doc-updates.json"
-    $pending = Read-Json -path $pendingFile
-    $pendingList = @(Normalize-ToList -value $pending)
-    $pendingList += @{
-        taskId = $TaskId
-        docTaskId = $docTaskId
-        taskFile = ""
-        dispatchMode = "inline"
-        reason = $Reason
-        status = "pending"
-        triggeredAt = (Get-Date -Format "o")
-    }
-    Write-Utf8NoBomFile -path $pendingFile -content ($pendingList | ConvertTo-Json -Depth 10)
-    Exit-WithResult -Code 0 -Status "queued_pending_worker" -Message "doc_updater_worker_unavailable" -Extra @{
-        docTaskId = $docTaskId
-        dispatchMode = "inline"
-        queueFile = $pendingFile
-    }
-}
-
-# 分派任务
-$dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
-& $dispatchScript `
-    -WorkerPaneId $docUpdaterPane `
-    -WorkerName "doc-updater" `
+$dispatchJson = & $headlessScript `
     -TaskId $docTaskId `
-    -InlineTaskBody $docContent `
+    -WorkerName 'doc-updater' `
+    -WorkDir $rootDir `
     -Engine codex `
-    -TeamLeadPaneId $TeamLeadPaneId
+    -InlineTaskBody $docContent `
+    -EmitJson
 
 $dispatchExit = $LASTEXITCODE
 if ($dispatchExit -ne 0) {
-    Write-Host ("❌ Doc-Updater 派遣失败: exit=" + $dispatchExit) -ForegroundColor Red
-    Exit-WithResult -Code 1 -Status "dispatch_failed" -Message ("dispatch_exit_" + $dispatchExit) -Extra @{
+    Write-Host ('❌ Doc-Updater headless 派遣失败: exit=' + $dispatchExit) -ForegroundColor Red
+    Exit-WithResult -Code 1 -Status 'dispatch_failed' -Message ('headless_dispatch_exit_' + $dispatchExit) -Extra @{
         docTaskId = $docTaskId
-        dispatchMode = "inline"
-        workerPane = [string]$docUpdaterPane
+        dispatchMode = 'headless'
     }
 }
 
-Write-Host "✅ Doc-Updater 任务已分派: $docTaskId (pane $docUpdaterPane)" -ForegroundColor Green
+$dispatchResp = $null
+try {
+    $dispatchResp = $dispatchJson | ConvertFrom-Json
+} catch {
+    Write-Host '❌ Doc-Updater headless 派遣返回了不可解析结果' -ForegroundColor Red
+    Exit-WithResult -Code 1 -Status 'dispatch_failed' -Message 'headless_dispatch_invalid_json' -Extra @{
+        docTaskId = $docTaskId
+        dispatchMode = 'headless'
+        raw = [string]$dispatchJson
+    }
+}
 
-# 记录触发历史
+if (-not $dispatchResp -or [string]$dispatchResp.status -ne 'dispatched') {
+    Write-Host ('❌ Doc-Updater headless 派遣异常: status=' + [string]$dispatchResp.status + ' message=' + [string]$dispatchResp.message) -ForegroundColor Red
+    $dispatchMessage = if ($dispatchResp -and $dispatchResp.message) { [string]$dispatchResp.message } else { 'headless_dispatch_unknown' }
+    Exit-WithResult -Code 1 -Status 'dispatch_failed' -Message $dispatchMessage -Extra @{
+        docTaskId = $docTaskId
+        dispatchMode = 'headless'
+        runId = if ($dispatchResp.runId) { [string]$dispatchResp.runId } else { '' }
+    }
+}
+
+Write-Host ('✅ Doc-Updater headless 任务已启动: ' + $docTaskId + ' (pid ' + [string]$dispatchResp.pid + ')') -ForegroundColor Green
+
 $historyList += @{
     taskId = $TaskId
     docTaskId = $docTaskId
     reason = $Reason
-    docUpdaterPane = $docUpdaterPane
-    dispatchMode = "inline"
-    status = "dispatched"
-    triggeredAt = (Get-Date -Format "o")
+    dispatchMode = 'headless'
+    status = 'dispatched'
+    triggeredAt = (Get-Date -Format 'o')
+    runId = [string]$dispatchResp.runId
+    runDir = [string]$dispatchResp.runDir
+    pid = [int]$dispatchResp.pid
 }
 Write-Utf8NoBomFile -path $historyFile -content ($historyList | ConvertTo-Json -Depth 10)
 
-Exit-WithResult -Code 0 -Status "dispatched" -Message "doc_updater_dispatched" -Extra @{
+Exit-WithResult -Code 0 -Status 'dispatched' -Message 'doc_updater_dispatched' -Extra @{
     docTaskId = $docTaskId
-    dispatchMode = "inline"
-    workerPane = [string]$docUpdaterPane
+    dispatchMode = 'headless'
+    runId = [string]$dispatchResp.runId
+    runDir = [string]$dispatchResp.runDir
+    pid = [int]$dispatchResp.pid
 }

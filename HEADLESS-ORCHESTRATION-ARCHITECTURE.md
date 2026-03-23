@@ -1,4 +1,4 @@
-﻿# Headless 编排架构设计（Windows 过渡版）
+# Headless 编排架构设计（Windows 过渡版）
 
 本文档描述 `E:\moxton-ccb` 从“基于 WezTerm pane 的交互式多 worker 编排”迁移到“Team Lead 交互式 + Worker Headless 执行”的目标架构。
 
@@ -12,6 +12,22 @@
 - 用 `route-notifier` 做唯一 Team Lead 唤醒器
 - 为后续接入 Rich 指挥大屏预留稳定数据源
 
+## 当前实施状态（阶段 1）
+
+当前代码已先落地最小切入版本：doc-updater 与 repo-committer 通过 scripts/start-headless-run.ps1 走 headless codex exec。
+
+当前仍保留交互式链路的部分：
+
+- dispatch / dispatch-qa 仍基于 WezTerm pane 派遣 dev / qa worker
+- Team Lead 仍通过现有 Claude Code 交互会话工作
+- route-monitor 与 route-notifier 继续沿用现有收口与提醒链路
+
+这意味着第一阶段的目标不是全量去 WezTerm，而是先验证：后台 headless 执行、运行态落盘、route 收口、Team Lead 通知这条链路可以脱离 worker pane。
+
+当前已完成的 smoke 验证：
+
+- HEADLESS-SMOKE-003：验证 doc-updater headless 运行、report_route ACK / blocked、events.jsonl UTF-8 落盘、state.json 成功终态
+- HEADLESS-SMOKE-REPO-002：验证 repo-committer headless 运行、report_route ACK / blocked、events.jsonl UTF-8 落盘、state.json 成功终态
 ## 为什么要改造
 
 当前交互式 pane 编排存在以下天然问题：
