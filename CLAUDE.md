@@ -142,6 +142,7 @@ assigned -> in_progress -> waiting_qa -> qa -> qa_passed -> archiving -> complet
 - `requeue` 只负责记录与改状态，不自动通知旧 worker，不自动重新派遣。
 - `requeue/reset-task` 会清空旧 `run_id / assigned_worker / headless_pid / headless_run_dir / pane_id / dispatch_mode`，避免 stale runtime 污染下一轮派遣。
 - headless 任务若 `status` 显示 `failed / drift / stale`，优先执行 `recover -RecoverAction restart-task -TaskId <ID>`；它会清理运行态，并在可能时结束残留 headless 进程。
+- `dispatch / dispatch-qa` 对 `assigned / waiting_qa` 状态也会检查残留运行态；若仍带旧 `run_id / pid / run_dir / assigned_worker`，会直接拒绝派遣并要求先 `restart-task`。
 - QA 通过后若人工复审不通过，先 `requeue -TargetState waiting_qa`，再 `dispatch-qa` 使用 fresh QA context。
 - 不要把“保持 qa_passed”误翻译成 `requeue -TargetState qa_passed`；保持/校正为 `qa_passed` 应使用 `qa-pass`。
 

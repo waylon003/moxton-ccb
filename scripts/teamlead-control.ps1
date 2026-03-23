@@ -726,6 +726,57 @@ function Resolve-RecoveryTargetState([string]$State, [string]$Phase) {
     return 'assigned'
 }
 
+function Get-TaskRuntimeResidue([string]$TaskId, $Lock) {
+    if (-not $Lock) { return $null }
+
+    $runId = if ($Lock.PSObject.Properties.Name -contains 'run_id' -and $Lock.run_id) { [string]$Lock.run_id } else { '' }
+    $assignedWorker = if ($Lock.PSObject.Properties.Name -contains 'assigned_worker' -and $Lock.assigned_worker) { [string]$Lock.assigned_worker } else { '' }
+    $paneId = if ($Lock.PSObject.Properties.Name -contains 'pane_id' -and $Lock.pane_id) { [string]$Lock.pane_id } else { '' }
+    $dispatchModeRaw = if ($Lock.PSObject.Properties.Name -contains 'dispatch_mode' -and $Lock.dispatch_mode) { [string]$Lock.dispatch_mode } else { '' }
+    $headlessRunDir = if ($Lock.PSObject.Properties.Name -contains 'headless_run_dir' -and $Lock.headless_run_dir) { [string]$Lock.headless_run_dir } else { '' }
+    $headlessPid = 0
+    if ($Lock.PSObject.Properties.Name -contains 'headless_pid' -and $Lock.headless_pid) {
+        try { $headlessPid = [int]$Lock.headless_pid } catch { $headlessPid = 0 }
+    }
+    $dispatchMode = if ($dispatchModeRaw) { $dispatchModeRaw.Trim().ToLowerInvariant() } elseif ($headlessRunDir -or $headlessPid -gt 0) { 'headless' } else { '' }
+    $headlessPidAlive = if ($headlessPid -gt 0) { Test-ProcessAliveById -ProcessId $headlessPid } else { $false }
+
+    $fields = New-Object System.Collections.Generic.List[string]
+    if ($runId) { $fields.Add('run_id=' + $runId) | Out-Null }
+    if ($assignedWorker) { $fields.Add('assigned_worker=' + $assignedWorker) | Out-Null }
+    if ($dispatchModeRaw) { $fields.Add('dispatch_mode=' + $dispatchModeRaw) | Out-Null }
+    if ($headlessRunDir) { $fields.Add('headless_run_dir=' + $headlessRunDir) | Out-Null }
+    if ($headlessPid -gt 0) { $fields.Add('headless_pid=' + [string]$headlessPid + '(' + $(if ($headlessPidAlive) { 'alive' } else { 'gone' }) + ')') | Out-Null }
+    if ($paneId) { $fields.Add('pane_id=' + $paneId) | Out-Null }
+
+    [pscustomobject]@{
+        has_residue = ($fields.Count -gt 0)
+        dispatch_mode = $dispatchMode
+        run_id = $runId
+        assigned_worker = $assignedWorker
+        pane_id = $paneId
+        headless_run_dir = $headlessRunDir
+        headless_pid = $headlessPid
+        headless_pid_alive = $headlessPidAlive
+        summary = ($fields -join '; ')
+    }
+}
+
+function Assert-DispatchRuntimeClean([string]$TaskId, [string]$TargetState, $Lock) {
+    $residue = Get-TaskRuntimeResidue -TaskId $TaskId -Lock $Lock
+    if (-not $residue -or -not $residue.has_residue) { return }
+
+    Write-Host ('[FAIL] Task ' + $TaskId + ' state=' + $TargetState + ' still carries stale runtime metadata.') -ForegroundColor Red
+    Write-Host ('       Residue: ' + $residue.summary) -ForegroundColor Yellow
+    Write-Host ('       First: powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) -ForegroundColor White
+    if ($TargetState -eq 'waiting_qa') {
+        Write-Host ('       Then:  powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) -ForegroundColor DarkGray
+    } else {
+        Write-Host ('       Then:  powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) -ForegroundColor DarkGray
+    }
+    exit 1
+}
+
 function Add-TaskAttemptRecord {
     param(
         [string]$TaskId,
@@ -2400,7 +2451,8 @@ function Invoke-Dispatch {
     Assert-NoExecutionDrift -TaskId $TaskId -locks $locks -WorkerMap $workerMap
 
     # Assert state (only assigned/blocked -> in_progress)
-    Assert-TaskState $TaskId @("assigned", "blocked") $locks
+    $dispatchLock = Assert-TaskState $TaskId @("assigned", "blocked") $locks
+    Assert-DispatchRuntimeClean -TaskId $TaskId -TargetState 'assigned' -Lock $dispatchLock
     Assert-WorkerNotBusy -TaskId $TaskId -TargetWorker $devWorker -TargetState "in_progress" -locks $locks -WorkerMap $workerMap
 
     # P0-4: Unique task file validation
@@ -2603,7 +2655,8 @@ function Invoke-DispatchQA {
     Assert-NoExecutionDrift -TaskId $TaskId -locks $locks -WorkerMap $workerMap
 
     # Assert state (only waiting_qa -> qa)
-    Assert-TaskState $TaskId @("waiting_qa") $locks
+    $dispatchLock = Assert-TaskState $TaskId @("waiting_qa") $locks
+    Assert-DispatchRuntimeClean -TaskId $TaskId -TargetState 'waiting_qa' -Lock $dispatchLock
     Assert-WorkerNotBusy -TaskId $TaskId -TargetWorker $qaWorker -TargetState "qa" -locks $locks -WorkerMap $workerMap
 
     # P0-4: Task file validation
@@ -2883,6 +2936,7 @@ function Get-TaskRecommendation {
     $assignedWorker = Get-AssignedWorkerFromLock -TaskId $TaskId -lock $Lock -State $state -WorkerMap $WorkerMap
     $dispatchMode = Get-LockDispatchMode -lock $Lock
     $headlessSnapshot = Read-HeadlessRunSnapshot -TaskId $TaskId -Lock $Lock
+    $runtimeResidue = Get-TaskRuntimeResidue -TaskId $TaskId -Lock $Lock
     $workerAlive = if ($dispatchMode -eq 'headless') {
         if ($headlessSnapshot) { [bool]$headlessSnapshot.process_alive } else { $false }
     } else {
@@ -2930,16 +2984,32 @@ function Get-TaskRecommendation {
 
     switch ($state) {
         'assigned' {
-            $summary = '待派遣开发'
-            $color = 'Yellow'
-            $priority = 60
-            $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) | Out-Null
+            if ($runtimeResidue -and $runtimeResidue.has_residue) {
+                $summary = '待派遣前需清理残留运行态'
+                $color = 'Red'
+                $priority = 15
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) | Out-Null
+            } else {
+                $summary = '待派遣开发'
+                $color = 'Yellow'
+                $priority = 60
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) | Out-Null
+            }
         }
         'waiting_qa' {
-            $summary = '待派遣 QA'
-            $color = 'Cyan'
-            $priority = 70
-            $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) | Out-Null
+            if ($runtimeResidue -and $runtimeResidue.has_residue) {
+                $summary = '待派遣 QA 前需清理残留运行态'
+                $color = 'Red'
+                $priority = 15
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) | Out-Null
+            } else {
+                $summary = '待派遣 QA'
+                $color = 'Cyan'
+                $priority = 70
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) | Out-Null
+            }
         }
         'in_progress' {
             if ($hasPendingLocalApproval) {
@@ -3149,6 +3219,7 @@ function Get-TaskRecommendation {
         stale = $isStaleRun
         dispatch_mode = $dispatchMode
         headless_snapshot = $headlessSnapshot
+        runtime_residue = $runtimeResidue
     }
 }
 function Invoke-Status {
@@ -3490,6 +3561,10 @@ function Invoke-Status {
                         $stateColor = 'Red'
                     }
                 }
+                if ($recommendation.runtime_residue -and $recommendation.runtime_residue.has_residue -and [string]$lState -in @('assigned','waiting_qa')) {
+                    $line += ' [RUNTIME-RESIDUE]'
+                    $stateColor = 'Red'
+                }
                 if ($recommendation.stale -and $stateColor -notin @("Red")) {
                     $line += ' [STALE-RUN>' + $staleThresholdMinutes + 'm]'
                     $stateColor = "Yellow"
@@ -3502,6 +3577,9 @@ function Invoke-Status {
                 }
             }
             Write-Host $line -ForegroundColor $stateColor
+            if ($recommendation -and $recommendation.runtime_residue -and $recommendation.runtime_residue.has_residue -and [string]$lState -in @('assigned','waiting_qa')) {
+                Write-Host ('    residue=' + $recommendation.runtime_residue.summary) -ForegroundColor DarkGray
+            }
             if ($recommendation -and $recommendation.dispatch_mode -eq 'headless' -and $recommendation.headless_snapshot) {
                 $hs = $recommendation.headless_snapshot
                 if ($hs.run_dir) {
