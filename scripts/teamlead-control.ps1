@@ -12,6 +12,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction reap-stale
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction baseline-clean
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction full-clean
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId BACKEND-009
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action archive -TaskId SHOP-FE-004
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action show-approval -RequestId APR-20260228120000-0001
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/teamlead-control.ps1 -Action approve-request -RequestId APR-20260228120000-0001
@@ -29,7 +30,7 @@ param(
     [string]$TaskId,
 
     [Parameter(Mandatory=$false)]
-    [ValidateSet("reap-stale", "restart-worker", "reset-task", "normalize-locks", "baseline-clean", "full-clean")]
+    [ValidateSet("reap-stale", "restart-task", "restart-worker", "reset-task", "normalize-locks", "baseline-clean", "full-clean")]
     [string]$RecoverAction,
 
     [Parameter(Mandatory=$false)]
@@ -691,6 +692,40 @@ function Read-HeadlessRunSnapshot([string]$TaskId, $Lock) {
         exit_code = if ($state -and $state.PSObject.Properties.Name -contains 'exit_code' -and $state.exit_code -ne $null) { [int]$state.exit_code } else { -1 }
     }
 }
+
+function Clear-TaskRuntimeFields($lock, [switch]$ClearAssignedWorker, [switch]$ClearDispatchMode) {
+    if (-not $lock) { return }
+    Set-ObjectField -obj $lock -name 'run_id' -value ''
+    Set-ObjectField -obj $lock -name 'headless_run_dir' -value ''
+    Set-ObjectField -obj $lock -name 'headless_pid' -value 0
+    Set-ObjectField -obj $lock -name 'pane_id' -value ''
+    if ($ClearAssignedWorker) {
+        Set-ObjectField -obj $lock -name 'assigned_worker' -value ''
+    }
+    if ($ClearDispatchMode) {
+        Set-ObjectField -obj $lock -name 'dispatch_mode' -value ''
+    }
+}
+
+function Resolve-RecoveryTargetState([string]$State, [string]$Phase) {
+    $stateNorm = if ($State) { ([string]$State).Trim().ToLowerInvariant() } else { '' }
+    $phaseNorm = if ($Phase) { ([string]$Phase).Trim().ToLowerInvariant() } else { '' }
+
+    switch ($stateNorm) {
+        'qa' { return 'waiting_qa' }
+        'waiting_qa' { return 'waiting_qa' }
+        'qa_passed' { return 'waiting_qa' }
+        'in_progress' { return 'assigned' }
+        'assigned' { return 'assigned' }
+        'blocked' { return 'assigned' }
+    }
+
+    if ($phaseNorm -eq 'qa') {
+        return 'waiting_qa'
+    }
+    return 'assigned'
+}
+
 function Add-TaskAttemptRecord {
     param(
         [string]$TaskId,
@@ -2305,6 +2340,7 @@ function Invoke-Bootstrap {
     Write-Host '  status      -- powershell -File scripts/teamlead-control.ps1 -Action status' -ForegroundColor White
     Write-Host '  requeue     -- powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId <ID> -TargetState <assigned|waiting_qa> -RequeueReason "..."' -ForegroundColor White
     Write-Host '  recover     -- powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction <action>' -ForegroundColor White
+    Write-Host '                 restart-task example: ... -Action recover -RecoverAction restart-task -TaskId BACKEND-010' -ForegroundColor DarkGray
     Write-Host '  archive     -- powershell -File scripts/teamlead-control.ps1 -Action archive -TaskId <ID> [-NoPush] [-CommitMessage "..."]' -ForegroundColor White
     Write-Host '  show-approval  -- powershell -File scripts/teamlead-control.ps1 -Action show-approval -RequestId <ID>' -ForegroundColor White
     Write-Host '  approve-request -- powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId <ID>' -ForegroundColor White
@@ -2764,40 +2800,46 @@ function Invoke-Requeue {
     Sync-TaskAttemptHistoryFromLocks -TaskId $TaskId | Out-Null
 
     $lock = $locks.locks.$TaskId
-    $prevState = if ($lock.state) { [string]$lock.state } else { "" }
+    $prevState = if ($lock.state) { [string]$lock.state } else { '' }
     $assignedWorker = Get-AssignedWorkerFromLock -TaskId $TaskId -lock $lock -State $prevState -WorkerMap $workerMap
-    $workerAlive = if ($assignedWorker) { Test-WorkerPaneAlive -WorkerName $assignedWorker } else { $false }
+    $dispatchMode = Get-LockDispatchMode -lock $lock
+    $headlessSnapshot = Read-HeadlessRunSnapshot -TaskId $TaskId -Lock $lock
+    $workerAlive = if ($dispatchMode -eq 'headless') {
+        if ($headlessSnapshot) { [bool]$headlessSnapshot.process_alive } else { $false }
+    } else {
+        if ($assignedWorker) { Test-WorkerPaneAlive -WorkerName $assignedWorker } else { $false }
+    }
     $phase = Resolve-PhaseFromWorkerName -WorkerName (Get-TaskLatestRouteWorker -lock $lock)
     if (-not $phase) {
         $phase = Resolve-PhaseFromWorkerName -WorkerName $assignedWorker
     }
     if (-not $phase) {
-        $phase = if ($TargetState -eq "waiting_qa") { "qa" } else { "dev" }
+        $phase = if ($TargetState -eq 'waiting_qa') { 'qa' } else { 'dev' }
     }
 
-    $now = Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
+    $now = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
     Update-TaskLocksData {
         param($latest)
         if ($latest.locks.PSObject.Properties.Name -notcontains $TaskId) {
-            throw ("Task missing during requeue commit: " + $TaskId)
+            throw ('Task missing during requeue commit: ' + $TaskId)
         }
         $latestLock = $latest.locks.$TaskId
         $latestLock.state = $TargetState
         $latestLock.updated_at = $now
-        $latestLock.updated_by = "teamlead-control/requeue"
-        Set-NoteField -obj $latestLock -value ("Requeued to " + $TargetState + " by team lead: " + $RequeueReason)
-        Set-ObjectField -obj $latestLock -name "run_id" -value ""
-        Set-ObjectField -obj $latestLock -name "last_requeue" -value @{
+        $latestLock.updated_by = 'teamlead-control/requeue'
+        Set-NoteField -obj $latestLock -value ('Requeued to ' + $TargetState + ' by team lead: ' + $RequeueReason)
+        Clear-TaskRuntimeFields -lock $latestLock -ClearAssignedWorker -ClearDispatchMode
+        Set-ObjectField -obj $latestLock -name 'last_requeue' -value @{
             previous_state = $prevState
             target_state = $TargetState
             reason = $RequeueReason
             requested_at = $now
-            requested_by = "teamlead-control/requeue"
+            requested_by = 'teamlead-control/requeue'
         }
         return $null
     }
 
-    Update-LatestTaskAttempt -TaskId $TaskId -Phase $phase -Result "requeued" -FinalState $TargetState -EndedAt $now -RequeueReason $RequeueReason -UpdatedBy "teamlead-control/requeue" | Out-Null
+    Update-LatestTaskAttempt -TaskId $TaskId -Phase $phase -Result 'requeued' -FinalState $TargetState -EndedAt $now -RequeueReason $RequeueReason -UpdatedBy 'teamlead-control/requeue' | Out-Null
     if ($assignedWorker) {
         Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $assignedWorker -Quiet | Out-Null
     }
@@ -2805,10 +2847,15 @@ function Invoke-Requeue {
     Write-Host ('[OK] Task ' + $TaskId + ' requeued: ' + $prevState + ' -> ' + $TargetState) -ForegroundColor Green
     Write-Host ('     Reason: ' + $RequeueReason) -ForegroundColor Gray
     Write-Host '     Requeue only updates status/history. It does not notify the old worker and does not auto-dispatch.' -ForegroundColor Cyan
-    if ($workerAlive -and $assignedWorker) {
-        Write-Host ('[WARN] Previous worker is still online: ' + $assignedWorker) -ForegroundColor Yellow
-        Write-Host '       Do not paste the reject reason into that pane. Redispatch later with a fresh context.' -ForegroundColor Yellow
-        if ($TargetState -eq "waiting_qa") {
+    if ($workerAlive) {
+        if ($dispatchMode -eq 'headless') {
+            Write-Host ('[WARN] Previous headless run is still alive for task ' + $TaskId) -ForegroundColor Yellow
+            Write-Host '       If you need hard stop + clean restart, use recover -RecoverAction restart-task before re-dispatch.' -ForegroundColor Yellow
+        } elseif ($assignedWorker) {
+            Write-Host ('[WARN] Previous worker is still online: ' + $assignedWorker) -ForegroundColor Yellow
+            Write-Host '       Do not paste the reject reason into that pane. Redispatch later with a fresh context.' -ForegroundColor Yellow
+        }
+        if ($TargetState -eq 'waiting_qa') {
             Write-Host ('       Next: powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) -ForegroundColor White
         } else {
             Write-Host ('       Next: powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) -ForegroundColor White
@@ -2921,13 +2968,13 @@ function Get-TaskRecommendation {
                 $color = 'Yellow'
                 $priority = 18
             } elseif ($dispatchMode -eq 'headless' -and $headlessSnapshot -and $headlessSnapshot.runtime_status -eq 'failed') {
-                $summary = '开发 headless 运行失败，先 requeue 后重派'
+                $summary = '开发 headless 运行失败，建议 restart-task 后重派'
                 $color = 'Red'
                 $priority = 19
-                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "headless_failed"') | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
             } elseif (-not $workerAlive) {
                 if ($dispatchMode -eq 'headless') {
-                    $summary = '开发 headless 执行漂移，进程已离线'
+                    $summary = '开发 headless 执行漂移，建议 restart-task 后重派'
                 } else {
                     $summary = '开发执行漂移，worker 已离线'
                     if ($assignedWorker) {
@@ -2936,7 +2983,7 @@ function Get-TaskRecommendation {
                 }
                 $color = 'Red'
                 $priority = 20
-                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "offline_drift"') | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
             } elseif ($isStaleRun) {
                 if ($dispatchMode -eq 'headless') {
                     $summary = '开发 headless 长时间无新 route/输出 [STALE-RUN ' + $activityAgeText + ']'
@@ -2948,7 +2995,7 @@ function Get-TaskRecommendation {
                 }
                 $color = 'Yellow'
                 $priority = 25
-                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "stale_run"') | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
             } else {
                 if ($dispatchMode -eq 'headless') {
                     $summary = '开发进行中（headless），等待新 route'
@@ -2985,13 +3032,13 @@ function Get-TaskRecommendation {
                 $color = 'Yellow'
                 $priority = 18
             } elseif ($dispatchMode -eq 'headless' -and $headlessSnapshot -and $headlessSnapshot.runtime_status -eq 'failed') {
-                $summary = 'QA headless 运行失败，先 requeue 后重派'
+                $summary = 'QA headless 运行失败，建议 restart-task 后重派'
                 $color = 'Red'
                 $priority = 19
-                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "headless_failed"') | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
             } elseif (-not $workerAlive) {
                 if ($dispatchMode -eq 'headless') {
-                    $summary = 'QA headless 执行漂移，进程已离线'
+                    $summary = 'QA headless 执行漂移，建议 restart-task 后重派'
                 } else {
                     $summary = 'QA 执行漂移，worker 已离线'
                     if ($assignedWorker) {
@@ -3000,7 +3047,7 @@ function Get-TaskRecommendation {
                 }
                 $color = 'Red'
                 $priority = 20
-                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "offline_drift"') | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
             } elseif ($isStaleRun) {
                 if ($dispatchMode -eq 'headless') {
                     $summary = 'QA headless 长时间无新 route/输出 [STALE-RUN ' + $activityAgeText + ']'
@@ -3012,7 +3059,7 @@ function Get-TaskRecommendation {
                 }
                 $color = 'Yellow'
                 $priority = 25
-                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "stale_run"') | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
             } else {
                 if ($dispatchMode -eq 'headless') {
                     $summary = 'QA 进行中（headless），等待新 route'
@@ -3058,13 +3105,17 @@ function Get-TaskRecommendation {
                 $priority = 30
                 $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "qa_reject"') | Out-Null
             } else {
-                $summary = '开发 blocked，需人工恢复后再派遣'
+                $summary = '开发 blocked，需任务级恢复后再派遣'
                 $color = 'Red'
                 $priority = 35
-                if ($dispatchMode -ne 'headless' -and $assignedWorker) {
-                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                if ($dispatchMode -eq 'headless') {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
+                } else {
+                    if ($assignedWorker) {
+                        $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                    }
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "manual_recovery"') | Out-Null
                 }
-                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "manual_recovery"') | Out-Null
             }
         }
         'archiving' {
@@ -3845,7 +3896,7 @@ function Invoke-PreDispatchBaselineClean {
 # ============================================================
 function Invoke-Recover {
     if (-not $RecoverAction) {
-        Write-Host '[FAIL] recover requires -RecoverAction (reap-stale / restart-worker / reset-task / normalize-locks / baseline-clean / full-clean)' -ForegroundColor Red
+        Write-Host '[FAIL] recover requires -RecoverAction (reap-stale / restart-task / restart-worker / reset-task / normalize-locks / baseline-clean / full-clean)' -ForegroundColor Red
         exit 1
     }
 
@@ -3881,6 +3932,94 @@ function Invoke-Recover {
                 }
             } catch {}
             Write-Host '[OK] reap-stale done' -ForegroundColor Green
+        }
+
+        "restart-task" {
+            if (-not $TaskId) {
+                Write-Host '[FAIL] restart-task requires -TaskId' -ForegroundColor Red
+                exit 1
+            }
+            Assert-CanonicalTaskId $TaskId
+
+            $workerMap = Get-WorkerMap
+            $locks = Read-TaskLocks
+            if ($locks.locks.PSObject.Properties.Name -notcontains $TaskId) {
+                Write-Host ('[FAIL] Task ' + $TaskId + ' not in TASK-LOCKS.json') -ForegroundColor Red
+                exit 1
+            }
+
+            $lock = $locks.locks.$TaskId
+            $currentState = if ($lock.state) { [string]$lock.state } else { '' }
+            if ($currentState -in @('completed', 'archiving')) {
+                Write-Host ('[FAIL] restart-task does not support state=' + $currentState + ' for ' + $TaskId) -ForegroundColor Red
+                exit 1
+            }
+
+            $assignedWorker = Get-AssignedWorkerFromLock -TaskId $TaskId -lock $lock -State $currentState -WorkerMap $workerMap
+            $dispatchMode = Get-LockDispatchMode -lock $lock
+            $headlessSnapshot = Read-HeadlessRunSnapshot -TaskId $TaskId -Lock $lock
+            $phase = Resolve-PhaseFromWorkerName -WorkerName (Get-TaskLatestRouteWorker -lock $lock)
+            if (-not $phase) {
+                $phase = Resolve-PhaseFromWorkerName -WorkerName $assignedWorker
+            }
+            $targetState = Resolve-RecoveryTargetState -State $currentState -Phase $phase
+
+            $killedPid = 0
+            if ($dispatchMode -eq 'headless' -and $headlessSnapshot -and $headlessSnapshot.process_alive -and $headlessSnapshot.process_id -gt 0) {
+                try {
+                    Stop-Process -Id $headlessSnapshot.process_id -Force -ErrorAction Stop
+                    $killedPid = [int]$headlessSnapshot.process_id
+                    Write-Host ('[OK] Stopped headless process pid=' + $killedPid + ' for task ' + $TaskId) -ForegroundColor Green
+                } catch {
+                    Write-Host ('[WARN] Failed to stop headless process pid=' + [string]$headlessSnapshot.process_id + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+                }
+            }
+
+            if ($assignedWorker) {
+                Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $assignedWorker -Quiet | Out-Null
+            }
+
+            $now = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
+            Update-TaskLocksData {
+                param($latest)
+                if ($latest.locks.PSObject.Properties.Name -notcontains $TaskId) {
+                    throw ('Task missing during restart-task commit: ' + $TaskId)
+                }
+                $latestLock = $latest.locks.$TaskId
+                $latestLock.state = $targetState
+                $latestLock.updated_at = $now
+                $latestLock.updated_by = 'teamlead-control/recover-restart-task'
+                Set-NoteField -obj $latestLock -value ('Recovered to ' + $targetState + ' by team lead: restart-task')
+                Clear-TaskRuntimeFields -lock $latestLock -ClearAssignedWorker -ClearDispatchMode
+                Set-ObjectField -obj $latestLock -name 'last_recovery' -value @{
+                    previous_state = $currentState
+                    target_state = $targetState
+                    recover_action = 'restart-task'
+                    requested_at = $now
+                    requested_by = 'teamlead-control/recover-restart-task'
+                    dispatch_mode = $dispatchMode
+                    killed_headless_pid = $killedPid
+                }
+                return $null
+            } | Out-Null
+
+            Update-LatestTaskAttempt -TaskId $TaskId -Phase $phase -Result 'requeued' -FinalState $targetState -EndedAt $now -RequeueReason 'restart_task' -UpdatedBy 'teamlead-control/recover-restart-task' | Out-Null
+
+            Write-Host ('[OK] Task ' + $TaskId + ' recovered: ' + $currentState + ' -> ' + $targetState) -ForegroundColor Green
+            if ($dispatchMode -eq 'headless') {
+                if ($killedPid -gt 0) {
+                    Write-Host ('     Cleared headless runtime and killed pid ' + $killedPid) -ForegroundColor Gray
+                } else {
+                    Write-Host '     Cleared headless runtime metadata' -ForegroundColor Gray
+                }
+            } else {
+                Write-Host '     Cleared stale runtime metadata' -ForegroundColor Gray
+            }
+            if ($targetState -eq 'waiting_qa') {
+                Write-Host ('     Next: powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) -ForegroundColor White
+            } else {
+                Write-Host ('     Next: powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) -ForegroundColor White
+            }
         }
 
         "restart-worker" {

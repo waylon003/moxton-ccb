@@ -115,6 +115,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - `baseline-clean` 改为手动触发；控制器不会在每次派遣前自动清理 pending route / approval。
 - `prune-orphan-locks` 用于清理“任务文件在 `active/` 和 `completed/` 都不存在”的孤立锁；不要再用临时脚本直改 `TASK-LOCKS.json`。
 - `requeue` 只做“记录 + 改状态”，不会自动通知旧 worker，也不会自动重新派遣。
+- `requeue/reset-task` 现在会清空旧 `run_id / assigned_worker / headless_pid / headless_run_dir / pane_id / dispatch_mode`，避免脏运行态残留。
+- 对 headless 任务，优先使用 `recover -RecoverAction restart-task -TaskId <ID>` 做任务级恢复，再重新 `dispatch / dispatch-qa`；不要对失败运行反复直接 `requeue`。
 - `qa-pass` 用于“保持/校正为 qa_passed，等待人工复审”；不要把“保持 qa_passed”误翻译成 `requeue -TargetState qa_passed`。
 - QA 复审驳回后，默认 `requeue -> dispatch-qa`，并使用 fresh QA context。
 - 每次 `dispatch/dispatch-qa` 都会生成新的 `run_id`；Worker 回传 `report_route` 时必须原样带回。
