@@ -1,4 +1,4 @@
-# Moxton-CCB 指挥中心
+﻿# Moxton-CCB 指挥中心
 
 多 AI 协作的任务编排系统，协调三个业务仓库的开发工作。
 
@@ -54,7 +54,7 @@ flowchart TD
 
 - **Team Lead**：Claude Code 会话（本仓库）— 需求拆分、任务分派、进度监控
 - **主指挥约束**：Team Lead 只能使用 Claude Code（禁止 Codex 作为主指挥）
-- **Workers**：当前为混合执行层。`backend-dev`、`doc-updater` 与 `repo-committer` 已走 headless `codex exec`；其余 dev / qa 仍在 WezTerm pane 中运行 Codex。
+- **Workers**：当前业务主链与辅助 worker 均默认走 headless `codex exec`。`backend-dev`、`shop-fe-dev`、`admin-fe-dev`、`backend-qa`、`shop-fe-qa`、`admin-fe-qa`、`doc-updater`、`repo-committer` 都已接入 headless runner；WezTerm pane 仅保留兼容回退用途。
 - **通信**：统一走 MCP `report_route` 回传 + WezTerm CLI `send-text` 唤醒。`route-monitor` 负责收口、写锁、文档/归档状态更新与事件落盘；`route-notifier` 独立负责唤醒 Team Lead；`pane-approval-watcher` 仅保留给 pane worker 的本地审批兼容。
 
 - **控制入口**：`scripts/teamlead-control.ps1`（业务动作统一入口）
@@ -69,18 +69,18 @@ flowchart TD
 | SHOP-FE | `E:\nuxt-moxton` | Codex (`-a never --sandbox danger-full-access`) | Codex (`-a never --sandbox danger-full-access`) |
 
 
-## 当前迁移状态（混合态）
+## 当前迁移状态（默认 headless）
 
-当前主链不是“全 WezTerm”，也还不是“全 headless”，而是过渡中的混合态：
+当前主链默认已切到 headless，保留 WezTerm pane 作为兼容回退：
 
 - Team Lead：仍然是 `E:\moxton-ccb` 内的 Claude Code 交互式会话
-- Dev / QA：`backend-dev` 已通过 `dispatch` 灰度切到 headless；其余 dev / qa 仍由 `dispatch / dispatch-qa` 通过 WezTerm pane 派遣
+- Dev / QA：`backend-dev`、`shop-fe-dev`、`admin-fe-dev`、`backend-qa`、`shop-fe-qa`、`admin-fe-qa` 已统一通过 `dispatch / dispatch-qa` 走 headless
 - `doc-updater` / `repo-committer`：已通过 `scripts/start-headless-run.ps1` 走 headless `codex exec`
 - 状态收口：统一仍由 `route-monitor` 处理
 - Team Lead 唤醒：统一仍由 `route-notifier` 处理
 - 状态观测：`status` 已能直接读取 headless run 的 `state.json`，显示 `runtime / pid / proc / rt_last / run_dir / note`
 
-这意味着当前版本已经把“辅助链路”从 pane 中剥离出来，但业务主链的开发 / QA 仍未迁移。下一步目标不是继续堆 watcher，而是把 dev / qa 的执行层也切成 headless，同时保留 Team Lead 的交互式决策模式。
+这意味着当前版本已经把业务主链与辅助链路一起从 pane 中剥离出来，形成“Team Lead 交互式决策 + worker headless 执行”的默认架构；WezTerm pane 只作为回退与人工调试通道保留。
 
 完整设计见 [HEADLESS-ORCHESTRATION-ARCHITECTURE.md](./HEADLESS-ORCHESTRATION-ARCHITECTURE.md)。
 
@@ -131,6 +131,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - 涉及登录/权限/真实数据流的 dev 和 QA 自测，统一先读 `05-verification/QA-IDENTITY-POOL.md`，优先使用固定测试凭据，禁止默认注册新账号探路。
 
 详细工作流程见 [CLAUDE.md](./CLAUDE.md)。
+
+## Rich 监控台（只读）
+
+用于实时查看任务锁、headless 运行态、最近 `report_route` / Team Lead 唤醒记录、attempt 历史。该监控台只读，不参与派遣、改锁或决策。
+
+```bash
+# 实时监控（默认刷新 2 秒）
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-rich-monitor.ps1"
+
+# 只看某个任务
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-rich-monitor.ps1" -TaskId SHOP-FE-013
+
+# 渲染一次快照后退出
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-rich-monitor.ps1" -Once
+```
+
+当前第一版面板包括：
+- `TASK-LOCKS.json` 任务锁状态
+- headless worker / runtime 状态与 PID
+- 最近 route-notifier 投递记录
+- 最近 task attempt / requeue / blocked 历史
+- route-monitor / route-notifier watcher 心跳摘要
 
 ## Claude Code UI（可选）
 

@@ -112,6 +112,18 @@ function Get-TeamLeadNotifyRetryDelayMs {
     return Get-EnvIntOrDefault -name "CCB_TEAMLEAD_NOTIFY_RETRY_DELAY_MS" -defaultValue 1200
 }
 
+function Normalize-PaneId([string]$value) {
+    if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    $trimmed = $value.Trim()
+    if ($trimmed -match '^\d+$') {
+        return $trimmed
+    }
+    if ($trimmed -match '(\d+)') {
+        return $Matches[1]
+    }
+    return $null
+}
+
 function Should-NotifyTeamLeadWake {
     $flag = $env:CCB_ROUTE_MONITOR_NOTIFY
     if ($flag) {
@@ -153,9 +165,16 @@ function Get-WeztermPanes {
             $script:weztermCliLastError = 'wezterm_cli_empty_result'
             return @()
         }
-        $script:weztermCliHealthy = $true
-        $script:weztermCliLastError = ''
-        return @($raw | ConvertFrom-Json)
+        try {
+            $parsed = @($raw | ConvertFrom-Json)
+            $script:weztermCliHealthy = $true
+            $script:weztermCliLastError = ''
+            return $parsed
+        } catch {
+            $script:weztermCliHealthy = $false
+            $script:weztermCliLastError = 'wezterm_cli_parse_failed: ' + $_.Exception.Message
+            return @()
+        }
     } catch {
         $script:weztermCliHealthy = $false
         $script:weztermCliLastError = $_.Exception.Message
@@ -180,21 +199,32 @@ function Get-WorkerPaneIdSet {
 }
 
 function Resolve-TeamLeadPaneId([string]$preferredPaneId) {
+    $normalizedPreferred = Normalize-PaneId $preferredPaneId
+    if ($normalizedPreferred) { return $normalizedPreferred }
+
+    $normalizedEnvTeamLead = Normalize-PaneId $env:TEAM_LEAD_PANE_ID
+    if ($normalizedEnvTeamLead) { return $normalizedEnvTeamLead }
+
+    $selfPaneIds = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($selfCandidate in @($env:WEZTERM_PANE, $env:WEZTERM_PANE_ID)) {
+        $normalizedSelf = Normalize-PaneId $selfCandidate
+        if ($normalizedSelf) { [void]$selfPaneIds.Add($normalizedSelf) }
+    }
+
     $panes = Get-WeztermPanes
-    if (-not $panes -or $panes.Count -eq 0) { return $null }
+    if (-not $panes -or $panes.Count -eq 0) { return '0' }
 
     $workerPaneIds = Get-WorkerPaneIdSet
-    if ($workerPaneIds.Count -gt 0) {
-        $panes = @($panes | Where-Object { -not $workerPaneIds.Contains([string]$_.pane_id) })
+    if ($workerPaneIds.Count -gt 0 -or $selfPaneIds.Count -gt 0) {
+        $panes = @($panes | Where-Object {
+            $paneId = [string]$_.pane_id
+            (-not $workerPaneIds.Contains($paneId)) -and (-not $selfPaneIds.Contains($paneId))
+        })
     }
-    if (-not $panes -or $panes.Count -eq 0) { return $null }
+    if (-not $panes -or $panes.Count -eq 0) { return '0' }
 
-    if ($preferredPaneId) {
-        $matched = $panes | Where-Object { ([string]$_.pane_id) -eq ([string]$preferredPaneId) } | Select-Object -First 1
-        if ($matched) { return [string]$matched.pane_id }
-    }
-    if ($env:WEZTERM_PANE) {
-        $matched = $panes | Where-Object { ([string]$_.pane_id) -eq ([string]$env:WEZTERM_PANE) } | Select-Object -First 1
+    if ($normalizedEnvTeamLead) {
+        $matched = $panes | Where-Object { ([string]$_.pane_id) -eq $normalizedEnvTeamLead } | Select-Object -First 1
         if ($matched) { return [string]$matched.pane_id }
     }
     $fallback = $panes | Where-Object { $_.title -like '*claude*' -or $_.title -like '* Claude*' } | Select-Object -First 1
@@ -202,7 +232,7 @@ function Resolve-TeamLeadPaneId([string]$preferredPaneId) {
     $ccbPane = $panes | Where-Object { $_.cwd -like '*\\moxton-ccb*' -or $_.cwd -like '*/moxton-ccb*' } | Select-Object -First 1
     if ($ccbPane) { return [string]$ccbPane.pane_id }
     if ($panes.Count -eq 1) { return [string]$panes[0].pane_id }
-    return $null
+    return '0'
 }
 
 function Invoke-TeamLeadSendText([string]$PaneId, [string]$Message) {
@@ -289,11 +319,15 @@ function Notify-AlertRecord($record) {
 
     for ($attempt = 1; $attempt -le $attemptLimit; $attempt++) {
         $paneCandidates = New-Object System.Collections.Generic.List[string]
-        $preferredPane = Resolve-TeamLeadPaneId -preferredPaneId $TeamLeadPaneId
-        if ($preferredPane) { $paneCandidates.Add([string]$preferredPane) | Out-Null }
-        $fallbackPane = Resolve-TeamLeadPaneId -preferredPaneId ''
-        if ($fallbackPane -and -not $paneCandidates.Contains([string]$fallbackPane)) {
-            $paneCandidates.Add([string]$fallbackPane) | Out-Null
+        $preferredPane = Normalize-PaneId $TeamLeadPaneId
+        if (-not $preferredPane) {
+            $preferredPane = Normalize-PaneId $env:TEAM_LEAD_PANE_ID
+        }
+        if ($preferredPane) {
+            $paneCandidates.Add([string]$preferredPane) | Out-Null
+        } else {
+            $fallbackPane = Resolve-TeamLeadPaneId -preferredPaneId ''
+            if ($fallbackPane) { $paneCandidates.Add([string]$fallbackPane) | Out-Null }
         }
 
         $targetPane = ''
@@ -317,6 +351,19 @@ function Notify-AlertRecord($record) {
             }
         }
 
+        $debugPath = Join-Path $scriptDir "config\teamlead-delivery-debug.jsonl"
+        $debugRecord = [ordered]@{
+            at = (Get-Date -Format 'o')
+            event_id = if ($record.event_id) { [string]$record.event_id } else { '' }
+            param_teamlead = if ($TeamLeadPaneId) { [string]$TeamLeadPaneId } else { '' }
+            env_teamlead = if ($env:TEAM_LEAD_PANE_ID) { [string]$env:TEAM_LEAD_PANE_ID } else { '' }
+            env_wezterm_pane = if ($env:WEZTERM_PANE) { [string]$env:WEZTERM_PANE } else { '' }
+            notifier_pane = if ($env:WEZTERM_PANE) { [string]$env:WEZTERM_PANE } elseif ($env:WEZTERM_PANE_ID) { [string]$env:WEZTERM_PANE_ID } else { '' }
+            preferred_pane = if ($preferredPane) { [string]$preferredPane } else { '' }
+            candidates = @($paneCandidates.ToArray())
+            chosen_pane = if ($targetPane) { [string]$targetPane } else { '' }
+        }
+        Append-Utf8Line -path $debugPath -line ($debugRecord | ConvertTo-Json -Compress -Depth 6)
         Write-TeamLeadDelivery -EventId ([string]$record.event_id) -TaskId ([string]$record.task) -Worker ([string]$record.worker) -Status ([string]$record.status) -Action ([string]$record.action) -RunId ([string]$record.run_id) -LockState ([string]$record.lock) -PaneId $targetPane -Attempt $attempt -Sent $sent -Error $lastError -Message $message
         if ($sent) { return $true }
         if ($attempt -lt $attemptLimit -and $retryDelayMs -gt 0) {

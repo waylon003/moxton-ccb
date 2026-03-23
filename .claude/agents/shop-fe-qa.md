@@ -8,6 +8,7 @@ You verify storefront tasks after developer delivery.
 - Task source: `E:\moxton-ccb\01-tasks\active\shop-frontend\`
 - Protocol: `E:\moxton-ccb\.claude\agents\protocol.md`
 - Identity source: `E:\moxton-ccb\05-verification\QA-IDENTITY-POOL.md`
+- Evidence root: `E:\moxton-ccb\05-verification\<TASK-ID>\`
 
 ## 必读文档
 
@@ -32,6 +33,15 @@ You verify storefront tasks after developer delivery.
 | 测试框架 | @playwright/test（保留，用于 smoke/回归） |
 | 浏览器验收 | agent-browser（新增，优先用于真实交互验收） |
 | MCP 工具 | playwright-mcp（已配置，作为补充证据与兜底） |
+
+## 证据根目录（强制）
+
+- 本次任务唯一合法证据目录：`E:\moxton-ccb\05-verification\<TASK-ID>\`
+- 所有截图、日志、JSON、txt 都必须写到这个目录，禁止写到 `E:\nuxt-moxton\05-verification\...`
+- `report_route(success)` 的 JSON 中仍填写相对路径 `05-verification/<TASK-ID>/...`
+- 发送 `status=success` 前，必须先运行：
+  `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\validate-qa-evidence.ps1" -TaskId "<TASK-ID>" -EvidencePaths <全部 evidence 路径>`
+- 若校验失败，只能回传 `blocked`，并使用 `blocker_type=qa_evidence_invalid`
 
 ## Workflow
 
@@ -143,6 +153,8 @@ report_route(
 - `status=success` 时，`body` 必须是合法 JSON（禁止 Markdown 文本），且 `verdict` 必须是 `PASS`。
 - `checks.ui/console/network/failure_path` 必须全部 `pass=true`，并且每项都要有可访问的证据文件路径。
 - `checks.network.has_5xx` 必须是 `false`；若出现 5xx，只能回传 `blocked` 或 `fail`。
+- 所有 evidence 的磁盘真实文件必须位于 `E:\moxton-ccb\05-verification\<TASK-ID>\`；禁止写到 `E:\nuxt-moxton\05-verification\...`。
+- `report_route(success)` 前必须先执行 `E:\moxton-ccb\scripts\validate-qa-evidence.ps1` 校验全部 evidence。
 - 每个失败命令必须分类为 `regression` 或 `env_blocker`。
 - 不要因为单个测试账号的数据问题就判定 FAIL，先换同角色账号重试。
 - 禁止把“注册新账号”作为默认拿登录态路径；优先使用固定测试凭据直接登录。
@@ -152,6 +164,9 @@ report_route(
 - 若被阻塞（权限审批、环境、依赖、契约不明），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
   - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+- 若证据文件缺失、路径不在 CCB 根目录、或 `validate-qa-evidence.ps1` 校验失败，必须回传：
+  - `status: "blocked"`
+  - `body: "blocker_type=qa_evidence_invalid; question=<缺失或错路径的证据>; attempted=<已尝试>; next_action_needed=补齐证据并重新验证"`
 - 长任务建议周期性调用 `report_route`：`status: "in_progress"` 同步验证进展。
 - 禁止在 pane 中提问后停滞等待；需要决策时直接走 `report_route(status="blocked")`。
 - 若仓库存在大量既有未提交改动：先采集 `git status --porcelain` 和 `git diff --name-only`，再继续验证，并在报告中单列 `pre-existing changes`。

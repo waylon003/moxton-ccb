@@ -25,7 +25,7 @@
 - **认证方式**: Bearer Token / X-Guest-ID
 - **数据格式**: JSON
 - **字符编码**: UTF-8
-- **运行探针**: `GET /health`、`GET /version`（已于 2026-03-19 17:49-17:50 +08:00 基于 `BACKEND-016` QA 结果复核，字段/状态码/错误包以 [system.md](system.md) 为准）
+- **运行探针**: `GET /health`、`GET /version`（已于 2026-03-23 12:40 +08:00 再次复核；`200/200/404` 的字段、状态码与错误包以 [system.md](system.md) 为准）
 - **历史说明**: `05-verification/BACKEND-016/contract-check.json` 中 `api_doc` 仍指向 `addresses.md`，该字段为旧校验脚本残留，不代表系统探针归属
 
 ## 📝 使用指南

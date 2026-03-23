@@ -343,6 +343,10 @@ $qaHint = ""
 if ($WorkerName -match "-qa(?:-\d+)?$") {
     $qaHint = @"
 QA 注意：success 回传必须满足 protocol.md 的 QA 回传合同（JSON + checks + evidence）。
+QA 证据唯一合法目录: E:\moxton-ccb\05-verification\<TASK-ID>\
+QA 禁止把证据写到业务仓库自己的 05-verification/；磁盘真实文件必须位于上述目录。
+QA success 前必须先运行 E:\moxton-ccb\scripts\validate-qa-evidence.ps1 校验本次 JSON 中全部 evidence 路径。
+若校验失败，只能 report_route(status=blocked, body 含 blocker_type=qa_evidence_invalid)。
 "@
 }
 $taskSource = if ($hasTaskFile) { $TaskFilePath } else { "<inline-task-body>" }

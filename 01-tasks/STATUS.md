@@ -1,7 +1,7 @@
 ﻿# 任务状态总览
 
-**更新时间**: 2026-03-20
-**活跃任务**: 5 个
+**更新时间**: 2026-03-23
+**活跃任务**: 6 个
 
 ## 项目映射
 
@@ -15,10 +15,10 @@
 
 | 角色 | backlog | active | completed | 总计 |
 |------|---------|--------|-----------|------|
-| SHOP-FE | 0 | 2 | 8 | 10 |
+| SHOP-FE | 0 | 3 | 8 | 11 |
 | ADMIN-FE | 0 | 0 | 10 | 10 |
 | BACKEND | 0 | 3 | 18 | 21 |
-| **TOTAL** | **0** | **5** | **36** | **41** |
+| **TOTAL** | **0** | **6** | **36** | **42** |
 
 ## 目录结构
 
@@ -55,6 +55,7 @@
 |--------|------|
 | [SHOP-FE-012](./active/shop-frontend/SHOP-FE-012-order-detail-fixes.md) | order detail fixes |
 | [SHOP-FE-013](./active/shop-frontend/SHOP-FE-013-payment-intent-smart-reuse.md) | payment intent smart reuse |
+| [SHOP-FE-014](./active/shop-frontend/SHOP-FE-014-frontend-dev-env-recovery.md) | frontend dev env recovery |
 
 
 ## backlog 任务

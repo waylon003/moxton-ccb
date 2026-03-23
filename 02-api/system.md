@@ -6,8 +6,8 @@
 
 - Base URL: `http://localhost:3033`
 - 认证: 无需认证
-- 依据: `BACKEND-016` QA `PASS`，核心证据位于 `05-verification/BACKEND-016/`
-- 最后核对时间: 2026-03-19 17:49-17:50 +08:00（`curl-health.txt`、`curl-version.txt`、`failure-path.json`、`automated-test.json`）
+- 依据: `BACKEND-016` QA `PASS`，核心证据位于 `05-verification/BACKEND-016/`；并于 2026-03-23 12:40 +08:00 本地 spot check 复核 `/health`、`/version` 与未知路由错误包
+- 最后核对时间: 2026-03-23 12:40 +08:00（实时 spot check）+ 2026-03-23 12:38:27 +08:00（任务文件内 QA 摘要）；历史原始证据时间为 2026-03-19 17:49-17:50 +08:00（`curl-health.txt`、`curl-version.txt`、`failure-path.json`、`automated-test.json`）
 
 ## 统一响应包说明
 
@@ -32,11 +32,11 @@
   "message": "Server is healthy",
   "data": {
     "status": "ok",
-    "timestamp": "2026-03-19T09:49:30.165Z",
-    "uptime": 1415.3157374,
+    "timestamp": "2026-03-23T04:40:02.560Z",
+    "uptime": 51549.939524,
     "environment": "development"
   },
-  "timestamp": "2026-03-19T09:49:30.165Z",
+  "timestamp": "2026-03-23T04:40:02.560Z",
   "success": true
 }
 ```
@@ -67,9 +67,9 @@
     "version": "1.0.0",
     "name": "Moxton Lot API",
     "environment": "development",
-    "timestamp": "2026-03-19T09:49:30.183Z"
+    "timestamp": "2026-03-23T04:40:02.633Z"
   },
-  "timestamp": "2026-03-19T09:49:30.183Z",
+  "timestamp": "2026-03-23T04:40:02.633Z",
   "success": true
 }
 ```
@@ -96,7 +96,7 @@
   "message": "API endpoint not found",
   "code": 404,
   "data": null,
-  "timestamp": "2026-03-19T09:50:07.846Z",
+  "timestamp": "2026-03-23T04:40:02.693Z",
   "success": false
 }
 ```

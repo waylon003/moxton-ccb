@@ -41,3 +41,5 @@ config/local-approval-events.jsonl
 config/local-approval-state.json
 config/route-notifier-state.json
 runtime/
+config/rich-monitor-state.json
+config/teamlead-delivery-debug.jsonl

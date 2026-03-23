@@ -490,9 +490,9 @@ checkout: {
 <!-- AUTO-QA-SUMMARY:BEGIN -->
 ## QA 摘要（自动回写）
 
-- 最后更新: `2026-03-22T21:47:06+08:00`
+- 最后更新: `2026-03-23T17:24:36+08:00`
 - QA Worker: `shop-fe-qa`
 - 路由状态: `blocked`
-- 回传摘要: blocker_type=env; question=backend service required by QA is unavailable because http://localhost:3033/health is unreachable, should Team Lead start or restore the lot API before storefront QA reruns?; attempted=ACK sent + read role_definition/protocol/task_file + read CLAUDE.md/AGENTS.md/payments.md/QA-IDENTITY-POOL.md + captured pre-existing changes via gi...
+- 回传摘要: blocker_type=env; question=3666 端口已有现成前端进程占用且运行时异常，首页请求会触发 /_nuxt/builds/meta/577d89a5-db61-4486-a7ef-8e2ec2c73260.json 500，浏览器控制台存在 manifest/hydration 错误，无法继续支付页真实验收并满足 console=0 errors 合同； attempted=已完成 role/protocol/task/CLAUDE/AGENTS/API 阅读，完成 node spawn 与后端健康检查，记录 git 状态，执行 pnpm type-check、pnpm build、pnpm test:e2e -- tests/e2e/smoke.spec.ts 均通过，并使用 agen...
 - 原始证据仍以 `05-verification/` 中的文件为准。
 <!-- AUTO-QA-SUMMARY:END -->

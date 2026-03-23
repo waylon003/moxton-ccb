@@ -14,11 +14,11 @@
 
 ## 当前实施状态（阶段 1）
 
-当前代码已落地两层 headless 能力：`doc-updater` / `repo-committer` 通过 `scripts/start-headless-run.ps1` 走 headless `codex exec`，并且 `backend-dev` 已通过 `dispatch_mode=headless` 接入控制器主链。
+当前代码已落地两层 headless 能力：`doc-updater` / `repo-committer` 通过 `scripts/start-headless-run.ps1` 走 headless `codex exec`，并且三个 dev worker（`backend-dev` / `shop-fe-dev` / `admin-fe-dev`）已通过 `dispatch_mode=headless` 接入控制器主链。
 
 当前仍保留交互式链路的部分：
 
-- `backend-dev` 已改为 headless 派遣；其余 dev / qa 仍基于 WezTerm pane 派遣
+- 三个 dev worker（`backend-dev` / `shop-fe-dev` / `admin-fe-dev`）已改为 headless 派遣；当前仅 QA 仍基于 WezTerm pane 派遣
 - Team Lead 仍通过现有 Claude Code 交互会话工作
 - route-monitor 与 route-notifier 继续沿用现有收口与提醒链路
 

@@ -1,4 +1,4 @@
-# Multi-agent Relay Protocol
+﻿# Multi-agent Relay Protocol
 
 使用本协议统一 Team Lead 与各 Worker 的通信链路。主通道为 MCP `report_route`，禁止把 `[ROUTE]...[/ROUTE]` 当作必需协议。
 
@@ -110,6 +110,11 @@ next_action_needed=<希望 Team Lead 执行的动作>
 - 前端 QA 必须包含并通过：`checks.ui`、`checks.console`、`checks.network`、`checks.failure_path`。
 - 后端 QA 必须包含并通过：`checks.contract`、`checks.network`、`checks.failure_path`。
 - 每个检查项都必须带 `evidence` 文件路径且文件可访问。
+- QA 证据的唯一合法磁盘根目录是 `E:\moxton-ccb\05-verification\<TASK-ID>\`。禁止把证据写到业务仓库自己的 `05-verification/`。
+- `report_route(status=success)` 的 JSON 中，`evidence` 仍必须填写相对路径 `05-verification/<TASK-ID>/...`；但这些相对路径在磁盘上必须真实落到 `E:\moxton-ccb\05-verification\<TASK-ID>\`。
+- 在发送 `status=success` 之前，必须先运行：
+  `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\validate-qa-evidence.ps1" -TaskId "<TASK-ID>" -EvidencePaths <全部 evidence 路径>`
+- 若校验失败，只能回传 `status=blocked`，并说明 `blocker_type=qa_evidence_invalid`；禁止带着缺失/错根目录的证据继续回传 `success`。
 - `checks.network.has_5xx=true` 时禁止回传 `success`。
 
 不满足以上条件时，route-monitor 会自动把该条 success 降级为 `blocked`，并要求补证据后重跑 QA。

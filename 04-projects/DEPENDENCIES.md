@@ -1,11 +1,11 @@
 ---
-last_verified: 2026-03-20
+last_verified: 2026-03-23
 verified_against: [BACKEND-016, BACKEND-014, SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
 # 跨项目依赖关系
 
-> **更新时间**: 2026-03-20
+> **更新时间**: 2026-03-23
 > **用途**: 清晰展示三个项目之间的 API 依赖和数据流向
 
 ## 依赖关系图
@@ -44,7 +44,7 @@ verified_against: [BACKEND-016, BACKEND-014, SHOP-FE-011, SHOP-FE-010, SHOP-FE-0
 
 ## API 依赖详情
 
-联调与 QA 的公共可用性探针统一为 `GET http://localhost:3033/health` 与 `GET http://localhost:3033/version`，依据 `BACKEND-016` QA `PASS`。
+联调与 QA 的公共可用性探针统一为 `GET http://localhost:3033/health` 与 `GET http://localhost:3033/version`；已于 2026-03-23 文档同步时再次 spot check，当前仍分别返回 `200` 与 `200`，未知根路由 `GET /health-not-found` 返回标准 `404` JSON 包。
 
 ### nuxt-moxton → moxton-lotapi
 

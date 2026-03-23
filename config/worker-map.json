@@ -1,4 +1,4 @@
-{
+﻿{
     "BACKEND":  {
                     "dev":  "backend-dev",
                     "dev_pool":  [
@@ -14,7 +14,7 @@
                     "workdir":  "E:\\moxton-lotapi",
                     "domain":  "backend",
                     "dev_dispatch_mode":  "headless",
-                    "qa_dispatch_mode":  "pane"
+                    "qa_dispatch_mode":  "headless"
                 },
     "ADMIN-FE":  {
                      "dev":  "admin-fe-dev",
@@ -30,8 +30,8 @@
                      "engine":  "codex",
                      "workdir":  "E:\\moxton-lotadmin",
                      "domain":  "admin-frontend",
-                     "dev_dispatch_mode":  "pane",
-                     "qa_dispatch_mode":  "pane"
+                     "dev_dispatch_mode":  "headless",
+                     "qa_dispatch_mode":  "headless"
                  },
     "SHOP-FE":  {
                     "dev":  "shop-fe-dev",
@@ -49,7 +49,7 @@
                     "qa_engine":  "codex",
                     "workdir":  "E:\\nuxt-moxton",
                     "domain":  "shop-frontend",
-                    "dev_dispatch_mode":  "pane",
-                    "qa_dispatch_mode":  "pane"
+                    "dev_dispatch_mode":  "headless",
+                    "qa_dispatch_mode":  "headless"
                 }
 }

@@ -82,6 +82,8 @@ $monitorPidFile = Join-Path $env:TEMP "moxton-route-monitor.pid"
 $monitorPaneFile = Join-Path $env:TEMP "moxton-route-monitor-pane.id"
 $notifierPidFile = Join-Path $env:TEMP "moxton-route-notifier.pid"
 $notifierPaneFile = Join-Path $env:TEMP "moxton-route-notifier-pane.id"
+$richMonitorPidFile = Join-Path $env:TEMP "moxton-rich-monitor.pid"
+$richMonitorPaneFile = Join-Path $env:TEMP "moxton-rich-monitor-pane.id"
 $paneApprovalWatcherStatePath = Join-Path $rootDir "config\pane-approval-watchers.json"
 $localApprovalEventsPath = Join-Path $rootDir "config\local-approval-events.jsonl"
 $localApprovalStatePath = Join-Path $rootDir "config\local-approval-state.json"
@@ -92,6 +94,7 @@ $taskAttemptHistoryPath = Join-Path $rootDir "config\task-attempt-history.json"
 $notifySentinelReadyPath = Join-Path $rootDir "config\notify-sentinel.ready.json"
 $routeMonitorStatePath = Join-Path $rootDir "config\route-monitor-state.json"
 $routeNotifierStatePath = Join-Path $rootDir "config\route-notifier-state.json"
+$richMonitorStatePath = Join-Path $rootDir "config\rich-monitor-state.json"
 $teamLeadDeliveryLogPath = Join-Path $rootDir "config\teamlead-delivery.jsonl"
 $teamLeadDeliveryFailureLogPath = Join-Path $rootDir "config\teamlead-delivery-failures.jsonl"
 $dispatchMutexName = "Global\MoxtonTeamLeadDispatchMutex"
@@ -293,6 +296,7 @@ function Read-JsonLinesFile {
 function Get-TeamLeadDeliverySnapshot {
     $monitor = Read-RouteMonitorState
     $notifier = Read-RouteNotifierState
+    $rich = Read-RichMonitorState
 
     $records = @(Read-JsonLinesFile -Path $teamLeadDeliveryLogPath -Tail 200)
     $failureRecords = @(Read-JsonLinesFile -Path $teamLeadDeliveryFailureLogPath -Tail 80 | Sort-Object at -Descending)
@@ -309,6 +313,7 @@ function Get-TeamLeadDeliverySnapshot {
     return [pscustomobject]@{
         monitor = $monitor
         notifier = $notifier
+        rich = $rich
         success_count = $successCount
         failure_count = $failureCount
         unresolved = $unresolved
@@ -323,35 +328,37 @@ function Invoke-NotifyReady {
     Write-Host '[INFO] notify-ready 已弃用。当前由 route-monitor 写事件、route-notifier 独立通知 Team Lead，无需 notify-sentinel ready 标记。' -ForegroundColor Yellow
 }
 function Resolve-TeamLeadPaneId {
-    if ($env:TEAM_LEAD_PANE_ID) {
-        return $env:TEAM_LEAD_PANE_ID
-    }
-    if ($env:WEZTERM_PANE) {
-        $env:TEAM_LEAD_PANE_ID = $env:WEZTERM_PANE
-        return $env:TEAM_LEAD_PANE_ID
-    }
-    if ($env:WEZTERM_PANE_ID) {
-        $env:TEAM_LEAD_PANE_ID = $env:WEZTERM_PANE_ID
+    $normalizedEnvTeamLead = Normalize-PaneId ([string]$env:TEAM_LEAD_PANE_ID)
+    if ($normalizedEnvTeamLead) {
+        $env:TEAM_LEAD_PANE_ID = $normalizedEnvTeamLead
         return $env:TEAM_LEAD_PANE_ID
     }
     try {
-        $panes = wezterm cli list --format json 2>$null | ConvertFrom-Json
-        $tlPane = $panes | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1
-        if ($tlPane) {
-            $env:TEAM_LEAD_PANE_ID = $tlPane.pane_id.ToString()
-            return $env:TEAM_LEAD_PANE_ID
+        $raw = wezterm cli list --format json 2>$null
+        if ($raw) {
+            try {
+                $panes = @($raw | ConvertFrom-Json)
+                $tlPane = $panes | Where-Object { ([string]$_.pane_id) -eq '0' } | Select-Object -First 1
+                if (-not $tlPane) {
+                    $tlPane = $panes | Where-Object { $_.title -like '*claude*' -or $_.title -like '*codex*' } | Select-Object -First 1
+                }
+                if (-not $tlPane) {
+                    $tlPane = $panes | Select-Object -First 1
+                }
+                if ($tlPane -and $tlPane.pane_id) {
+                    $resolvedPaneId = Normalize-PaneId ([string]$tlPane.pane_id)
+                    if ($resolvedPaneId) {
+                        $env:TEAM_LEAD_PANE_ID = $resolvedPaneId
+                        return $env:TEAM_LEAD_PANE_ID
+                    }
+                }
+            } catch {}
         }
     } catch {}
-    Write-Host '[FAIL] Cannot detect Team Lead Pane ID.' -ForegroundColor Red
-    Write-Host '请直接在 Team Lead 所在的 WezTerm 窗口执行以下任一方案（自行决定，无需回报输出）:' -ForegroundColor Yellow
-    Write-Host '  方案 A: 取第一个 pane（最省事）' -ForegroundColor DarkGray
-    Write-Host '    $env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Select-Object -First 1).pane_id' -ForegroundColor White
-    Write-Host '  方案 B: 按标题匹配 Claude/Codex pane' -ForegroundColor DarkGray
-    Write-Host '    $env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { $_.title -like ''*claude*'' -or $_.title -like ''*codex*'' } | Select-Object -First 1).pane_id' -ForegroundColor White
-    Write-Host '  方案 C: 直接指定已知 pane_id' -ForegroundColor DarkGray
-    Write-Host '    $env:TEAM_LEAD_PANE_ID = ''<pane_id>''' -ForegroundColor White
-    Write-Host '若 wezterm cli list 为空，请先确认 WezTerm 正在运行。' -ForegroundColor Yellow
-    exit 1}
+    $env:TEAM_LEAD_PANE_ID = '0'
+    Write-Host '[WARN] Cannot reliably detect Team Lead Pane ID. Fallback to pane 0.' -ForegroundColor Yellow
+    return $env:TEAM_LEAD_PANE_ID
+}
 
 function Normalize-PaneId([string]$value) {
     if (-not $value) { return $null }
@@ -377,6 +384,26 @@ function Read-RouteMonitorState {
 
 function Read-RouteNotifierState {
     return (Read-ProcessStateFile -Path $routeNotifierStatePath)
+}
+
+function Read-RichMonitorState {
+    return (Read-ProcessStateFile -Path $richMonitorStatePath)
+}
+
+function Test-RichMonitorEnabled {
+    $raw = [string]$env:CCB_DISABLE_RICH_MONITOR
+    if (-not $raw) { return $true }
+    switch ($raw.Trim().ToLowerInvariant()) {
+        '1' { return $false }
+        'true' { return $false }
+        'yes' { return $false }
+        'on' { return $false }
+        default { return $true }
+    }
+}
+
+function Get-RichMonitorPaneId {
+    return (Get-TrackedPaneId -PaneFile $richMonitorPaneFile -StatePath $richMonitorStatePath -StateField 'monitor_pane_id')
 }
 
 function Get-TrackedPaneId([string]$PaneFile, [string]$StatePath, [string]$StateField) {
@@ -2143,6 +2170,137 @@ function Ensure-RouteNotifier($tlPaneId) {
     }
 }
 
+function Ensure-RichMonitor($tlPaneId) {
+    if (-not (Test-RichMonitorEnabled)) {
+        Write-Host '[INFO] rich-monitor disabled by CCB_DISABLE_RICH_MONITOR=1' -ForegroundColor DarkGray
+        return
+    }
+
+    $richScript = Join-Path $scriptDir 'start-rich-monitor.ps1'
+    if (-not (Test-Path $richScript)) {
+        Write-Host '[WARN] start-rich-monitor.ps1 not found, skipping Rich monitor' -ForegroundColor Yellow
+        return
+    }
+
+    $richRunning = $false
+    $needsRestart = $false
+    $savedPid = ''
+    $savedPaneId = Get-RichMonitorPaneId
+    $proc = $null
+    $richState = Read-RichMonitorState
+
+    if (Test-Path $richMonitorPidFile) {
+        $savedPid = (Get-Content $richMonitorPidFile -Raw).Trim()
+    } elseif ($richState -and $richState.pid) {
+        $savedPid = [string]$richState.pid
+    }
+    if ($savedPid) {
+        try {
+            $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
+            $richRunning = ($null -ne $proc)
+        } catch {}
+    }
+    if (-not $richRunning) {
+        Remove-Item $richMonitorPidFile -Force -ErrorAction SilentlyContinue
+    } elseif (Test-Path $richScript) {
+        try {
+            $scriptWriteTime = (Get-Item $richScript).LastWriteTime
+            if ($scriptWriteTime -gt $proc.StartTime) {
+                $needsRestart = $true
+                Write-Host ('[WARN] rich-monitor binary drift detected: script=' + $scriptWriteTime.ToString('yyyy-MM-dd HH:mm:ss') + ' > process=' + $proc.StartTime.ToString('yyyy-MM-dd HH:mm:ss')) -ForegroundColor Yellow
+            }
+        } catch {}
+    }
+
+    if ($richState) {
+        if ($richState.note -and ([string]$richState.note).Trim().Length -gt 0) {
+            $noteText = [string]$richState.note
+            if ($noteText -match 'error|traceback|fail') {
+                $needsRestart = $true
+                Write-Host ('[WARN] rich-monitor state reported error note: ' + $noteText) -ForegroundColor Yellow
+            }
+        }
+        if ($richState.status -and ([string]$richState.status -eq 'error')) {
+            $needsRestart = $true
+            Write-Host '[WARN] rich-monitor state=error, will restart.' -ForegroundColor Yellow
+        }
+    }
+
+    if ($richRunning -and $needsRestart) {
+        try {
+            Stop-Process -Id $savedPid -Force -ErrorAction Stop
+            Start-Sleep -Milliseconds 300
+        } catch {
+            Write-Host ('[WARN] Failed to stop stale rich-monitor PID ' + $savedPid + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+        }
+        $richRunning = $false
+        Remove-Item $richMonitorPidFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($savedPaneId -and (-not $richRunning -or $needsRestart)) {
+        try {
+            wezterm cli kill-pane --pane-id $savedPaneId 2>$null | Out-Null
+            Write-Host ('[INFO] Closed stale rich-monitor pane ' + $savedPaneId) -ForegroundColor DarkGray
+        } catch {
+            Write-Host ('[WARN] Failed to close stale rich-monitor pane ' + $savedPaneId + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+        }
+        Remove-Item $richMonitorPaneFile -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not $richRunning) {
+        Write-Host '[INFO] Starting rich-monitor...' -ForegroundColor Yellow
+        $panes = Get-WeztermPanes
+        if (-not $panes -or @($panes).Count -eq 0) {
+            Write-Host '[WARN] Cannot start rich-monitor: wezterm cli is unavailable in current session.' -ForegroundColor Yellow
+            Write-Host '       Rich monitor is optional; dispatch will continue without it.' -ForegroundColor DarkGray
+            return
+        }
+
+        $spawnArgs = @(
+            'cli', 'spawn',
+            '--cwd', $rootDir,
+            'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', $richScript
+        )
+        $spawnOutput = & wezterm @spawnArgs 2>&1
+        $newPaneId = Normalize-PaneId ([string]$spawnOutput)
+        if ($LASTEXITCODE -ne 0 -or -not $newPaneId) {
+            Write-Host ('[WARN] rich-monitor spawn failed: ' + [string]$spawnOutput) -ForegroundColor Yellow
+            return
+        }
+
+        Set-Content $richMonitorPaneFile $newPaneId -Force -Encoding UTF8
+        $launchDeadline = (Get-Date).AddSeconds(8)
+        $launchedPid = $null
+        do {
+            Start-Sleep -Milliseconds 300
+            $latestState = Read-RichMonitorState
+            if ($latestState -and $latestState.pid) {
+                $statePane = $null
+                if ($latestState.monitor_pane_id) {
+                    $statePane = Normalize-PaneId ([string]$latestState.monitor_pane_id)
+                }
+                if ((-not $statePane) -or $statePane -eq $newPaneId) {
+                    $launchedPid = [string]$latestState.pid
+                }
+            }
+        } while ((-not $launchedPid) -and (Get-Date) -lt $launchDeadline)
+
+        if ($launchedPid) {
+            Set-Content $richMonitorPidFile $launchedPid -Force -Encoding UTF8
+            Write-Host ('[OK] rich-monitor started (pane ' + $newPaneId + ', PID ' + $launchedPid + ')') -ForegroundColor Green
+        } else {
+            Remove-Item $richMonitorPidFile -Force -ErrorAction SilentlyContinue
+            Write-Host ('[WARN] rich-monitor pane started (pane ' + $newPaneId + '), but PID sync timed out. Check status.') -ForegroundColor Yellow
+        }
+    } else {
+        if ($savedPaneId) {
+            Write-Host ('[OK] rich-monitor running (PID ' + $savedPid + ', pane ' + $savedPaneId + ')') -ForegroundColor Green
+        } else {
+            Write-Host ('[OK] rich-monitor running (PID ' + $savedPid + ')') -ForegroundColor Green
+        }
+    }
+}
+
 function Test-WorkerPaneAlive([string]$WorkerName) {
     if (-not $WorkerName) { return $false }
     $regScript = Join-Path $scriptDir "worker-registry.ps1"
@@ -2360,6 +2518,7 @@ function Invoke-Bootstrap {
     Write-Host '--- Route Monitor ---' -ForegroundColor Cyan
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
+    Ensure-RichMonitor $tlPaneId
 
     Set-Content $bootstrapFlag ('bootstrapped=' + (Get-Date -Format 'o')) -Force
     Write-Host ''
@@ -2377,7 +2536,8 @@ function Invoke-Bootstrap {
     Write-Host ""
     Write-Host '--- Route Notifications ---' -ForegroundColor Cyan
     Write-Host '  route-monitor 只负责收口 MCP route、写锁与写事件；route-notifier 独立负责 WezTerm 唤醒 Team Lead。' -ForegroundColor Yellow
-    Write-Host '  默认开启；如需关闭可设置：CCB_ROUTE_MONITOR_NOTIFY=0' -ForegroundColor DarkGray
+    Write-Host '  rich-monitor 为独立只读观察层，默认随 bootstrap / dispatch 自动拉起。' -ForegroundColor Yellow
+    Write-Host '  默认开启；如需关闭可设置：CCB_ROUTE_MONITOR_NOTIFY=0 或 CCB_DISABLE_RICH_MONITOR=1' -ForegroundColor DarkGray
     Write-Host '  仅对关键 route 变化提醒；普通 in_progress 心跳不会持续刷屏。' -ForegroundColor DarkGray
 
     Write-Host ''
@@ -2512,6 +2672,7 @@ function Invoke-Dispatch {
     # 先确保监控已启动，避免 route 回调无人接管
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
+    Ensure-RichMonitor $tlPaneId
 
     if ($devDispatchMode -eq 'headless') {
         if ($devEngine.ToLowerInvariant() -ne 'codex') {
@@ -2598,6 +2759,7 @@ function Invoke-Dispatch {
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
+    Ensure-RichMonitor $tlPaneId
     if ($devDispatchMode -eq 'pane') {
         Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $devWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
     }
@@ -2614,6 +2776,7 @@ function Invoke-Dispatch {
     Write-Host ''
     Write-Host '[NEXT] Background watchers:' -ForegroundColor Cyan
     Write-Host '  route-monitor: auto ensured by controller' -ForegroundColor White
+    Write-Host '  rich-monitor: auto ensured by controller (read-only dashboard)' -ForegroundColor White
     if ($devDispatchMode -eq 'pane') {
         Write-Host '  pane-approval-watcher: auto ensured by controller' -ForegroundColor White
         $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\pane-approval-watcher.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $devWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -RunId ' + $runId
@@ -2701,6 +2864,7 @@ function Invoke-DispatchQA {
     # 先确保监控已启动，避免 route 回调无人接管
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
+    Ensure-RichMonitor $tlPaneId
 
     if ($qaDispatchMode -eq 'headless') {
         if ($qaEngine.ToLowerInvariant() -ne 'codex') {
@@ -2793,6 +2957,7 @@ function Invoke-DispatchQA {
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
+    Ensure-RichMonitor $tlPaneId
     if ($qaDispatchMode -eq 'pane') {
         Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $qaWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
     }
@@ -2809,6 +2974,7 @@ function Invoke-DispatchQA {
     Write-Host ''
     Write-Host '[NEXT] Background watchers:' -ForegroundColor Cyan
     Write-Host '  route-monitor: auto ensured by controller' -ForegroundColor White
+    Write-Host '  rich-monitor: auto ensured by controller (read-only dashboard)' -ForegroundColor White
     if ($qaDispatchMode -eq 'pane') {
         Write-Host '  pane-approval-watcher: auto ensured by controller' -ForegroundColor White
         $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\pane-approval-watcher.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $qaWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -RunId ' + $runId
@@ -3380,6 +3546,41 @@ function Invoke-Status {
     } else {
         Write-Host '  (route-notifier state not found)' -ForegroundColor Yellow
     }
+    if (-not (Test-RichMonitorEnabled)) {
+        Write-Host '  rich-monitor disabled by CCB_DISABLE_RICH_MONITOR=1' -ForegroundColor DarkGray
+    } elseif ($delivery.rich) {
+        $richStatus = if ($delivery.rich.status) { [string]$delivery.rich.status } else { 'unknown' }
+        $richColor = switch ($richStatus) {
+            'running' { 'Green' }
+            'starting' { 'Yellow' }
+            'error' { 'Red' }
+            default { 'Gray' }
+        }
+        $richPaneText = if ($delivery.rich.monitor_pane_id) { [string]$delivery.rich.monitor_pane_id } else { '-' }
+        $richLastLoop = '-'
+        if ($delivery.rich.last_loop_at) {
+            $richLastLoopUtc = ConvertTo-UtcDateSafe $delivery.rich.last_loop_at
+            if ($richLastLoopUtc) { $richLastLoop = Get-TaskActivityAgeText -ActivityUtc $richLastLoopUtc }
+        }
+        $richTaskCount = 0
+        if ($null -ne $delivery.rich.visible_tasks) {
+            try {
+                if ($delivery.rich.visible_tasks -is [System.Collections.IEnumerable] -and -not ($delivery.rich.visible_tasks -is [string])) {
+                    $richTaskCount = @($delivery.rich.visible_tasks).Count
+                } else {
+                    $richTaskCount = [int]$delivery.rich.visible_tasks
+                }
+            } catch {
+                $richTaskCount = 0
+            }
+        }
+        Write-Host ('  rich-monitor status=' + $richStatus + ' pane=' + $richPaneText + ' role=dashboard last_loop=' + $richLastLoop + ' visible_tasks=' + $richTaskCount) -ForegroundColor $richColor
+        if ($delivery.rich.note) {
+            Write-Host ('  rich note=' + [string]$delivery.rich.note) -ForegroundColor DarkGray
+        }
+    } else {
+        Write-Host '  (rich-monitor state not found)' -ForegroundColor Yellow
+    }
     Write-Host ('  recent delivery attempts: ok=' + $delivery.success_count + ' fail=' + $delivery.failure_count) -ForegroundColor DarkGray
     $unresolvedDeliveries = @($delivery.unresolved | Select-Object -First 5)
     if ($unresolvedDeliveries.Count -eq 0) {
@@ -3405,7 +3606,6 @@ function Invoke-Status {
             Write-Host ('  ' + $task.PadRight(18) + ' worker=' + $worker + ' status=' + $status + ' action=' + $action + ' attempt=' + $attempt + ' last=' + $age + ' err=' + $error) -ForegroundColor Yellow
         }
     }
-
     # Approval requests
     Write-Host '--- Approval Requests ---' -ForegroundColor Cyan
     $cleanupResult = Cleanup-ExpiredApprovalRequests -Persist
@@ -4733,6 +4933,3 @@ switch ($Action) {
     "approve-local-session" { Invoke-LocalApprovalDecision -decision 'approve' -approvalMode 'session' }
     "deny-local"            { Invoke-LocalApprovalDecision -decision 'deny' -approvalMode 'default' }
 }
-
-
-

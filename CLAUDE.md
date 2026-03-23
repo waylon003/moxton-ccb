@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 本文件用于指导 Claude Code 在 `E:\moxton-ccb` 仓库中的 Team Lead 协作流程。
 
@@ -70,7 +70,7 @@ wezterm cli send-text --pane-id 123 --no-paste "hello"
 ### 派遣/执行
 
 - Team Lead 通过 `teamlead-control.ps1` 执行 `dispatch / dispatch-qa / archive`。
-- 控制器根据 `config/worker-map.json` 选择引擎。当前为混合态：`backend-dev`、`doc-updater`、`repo-committer` 已改为 headless `codex exec`；其余 dev / qa 仍通过 `config/worker-panels.json` / WezTerm pane 注册表定位 worker。
+- 控制器根据 `config/worker-map.json` 选择引擎。当前业务主链的 dev / QA 与辅助 worker（`doc-updater`、`repo-committer`）都已切到 headless `codex exec`；仅保留 WezTerm pane 兼容层用于人工调试或旧链路回退。
 - 每次 `dispatch/dispatch-qa` 都会生成新的 `run_id`。
 - `dispatch/dispatch-qa` 会自动确保 `route-monitor` 与 `route-notifier` 常驻。
 - `status` 会优先读取 headless run 的 `state.json`，直接显示 `runtime / pid / proc / rt_last / run_dir / note`，不要再只凭 pane 文本判断是否卡住。
@@ -107,13 +107,13 @@ wezterm cli send-text --pane-id 123 --no-paste "hello"
 
 ## Headless 迁移现状
 
-当前系统已经进入混合编排阶段：
+当前系统已经进入“交互式 Team Lead + headless 执行层”阶段：
 
-- `doc-updater` 与 `repo-committer` 已切到 headless runner
-- `dispatch / dispatch-qa` 主链仍是 WezTerm pane worker
+- `doc-updater`、`repo-committer`、三个 dev worker 与三个 QA worker（`backend-qa` / `shop-fe-qa` / `admin-fe-qa`）已切到 headless runner
+- `dispatch / dispatch-qa` 主链默认走 headless runner；WezTerm pane 仅作为兼容回退路径
 - `route-monitor -> teamlead-alerts.jsonl -> route-notifier` 仍是统一回传与唤醒链
 
-因此，现阶段 Team Lead 在做主链决策时应把系统理解为“交互式指挥 + 混合执行层”，而不是默认所有 worker 都已经 headless。
+因此，现阶段 Team Lead 在做主链决策时应把系统理解为“交互式指挥 + headless 执行层”；只有在明确回退或人工调试时才应重新启用 pane worker。
 
 ---
 ## 本地审批兼容链路
