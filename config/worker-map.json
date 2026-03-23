@@ -1,49 +1,55 @@
 {
-  "BACKEND": {
-    "dev": "backend-dev",
-    "dev_pool": [
-      "backend-dev",
-      "backend-dev-2"
-    ],
-    "qa": "backend-qa",
-    "qa_pool": [
-      "backend-qa",
-      "backend-qa-2"
-    ],
-    "engine": "codex",
-    "workdir": "E:\\moxton-lotapi",
-    "domain": "backend"
-  },
-  "ADMIN-FE": {
-    "dev": "admin-fe-dev",
-    "dev_pool": [
-      "admin-fe-dev",
-      "admin-fe-dev-2"
-    ],
-    "qa": "admin-fe-qa",
-    "qa_pool": [
-      "admin-fe-qa",
-      "admin-fe-qa-2"
-    ],
-    "engine": "codex",
-    "workdir": "E:\\moxton-lotadmin",
-    "domain": "admin-frontend"
-  },
-  "SHOP-FE": {
-    "dev": "shop-fe-dev",
-    "dev_pool": [
-      "shop-fe-dev",
-      "shop-fe-dev-2"
-    ],
-    "qa": "shop-fe-qa",
-    "qa_pool": [
-      "shop-fe-qa",
-      "shop-fe-qa-2"
-    ],
-    "engine": "codex",
-    "dev_engine": "codex",
-    "qa_engine": "codex",
-    "workdir": "E:\\nuxt-moxton",
-    "domain": "shop-frontend"
-  }
+    "BACKEND":  {
+                    "dev":  "backend-dev",
+                    "dev_pool":  [
+                                     "backend-dev",
+                                     "backend-dev-2"
+                                 ],
+                    "qa":  "backend-qa",
+                    "qa_pool":  [
+                                    "backend-qa",
+                                    "backend-qa-2"
+                                ],
+                    "engine":  "codex",
+                    "workdir":  "E:\\moxton-lotapi",
+                    "domain":  "backend",
+                    "dev_dispatch_mode":  "headless",
+                    "qa_dispatch_mode":  "pane"
+                },
+    "ADMIN-FE":  {
+                     "dev":  "admin-fe-dev",
+                     "dev_pool":  [
+                                      "admin-fe-dev",
+                                      "admin-fe-dev-2"
+                                  ],
+                     "qa":  "admin-fe-qa",
+                     "qa_pool":  [
+                                     "admin-fe-qa",
+                                     "admin-fe-qa-2"
+                                 ],
+                     "engine":  "codex",
+                     "workdir":  "E:\\moxton-lotadmin",
+                     "domain":  "admin-frontend",
+                     "dev_dispatch_mode":  "pane",
+                     "qa_dispatch_mode":  "pane"
+                 },
+    "SHOP-FE":  {
+                    "dev":  "shop-fe-dev",
+                    "dev_pool":  [
+                                     "shop-fe-dev",
+                                     "shop-fe-dev-2"
+                                 ],
+                    "qa":  "shop-fe-qa",
+                    "qa_pool":  [
+                                    "shop-fe-qa",
+                                    "shop-fe-qa-2"
+                                ],
+                    "engine":  "codex",
+                    "dev_engine":  "codex",
+                    "qa_engine":  "codex",
+                    "workdir":  "E:\\nuxt-moxton",
+                    "domain":  "shop-frontend",
+                    "dev_dispatch_mode":  "pane",
+                    "qa_dispatch_mode":  "pane"
+                }
 }

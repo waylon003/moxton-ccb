@@ -70,7 +70,7 @@ wezterm cli send-text --pane-id 123 --no-paste "hello"
 ### 派遣/执行
 
 - Team Lead 通过 `teamlead-control.ps1` 执行 `dispatch / dispatch-qa / archive`。
-- 控制器根据 `config/worker-map.json` 选择引擎。当前为混合态：dev / qa 仍通过 `config/worker-panels.json` / WezTerm pane 注册表定位 worker；`doc-updater` / `repo-committer` 已改为 headless `codex exec`。
+- 控制器根据 `config/worker-map.json` 选择引擎。当前为混合态：`backend-dev`、`doc-updater`、`repo-committer` 已改为 headless `codex exec`；其余 dev / qa 仍通过 `config/worker-panels.json` / WezTerm pane 注册表定位 worker。
 - 每次 `dispatch/dispatch-qa` 都会生成新的 `run_id`。
 - `dispatch/dispatch-qa` 会自动确保 `route-monitor` 与 `route-notifier` 常驻。
 - 只有 pane worker 会自动附着 `pane-approval-watcher`；headless worker 不再依赖此兼容层。

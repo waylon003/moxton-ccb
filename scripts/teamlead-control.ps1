@@ -1282,6 +1282,24 @@ function Get-KnownWorkersFromMap($workerMap) {
     return $known
 }
 
+function Resolve-DispatchMode($cfg, [string]$phase) {
+    if (-not $cfg) { return 'pane' }
+    $phaseKey = if ($phase) { ($phase.ToLowerInvariant() + '_dispatch_mode') } else { '' }
+    $raw = $null
+    if ($phaseKey -and $cfg.PSObject.Properties.Name -contains $phaseKey) {
+        $raw = $cfg.$phaseKey
+    }
+    if (-not $raw -and $cfg.PSObject.Properties.Name -contains 'dispatch_mode') {
+        $raw = $cfg.dispatch_mode
+    }
+    $mode = if ($raw) { [string]$raw } else { 'pane' }
+    $mode = $mode.Trim().ToLowerInvariant()
+    if ($mode -notin @('pane', 'headless')) {
+        throw ('Unsupported dispatch mode: ' + $mode + ' phase=' + $phase)
+    }
+    return $mode
+}
+
 function Reconcile-WorkerRegistryFromPanes {
     $panes = Get-WeztermPanes
     if (-not $panes) { return $false }
@@ -2317,9 +2335,11 @@ function Invoke-Dispatch {
         Write-Host ''
         Write-Host '[DRY-RUN] Would dispatch:' -ForegroundColor Magenta
         Write-Host ('  Task:   ' + $TaskId) -ForegroundColor White
+        $devDispatchMode = Resolve-DispatchMode -cfg $wConfig -phase 'dev'
         Write-Host ('  Worker: ' + $devWorker) -ForegroundColor White
         Write-Host ('  File:   ' + $taskFile.Name) -ForegroundColor White
         Write-Host ('  Domain: ' + $domain) -ForegroundColor White
+        Write-Host ('  Mode:   ' + $devDispatchMode) -ForegroundColor White
         Write-Host '[DRY-RUN] No changes made.' -ForegroundColor Magenta
         return
     }
@@ -2327,32 +2347,69 @@ function Invoke-Dispatch {
     # Ensure worker is running
     $defaultDevEngine = if ($wConfig.dev_engine) { [string]$wConfig.dev_engine } else { [string]$wConfig.engine }
     $devEngine = if ($DispatchEngine) { [string]$DispatchEngine } else { $defaultDevEngine }
+    $devDispatchMode = Resolve-DispatchMode -cfg $wConfig -phase 'dev'
     $runId = New-TaskRunId -TaskId $TaskId -Phase "dev"
     if ($DispatchEngine) {
         Write-Host ('[INFO] Engine override: ' + $defaultDevEngine + ' -> ' + $devEngine) -ForegroundColor Cyan
     }
-    $devConfig = @{ workdir = $wConfig.workdir; engine = $devEngine }
-    $registeredDevEngine = Get-RegisteredWorkerEngine -WorkerName $devWorker
-    $forceRestartForEngine = $false
-    if ($registeredDevEngine -and $registeredDevEngine.ToLowerInvariant() -ne $devEngine.ToLowerInvariant()) {
-        Write-Host ('[INFO] Worker ' + $devWorker + ' engine mismatch (' + $registeredDevEngine + ' -> ' + $devEngine + '), forcing restart...') -ForegroundColor Yellow
-        $forceRestartForEngine = $true
-    }
-    $paneId = Ensure-WorkerRunning $devWorker $devConfig $tlPaneId -ForceRestart:$forceRestartForEngine
+
+    $paneId = ''
+    $headlessRunDir = ''
+    $headlessPid = 0
 
     # 先确保监控已启动，避免 route 回调无人接管
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
 
-    # Dispatch task (BEFORE updating lock)
-    $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
-    & $dispatchScript -WorkerPaneId $paneId -WorkerName $devWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $devEngine -TeamLeadPaneId $tlPaneId -RunId $runId
-    $dispatchExit = $LASTEXITCODE
-    if ($dispatchExit -ne 0) {
-        Write-Host ('[FAIL] Dispatch failed for ' + $TaskId + ' (worker=' + $devWorker + ', pane=' + $paneId + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
-        Write-Host '       Task lock not updated. Please check worker pane output and rerun dispatch.' -ForegroundColor Yellow
-        Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $devWorker -Quiet | Out-Null
-        exit 1
+    if ($devDispatchMode -eq 'headless') {
+        if ($devEngine.ToLowerInvariant() -ne 'codex') {
+            Write-Host ('[FAIL] Headless dispatch currently supports codex only. task=' + $TaskId + ' worker=' + $devWorker + ' engine=' + $devEngine) -ForegroundColor Red
+            exit 1
+        }
+        $headlessScript = Join-Path $scriptDir 'start-headless-run.ps1'
+        if (-not (Test-Path $headlessScript)) {
+            Write-Host ('[FAIL] Headless runner not found: ' + $headlessScript) -ForegroundColor Red
+            exit 1
+        }
+        $dispatchJson = & $headlessScript -TaskId $TaskId -WorkerName $devWorker -WorkDir $wConfig.workdir -Engine $devEngine -TaskFilePath $taskFile.FullName -RunId $runId -EmitJson
+        $dispatchExit = $LASTEXITCODE
+        if ($dispatchExit -ne 0) {
+            Write-Host ('[FAIL] Headless dispatch failed for ' + $TaskId + ' (worker=' + $devWorker + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
+            Write-Host '       Task lock not updated. Please inspect runtime/runs and rerun dispatch.' -ForegroundColor Yellow
+            exit 1
+        }
+        try {
+            $dispatchResp = $dispatchJson | ConvertFrom-Json
+        } catch {
+            Write-Host '[FAIL] Headless dispatch did not return machine-readable result.' -ForegroundColor Red
+            exit 1
+        }
+        if (-not $dispatchResp -or [string]$dispatchResp.status -ne 'dispatched') {
+            Write-Host ('[FAIL] Headless dispatch failed: status=' + [string]$dispatchResp.status + ' message=' + [string]$dispatchResp.message) -ForegroundColor Red
+            exit 1
+        }
+        $headlessRunDir = if ($dispatchResp.runDir) { [string]$dispatchResp.runDir } else { '' }
+        $headlessPid = if ($dispatchResp.pid) { [int]$dispatchResp.pid } else { 0 }
+    } else {
+        $devConfig = @{ workdir = $wConfig.workdir; engine = $devEngine }
+        $registeredDevEngine = Get-RegisteredWorkerEngine -WorkerName $devWorker
+        $forceRestartForEngine = $false
+        if ($registeredDevEngine -and $registeredDevEngine.ToLowerInvariant() -ne $devEngine.ToLowerInvariant()) {
+            Write-Host ('[INFO] Worker ' + $devWorker + ' engine mismatch (' + $registeredDevEngine + ' -> ' + $devEngine + '), forcing restart...') -ForegroundColor Yellow
+            $forceRestartForEngine = $true
+        }
+        $paneId = Ensure-WorkerRunning $devWorker $devConfig $tlPaneId -ForceRestart:$forceRestartForEngine
+
+        # Dispatch task (BEFORE updating lock)
+        $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
+        & $dispatchScript -WorkerPaneId $paneId -WorkerName $devWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $devEngine -TeamLeadPaneId $tlPaneId -RunId $runId
+        $dispatchExit = $LASTEXITCODE
+        if ($dispatchExit -ne 0) {
+            Write-Host ('[FAIL] Dispatch failed for ' + $TaskId + ' (worker=' + $devWorker + ', pane=' + $paneId + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
+            Write-Host '       Task lock not updated. Please check worker pane output and rerun dispatch.' -ForegroundColor Yellow
+            Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $devWorker -Quiet | Out-Null
+            exit 1
+        }
     }
 
     # Update task lock AFTER successful dispatch
@@ -2371,6 +2428,16 @@ function Invoke-Dispatch {
         $latestLock.runner = $devEngine
         Set-ObjectField -obj $latestLock -name "assigned_worker" -value $devWorker
         Set-ObjectField -obj $latestLock -name "run_id" -value $runId
+        Set-ObjectField -obj $latestLock -name "dispatch_mode" -value $devDispatchMode
+        if ($devDispatchMode -eq 'headless') {
+            Set-ObjectField -obj $latestLock -name "headless_run_dir" -value $headlessRunDir
+            Set-ObjectField -obj $latestLock -name "headless_pid" -value $headlessPid
+            Set-ObjectField -obj $latestLock -name "pane_id" -value ""
+        } else {
+            Set-ObjectField -obj $latestLock -name "headless_run_dir" -value ""
+            Set-ObjectField -obj $latestLock -name "headless_pid" -value 0
+            Set-ObjectField -obj $latestLock -name "pane_id" -value $paneId
+        }
         $latestLock.updated_at = $dispatchUpdatedAt
         $latestLock.updated_by = "teamlead-control/dispatch"
     } | Out-Null
@@ -2379,17 +2446,30 @@ function Invoke-Dispatch {
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
-    Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $devWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
+    if ($devDispatchMode -eq 'pane') {
+        Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $devWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
+    }
 
     Write-Host ''
-    Write-Host ('[OK] Task ' + $TaskId + ' dispatched to ' + $devWorker + ' (pane ' + $paneId + ')') -ForegroundColor Green
+    if ($devDispatchMode -eq 'headless') {
+        Write-Host ('[OK] Task ' + $TaskId + ' dispatched to ' + $devWorker + ' (headless pid ' + $headlessPid + ')') -ForegroundColor Green
+        if ($headlessRunDir) {
+            Write-Host ('  run_dir: ' + $headlessRunDir) -ForegroundColor White
+        }
+    } else {
+        Write-Host ('[OK] Task ' + $TaskId + ' dispatched to ' + $devWorker + ' (pane ' + $paneId + ')') -ForegroundColor Green
+    }
     Write-Host ''
     Write-Host '[NEXT] Background watchers:' -ForegroundColor Cyan
     Write-Host '  route-monitor: auto ensured by controller' -ForegroundColor White
-    Write-Host '  pane-approval-watcher: auto ensured by controller' -ForegroundColor White
+    if ($devDispatchMode -eq 'pane') {
+        Write-Host '  pane-approval-watcher: auto ensured by controller' -ForegroundColor White
+        $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\pane-approval-watcher.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $devWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -RunId ' + $runId
+        Write-Host ('  (debug manual start): ' + $approvalCmd) -ForegroundColor DarkGray
+    } else {
+        Write-Host '  pane-approval-watcher: skipped (headless dispatch)' -ForegroundColor DarkGray
+    }
     Write-Host '  dispatch/dispatch-qa commands must still be serial from Team Lead side (no parallel command launch).' -ForegroundColor Yellow
-    $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\pane-approval-watcher.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $devWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -RunId ' + $runId
-    Write-Host ('  (debug manual start): ' + $approvalCmd) -ForegroundColor DarkGray
     Write-Host ''
 }
 
@@ -2445,46 +2525,85 @@ function Invoke-DispatchQA {
         Write-Host ''
         Write-Host '[DRY-RUN] Would dispatch QA:' -ForegroundColor Magenta
         Write-Host ('  Task:   ' + $TaskId) -ForegroundColor White
+        $qaDispatchMode = Resolve-DispatchMode -cfg $wConfig -phase 'qa'
         Write-Host ('  Worker: ' + $qaWorker) -ForegroundColor White
         Write-Host ('  File:   ' + $taskFile.Name) -ForegroundColor White
+        Write-Host ('  Mode:   ' + $qaDispatchMode) -ForegroundColor White
         Write-Host '[DRY-RUN] No changes made.' -ForegroundColor Magenta
         return
     }
 
     $defaultQaEngine = if ($wConfig.qa_engine) { [string]$wConfig.qa_engine } else { [string]$wConfig.engine }
     $qaEngine = if ($DispatchEngine) { [string]$DispatchEngine } else { $defaultQaEngine }
+    $qaDispatchMode = Resolve-DispatchMode -cfg $wConfig -phase 'qa'
     $runId = New-TaskRunId -TaskId $TaskId -Phase "qa"
     if ($DispatchEngine) {
         Write-Host ('[INFO] Engine override: ' + $defaultQaEngine + ' -> ' + $qaEngine) -ForegroundColor Cyan
     }
-    $qaConfig = @{ workdir = $wConfig.workdir; engine = $qaEngine }
-    $reuseQaContext = [System.Environment]::GetEnvironmentVariable("TEAMLEAD_QA_REUSE_CONTEXT")
-    $forceFreshQaContext = (-not $reuseQaContext -or $reuseQaContext.Trim() -ne "1")
-    if ($forceFreshQaContext) {
-        Write-Host '[INFO] QA dispatch uses fresh worker context (set TEAMLEAD_QA_REUSE_CONTEXT=1 to reuse existing QA session).' -ForegroundColor Cyan
-    }
-    $registeredQaEngine = Get-RegisteredWorkerEngine -WorkerName $qaWorker
-    $forceRestartForEngine = $false
-    if ($registeredQaEngine -and $registeredQaEngine.ToLowerInvariant() -ne $qaEngine.ToLowerInvariant()) {
-        Write-Host ('[INFO] Worker ' + $qaWorker + ' engine mismatch (' + $registeredQaEngine + ' -> ' + $qaEngine + '), forcing restart...') -ForegroundColor Yellow
-        $forceRestartForEngine = $true
-    }
-    $forceRestartQa = $forceFreshQaContext -or $forceRestartForEngine
-    $paneId = Ensure-WorkerRunning $qaWorker $qaConfig $tlPaneId -ForceRestart:$forceRestartQa
+
+    $paneId = ''
+    $headlessRunDir = ''
+    $headlessPid = 0
 
     # 先确保监控已启动，避免 route 回调无人接管
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
 
-    # Dispatch FIRST, then update lock
-    $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
-    & $dispatchScript -WorkerPaneId $paneId -WorkerName $qaWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $qaEngine -TeamLeadPaneId $tlPaneId -RunId $runId
-    $dispatchExit = $LASTEXITCODE
-    if ($dispatchExit -ne 0) {
-        Write-Host ('[FAIL] Dispatch QA failed for ' + $TaskId + ' (worker=' + $qaWorker + ', pane=' + $paneId + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
-        Write-Host '       Task lock not updated. Please check worker pane output and rerun dispatch-qa.' -ForegroundColor Yellow
-        Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $qaWorker -Quiet | Out-Null
-        exit 1
+    if ($qaDispatchMode -eq 'headless') {
+        if ($qaEngine.ToLowerInvariant() -ne 'codex') {
+            Write-Host ('[FAIL] Headless dispatch currently supports codex only. task=' + $TaskId + ' worker=' + $qaWorker + ' engine=' + $qaEngine) -ForegroundColor Red
+            exit 1
+        }
+        $headlessScript = Join-Path $scriptDir 'start-headless-run.ps1'
+        if (-not (Test-Path $headlessScript)) {
+            Write-Host ('[FAIL] Headless runner not found: ' + $headlessScript) -ForegroundColor Red
+            exit 1
+        }
+        $dispatchJson = & $headlessScript -TaskId $TaskId -WorkerName $qaWorker -WorkDir $wConfig.workdir -Engine $qaEngine -TaskFilePath $taskFile.FullName -RunId $runId -EmitJson
+        $dispatchExit = $LASTEXITCODE
+        if ($dispatchExit -ne 0) {
+            Write-Host ('[FAIL] Headless QA dispatch failed for ' + $TaskId + ' (worker=' + $qaWorker + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
+            Write-Host '       Task lock not updated. Please inspect runtime/runs and rerun dispatch-qa.' -ForegroundColor Yellow
+            exit 1
+        }
+        try {
+            $dispatchResp = $dispatchJson | ConvertFrom-Json
+        } catch {
+            Write-Host '[FAIL] Headless QA dispatch did not return machine-readable result.' -ForegroundColor Red
+            exit 1
+        }
+        if (-not $dispatchResp -or [string]$dispatchResp.status -ne 'dispatched') {
+            Write-Host ('[FAIL] Headless QA dispatch failed: status=' + [string]$dispatchResp.status + ' message=' + [string]$dispatchResp.message) -ForegroundColor Red
+            exit 1
+        }
+        $headlessRunDir = if ($dispatchResp.runDir) { [string]$dispatchResp.runDir } else { '' }
+        $headlessPid = if ($dispatchResp.pid) { [int]$dispatchResp.pid } else { 0 }
+    } else {
+        $qaConfig = @{ workdir = $wConfig.workdir; engine = $qaEngine }
+        $reuseQaContext = [System.Environment]::GetEnvironmentVariable("TEAMLEAD_QA_REUSE_CONTEXT")
+        $forceFreshQaContext = (-not $reuseQaContext -or $reuseQaContext.Trim() -ne "1")
+        if ($forceFreshQaContext) {
+            Write-Host '[INFO] QA dispatch uses fresh worker context (set TEAMLEAD_QA_REUSE_CONTEXT=1 to reuse existing QA session).' -ForegroundColor Cyan
+        }
+        $registeredQaEngine = Get-RegisteredWorkerEngine -WorkerName $qaWorker
+        $forceRestartForEngine = $false
+        if ($registeredQaEngine -and $registeredQaEngine.ToLowerInvariant() -ne $qaEngine.ToLowerInvariant()) {
+            Write-Host ('[INFO] Worker ' + $qaWorker + ' engine mismatch (' + $registeredQaEngine + ' -> ' + $qaEngine + '), forcing restart...') -ForegroundColor Yellow
+            $forceRestartForEngine = $true
+        }
+        $forceRestartQa = $forceFreshQaContext -or $forceRestartForEngine
+        $paneId = Ensure-WorkerRunning $qaWorker $qaConfig $tlPaneId -ForceRestart:$forceRestartQa
+
+        # Dispatch FIRST, then update lock
+        $dispatchScript = Join-Path $scriptDir "dispatch-task.ps1"
+        & $dispatchScript -WorkerPaneId $paneId -WorkerName $qaWorker -TaskId $TaskId -TaskFilePath $taskFile.FullName -Engine $qaEngine -TeamLeadPaneId $tlPaneId -RunId $runId
+        $dispatchExit = $LASTEXITCODE
+        if ($dispatchExit -ne 0) {
+            Write-Host ('[FAIL] Dispatch QA failed for ' + $TaskId + ' (worker=' + $qaWorker + ', pane=' + $paneId + ', exit=' + $dispatchExit + ')') -ForegroundColor Red
+            Write-Host '       Task lock not updated. Please check worker pane output and rerun dispatch-qa.' -ForegroundColor Yellow
+            Stop-PaneApprovalWatcher -TaskId $TaskId -WorkerName $qaWorker -Quiet | Out-Null
+            exit 1
+        }
     }
 
     # Update task lock AFTER successful dispatch
@@ -2503,6 +2622,16 @@ function Invoke-DispatchQA {
         $latestLock.runner = $qaEngine
         Set-ObjectField -obj $latestLock -name "assigned_worker" -value $qaWorker
         Set-ObjectField -obj $latestLock -name "run_id" -value $runId
+        Set-ObjectField -obj $latestLock -name "dispatch_mode" -value $qaDispatchMode
+        if ($qaDispatchMode -eq 'headless') {
+            Set-ObjectField -obj $latestLock -name "headless_run_dir" -value $headlessRunDir
+            Set-ObjectField -obj $latestLock -name "headless_pid" -value $headlessPid
+            Set-ObjectField -obj $latestLock -name "pane_id" -value ""
+        } else {
+            Set-ObjectField -obj $latestLock -name "headless_run_dir" -value ""
+            Set-ObjectField -obj $latestLock -name "headless_pid" -value 0
+            Set-ObjectField -obj $latestLock -name "pane_id" -value $paneId
+        }
         $latestLock.updated_at = $dispatchUpdatedAt
         $latestLock.updated_by = "teamlead-control/dispatch-qa"
     } | Out-Null
@@ -2511,17 +2640,30 @@ function Invoke-DispatchQA {
     # Ensure route monitor is alive for auto lock/doc-updater processing
     Ensure-RouteMonitor $tlPaneId
     Ensure-RouteNotifier $tlPaneId
-    Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $qaWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
+    if ($qaDispatchMode -eq 'pane') {
+        Ensure-PaneApprovalWatcher -TaskId $TaskId -WorkerName $qaWorker -WorkerPaneId $paneId -TeamLeadPaneId $tlPaneId -RunId $runId
+    }
 
     Write-Host ''
-    Write-Host ('[OK] QA task ' + $TaskId + ' dispatched to ' + $qaWorker + ' (pane ' + $paneId + ')') -ForegroundColor Green
+    if ($qaDispatchMode -eq 'headless') {
+        Write-Host ('[OK] QA task ' + $TaskId + ' dispatched to ' + $qaWorker + ' (headless pid ' + $headlessPid + ')') -ForegroundColor Green
+        if ($headlessRunDir) {
+            Write-Host ('  run_dir: ' + $headlessRunDir) -ForegroundColor White
+        }
+    } else {
+        Write-Host ('[OK] QA task ' + $TaskId + ' dispatched to ' + $qaWorker + ' (pane ' + $paneId + ')') -ForegroundColor Green
+    }
     Write-Host ''
     Write-Host '[NEXT] Background watchers:' -ForegroundColor Cyan
     Write-Host '  route-monitor: auto ensured by controller' -ForegroundColor White
-    Write-Host '  pane-approval-watcher: auto ensured by controller' -ForegroundColor White
+    if ($qaDispatchMode -eq 'pane') {
+        Write-Host '  pane-approval-watcher: auto ensured by controller' -ForegroundColor White
+        $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\pane-approval-watcher.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $qaWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -RunId ' + $runId
+        Write-Host ('  (debug manual start): ' + $approvalCmd) -ForegroundColor DarkGray
+    } else {
+        Write-Host '  pane-approval-watcher: skipped (headless dispatch)' -ForegroundColor DarkGray
+    }
     Write-Host '  dispatch/dispatch-qa commands must still be serial from Team Lead side (no parallel command launch).' -ForegroundColor Yellow
-    $approvalCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\pane-approval-watcher.ps1" -WorkerPaneId ' + $paneId + ' -WorkerName ' + $qaWorker + ' -TaskId ' + $TaskId + ' -TeamLeadPaneId ' + $tlPaneId + ' -RunId ' + $runId
-    Write-Host ('  (debug manual start): ' + $approvalCmd) -ForegroundColor DarkGray
     Write-Host ''
 }
 

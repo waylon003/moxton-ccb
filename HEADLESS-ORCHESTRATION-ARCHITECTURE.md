@@ -14,11 +14,11 @@
 
 ## 当前实施状态（阶段 1）
 
-当前代码已先落地最小切入版本：doc-updater 与 repo-committer 通过 scripts/start-headless-run.ps1 走 headless codex exec。
+当前代码已落地两层 headless 能力：`doc-updater` / `repo-committer` 通过 `scripts/start-headless-run.ps1` 走 headless `codex exec`，并且 `backend-dev` 已通过 `dispatch_mode=headless` 接入控制器主链。
 
 当前仍保留交互式链路的部分：
 
-- dispatch / dispatch-qa 仍基于 WezTerm pane 派遣 dev / qa worker
+- `backend-dev` 已改为 headless 派遣；其余 dev / qa 仍基于 WezTerm pane 派遣
 - Team Lead 仍通过现有 Claude Code 交互会话工作
 - route-monitor 与 route-notifier 继续沿用现有收口与提醒链路
 
@@ -28,6 +28,7 @@
 
 - HEADLESS-SMOKE-003：验证 doc-updater headless 运行、report_route ACK / blocked、events.jsonl UTF-8 落盘、state.json 成功终态
 - HEADLESS-SMOKE-REPO-002：验证 repo-committer headless 运行、report_route ACK / blocked、events.jsonl UTF-8 落盘、state.json 成功终态
+- `BACKEND` 的 `dev_dispatch_mode` 已切到 `headless`，可通过 `dispatch --DryRun` 看到 `Mode: headless`
 
 ## 为什么要改造
 
