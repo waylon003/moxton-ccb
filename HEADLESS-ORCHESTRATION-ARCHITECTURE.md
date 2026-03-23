@@ -28,6 +28,7 @@
 
 - HEADLESS-SMOKE-003：验证 doc-updater headless 运行、report_route ACK / blocked、events.jsonl UTF-8 落盘、state.json 成功终态
 - HEADLESS-SMOKE-REPO-002：验证 repo-committer headless 运行、report_route ACK / blocked、events.jsonl UTF-8 落盘、state.json 成功终态
+
 ## 为什么要改造
 
 当前交互式 pane 编排存在以下天然问题：
@@ -467,6 +468,136 @@ flowchart LR
 
 - 接入 Rich Dashboard
 - 让 Team Lead 从“盯 pane”切换为“看态势板”
+
+
+## 阶段 3 前的第二阶段实施设计
+
+这一阶段的目标不是“一次性把所有 worker 全切掉”，而是把 `dispatch / dispatch-qa` 的执行层从 WezTerm pane 改成可灰度开启的 headless runner，同时保持 Team Lead、`route-monitor`、`route-notifier` 和任务锁模型不变。
+
+### 第二阶段的改造边界
+
+只动以下边界：
+
+- `dispatch` 与 `dispatch-qa` 的 worker 启动方式
+- `worker-map.json` 中每个角色的派遣模式配置
+- `runtime/runs/*` 下 dev / qa 的运行态落盘
+- `recover/status` 对 headless run 的观测与恢复提示
+
+暂时不动：
+
+- `route-monitor` 的收口职责
+- `route-notifier` 的 Team Lead 唤醒职责
+- `TASK-LOCKS.json` 的状态模型
+- `report_route` 协议
+- Team Lead 的交互式工作方式
+
+### 推荐的控制器改造方式
+
+建议在 `config/worker-map.json` 为每类 worker 增加 `dispatch_mode`：
+
+- `pane`：沿用现有 WezTerm pane 派遣
+- `headless`：走 `scripts/start-headless-run.ps1`
+
+初始灰度建议：
+
+- `backend-dev`：先支持 `headless`，作为第一批真实业务验证
+- `shop-fe-dev` / `admin-fe-dev`：先保留 `pane`
+- `backend-qa` / `shop-fe-qa` / `admin-fe-qa`：先保留 `pane`
+
+这样可以先验证“开发链路 headless 化”，而不会同时把 QA 证据链也一起改爆。
+
+### dispatch / dispatch-qa 的目标形态
+
+控制器未来应按同一套逻辑派遣：
+
+1. 读取任务锁与依赖门禁
+2. 读取 `worker-map.json`，拿到 `engine + dispatch_mode + workdir`
+3. 生成新的 `run_id`
+4. 若 `dispatch_mode=pane`，继续走旧的 `dispatch-task.ps1`
+5. 若 `dispatch_mode=headless`，改走 `start-headless-run.ps1`
+6. 只有在实际派遣成功后才写任务锁并绑定当前 `run_id`
+
+这样可以做到：
+
+- 同一套锁模型兼容 pane 与 headless
+- 可以按角色逐个灰度
+- 出问题时只需把 `dispatch_mode` 改回 `pane`
+
+### 第二阶段必须补齐的运行态字段
+
+当 dev / qa 也进入 headless 后，`runtime/runs/<task>/<run_id>/state.json` 至少要补齐这些字段：
+
+- `task_id`
+- `run_id`
+- `worker`
+- `role`
+- `status`
+- `phase`
+- `started_at`
+- `heartbeat_at`
+- `last_output_at`
+- `last_route_at`
+- `last_changed_files`
+- `exit_code`
+- `next_action_hint`
+
+其中最关键的是：
+
+- `heartbeat_at`：判断是否真的卡住
+- `last_route_at`：区分“仍在干活但还没回传”与“完全失联”
+- `next_action_hint`：给 Team Lead 在 `status` 中直接展示建议动作
+
+### 第二阶段的卡住/崩溃判定
+
+不要再依赖“pane 没输出”来判断。
+
+建议统一为：
+
+- `stalled`：进程还活着，但超过阈值没有新输出且没有新 route
+- `crashed`：子进程退出码异常或进程意外消失
+- `blocked`：worker 主动通过 `report_route(status=blocked)` 上报
+
+`status` / `recover` 给 Team Lead 的动作建议应直接区分：
+
+- `blocked(env)`：先修环境，再 `requeue + redispatch`
+- `stalled`：先看最近输出与最后命令，再决定 `terminate + redispatch`
+- `crashed`：直接按运行层故障处理，不要当成业务阻塞
+
+### QA headless 化前的前置条件
+
+在 QA 迁移到 headless 之前，至少要先解决三件事：
+
+- 证据索引：把截图、network、console、报告路径统一写进 `evidence-index.json`
+- 失败分类：让 `route-monitor` 能区分“测试失败”与“环境不可用”
+- 端口/服务探活：在 QA runner 前置做健康检查，避免 QA 一上来就盲跑再阻塞
+
+否则 QA 改成 headless 后，Team Lead 只会更频繁地看到“重派后再次阻塞”。
+
+### 第二阶段的恢复策略
+
+建议把恢复动作分成两层：
+
+- 业务层恢复：`requeue -TargetState assigned|waiting_qa`
+- 运行层恢复：回收失联 run、杀死残留进程、重新派遣
+
+`recover` 的输出应明确告诉 Team Lead：
+
+- 当前锁绑定的有效 `run_id`
+- 最近一次成功心跳时间
+- 最近一次 route 时间
+- 是否检测到残留进程
+- 建议执行 `dispatch` 还是先修环境
+
+### 第二阶段完成的判定标准
+
+当以下条件都满足时，才算第二阶段真正完成：
+
+- 至少一个真实 dev 角色长期运行在 headless 模式
+- `status` 不再依赖 pane 文本也能判断 run 健康度
+- route 收口、任务锁推进、Team Lead 通知链不需要为 headless 额外分叉
+- 出现 crash / stalled / blocked 时，Team Lead 能从 `status` 直接得到下一步建议
+
+达到这一点后，再进入“阶段 3：真实业务 dev headless 灰度”和“阶段 5：QA headless 化”，风险会小很多。
 
 ## 最终建议
 

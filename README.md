@@ -1,4 +1,4 @@
-﻿# Moxton-CCB 指挥中心
+# Moxton-CCB 指挥中心
 
 多 AI 协作的任务编排系统，协调三个业务仓库的开发工作。
 
@@ -54,8 +54,8 @@ flowchart TD
 
 - **Team Lead**：Claude Code 会话（本仓库）— 需求拆分、任务分派、进度监控
 - **主指挥约束**：Team Lead 只能使用 Claude Code（禁止 Codex 作为主指挥）
-- **Workers**：Codex CLI — 在 WezTerm 多窗口中执行开发、QA、`doc-updater` 与 `repo-committer`
-- **通信**：统一走 MCP `report_route` 回传 + WezTerm CLI `send-text` 唤醒。`route-monitor` 负责收口、写锁、文档/归档状态更新与事件落盘；`route-notifier` 独立负责唤醒 Team Lead；`pane-approval-watcher` 负责 worker pane 本地审批兼容。
+- **Workers**：当前为混合执行层。开发 / QA 仍在 WezTerm pane 中运行 Codex；`doc-updater` 与 `repo-committer` 已切到 headless `codex exec`。
+- **通信**：统一走 MCP `report_route` 回传 + WezTerm CLI `send-text` 唤醒。`route-monitor` 负责收口、写锁、文档/归档状态更新与事件落盘；`route-notifier` 独立负责唤醒 Team Lead；`pane-approval-watcher` 仅保留给 pane worker 的本地审批兼容。
 
 - **控制入口**：`scripts/teamlead-control.ps1`（业务动作统一入口）
 
@@ -67,6 +67,21 @@ flowchart TD
 | BACKEND | `E:\moxton-lotapi` | Codex (`-a never --sandbox danger-full-access`) | Codex (`-a never --sandbox danger-full-access`) |
 | ADMIN-FE | `E:\moxton-lotadmin` | Codex (`-a never --sandbox danger-full-access`) | Codex (`-a never --sandbox danger-full-access`) |
 | SHOP-FE | `E:\nuxt-moxton` | Codex (`-a never --sandbox danger-full-access`) | Codex (`-a never --sandbox danger-full-access`) |
+
+
+## 当前迁移状态（混合态）
+
+当前主链不是“全 WezTerm”，也还不是“全 headless”，而是过渡中的混合态：
+
+- Team Lead：仍然是 `E:\moxton-ccb` 内的 Claude Code 交互式会话
+- Dev / QA：仍由 `dispatch / dispatch-qa` 通过 WezTerm pane 派遣
+- `doc-updater` / `repo-committer`：已通过 `scripts/start-headless-run.ps1` 走 headless `codex exec`
+- 状态收口：统一仍由 `route-monitor` 处理
+- Team Lead 唤醒：统一仍由 `route-notifier` 处理
+
+这意味着当前版本已经把“辅助链路”从 pane 中剥离出来，但业务主链的开发 / QA 仍未迁移。下一步目标不是继续堆 watcher，而是把 dev / qa 的执行层也切成 headless，同时保留 Team Lead 的交互式决策模式。
+
+完整设计见 [HEADLESS-ORCHESTRATION-ARCHITECTURE.md](./HEADLESS-ORCHESTRATION-ARCHITECTURE.md)。
 
 ## 使用方式
 
