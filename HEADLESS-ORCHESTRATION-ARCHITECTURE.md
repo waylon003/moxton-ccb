@@ -594,7 +594,7 @@ flowchart LR
 当以下条件都满足时，才算第二阶段真正完成：
 
 - 至少一个真实 dev 角色长期运行在 headless 模式
-- `status` 不再依赖 pane 文本也能判断 run 健康度
+- `status` 不再依赖 pane 文本也能判断 run 健康度，并显示 `runtime / pid / proc / rt_last / run_dir / note` 摘要
 - route 收口、任务锁推进、Team Lead 通知链不需要为 headless 额外分叉
 - 出现 crash / stalled / blocked 时，Team Lead 能从 `status` 直接得到下一步建议
 

@@ -627,6 +627,70 @@ function Get-StaleRunThresholdMinutes {
     return Get-EnvIntOrDefault -name "TEAMLEAD_STALE_RUN_MINUTES" -defaultValue 30
 }
 
+function Get-LockDispatchMode($lock) {
+    if (-not $lock) { return 'pane' }
+    if ($lock.PSObject.Properties.Name -contains 'dispatch_mode' -and $lock.dispatch_mode) {
+        $mode = ([string]$lock.dispatch_mode).Trim().ToLowerInvariant()
+        if ($mode) { return $mode }
+    }
+    return 'pane'
+}
+
+function Test-ProcessAliveById([int]$ProcessId) {
+    if ($ProcessId -le 0) { return $false }
+    try {
+        $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        return ($null -ne $proc)
+    } catch {
+        return $false
+    }
+}
+
+function Read-HeadlessRunSnapshot([string]$TaskId, $Lock) {
+    if (-not $Lock) { return $null }
+    $dispatchMode = Get-LockDispatchMode -lock $Lock
+    if ($dispatchMode -ne 'headless') { return $null }
+
+    $runDir = ''
+    if ($Lock.PSObject.Properties.Name -contains 'headless_run_dir' -and $Lock.headless_run_dir) {
+        $runDir = [string]$Lock.headless_run_dir
+    }
+    if (-not $runDir -and $TaskId -and $Lock.PSObject.Properties.Name -contains 'run_id' -and $Lock.run_id) {
+        $safeTask = ($TaskId -replace '[^A-Za-z0-9\-]', '-')
+        $runDir = Join-Path (Join-Path $rootDir 'runtime\runs') $safeTask
+        $runDir = Join-Path $runDir ([string]$Lock.run_id)
+    }
+
+    $statePath = if ($runDir) { Join-Path $runDir 'state.json' } else { '' }
+    $state = if ($statePath) { Read-ProcessStateFile -Path $statePath } else { $null }
+    $runtimeUpdatedUtc = $null
+    if ($state) {
+        $updatedCandidate = if ($state.updated_at) { [string]$state.updated_at } elseif ($state.started_at) { [string]$state.started_at } else { '' }
+        if ($updatedCandidate) {
+            $runtimeUpdatedUtc = ConvertTo-UtcDateSafe $updatedCandidate
+        }
+    }
+
+    $processId = 0
+    if ($Lock.PSObject.Properties.Name -contains 'headless_pid' -and $Lock.headless_pid) {
+        try { $processId = [int]$Lock.headless_pid } catch { $processId = 0 }
+    }
+    $processAlive = Test-ProcessAliveById -ProcessId $processId
+
+    return [pscustomobject]@{
+        dispatch_mode = 'headless'
+        run_dir = $runDir
+        state_path = $statePath
+        process_id = $processId
+        process_alive = $processAlive
+        runtime_status = if ($state -and $state.status) { [string]$state.status } else { '' }
+        runtime_phase = if ($state -and $state.phase) { [string]$state.phase } else { '' }
+        runtime_note = if ($state -and $state.note) { [string]$state.note } else { '' }
+        runtime_updated_utc = $runtimeUpdatedUtc
+        runtime_updated_age = if ($runtimeUpdatedUtc) { Get-TaskActivityAgeText -ActivityUtc $runtimeUpdatedUtc } else { '-' }
+        exit_code = if ($state -and $state.PSObject.Properties.Name -contains 'exit_code' -and $state.exit_code -ne $null) { [int]$state.exit_code } else { -1 }
+    }
+}
 function Add-TaskAttemptRecord {
     param(
         [string]$TaskId,
@@ -2767,24 +2831,35 @@ function Get-TaskRecommendation {
 
     if (-not $Lock) { return $null }
 
-    $state = if ($Lock.state) { ([string]$Lock.state).ToLower() } else { "" }
+    $state = if ($Lock.state) { ([string]$Lock.state).ToLower() } else { '' }
     $commands = New-Object System.Collections.Generic.List[string]
     $assignedWorker = Get-AssignedWorkerFromLock -TaskId $TaskId -lock $Lock -State $state -WorkerMap $WorkerMap
-    $workerAlive = if ($assignedWorker) { Test-WorkerPaneAlive -WorkerName $assignedWorker } else { $false }
+    $dispatchMode = Get-LockDispatchMode -lock $Lock
+    $headlessSnapshot = Read-HeadlessRunSnapshot -TaskId $TaskId -Lock $Lock
+    $workerAlive = if ($dispatchMode -eq 'headless') {
+        if ($headlessSnapshot) { [bool]$headlessSnapshot.process_alive } else { $false }
+    } else {
+        if ($assignedWorker) { Test-WorkerPaneAlive -WorkerName $assignedWorker } else { $false }
+    }
     $routeWorker = Get-TaskLatestRouteWorker -lock $Lock
     $phase = Resolve-PhaseFromWorkerName -WorkerName $routeWorker
     if (-not $phase) {
         $phase = Resolve-PhaseFromWorkerName -WorkerName $assignedWorker
     }
     $activityUtc = Get-TaskLatestActivityUtc -lock $Lock
+    if ($headlessSnapshot -and $headlessSnapshot.runtime_updated_utc) {
+        if (-not $activityUtc -or $headlessSnapshot.runtime_updated_utc -gt $activityUtc) {
+            $activityUtc = $headlessSnapshot.runtime_updated_utc
+        }
+    }
     $activityAgeText = Get-TaskActivityAgeText -ActivityUtc $activityUtc
     $pendingApprovalCount = @($PendingApprovals).Count
     $hasPendingApprovals = ($pendingApprovalCount -gt 0)
     $pendingLocalApproval = $PendingLocalApproval
-    $hasPendingLocalApproval = ($null -ne $pendingLocalApproval -and [string]$pendingLocalApproval.status -eq "pending_teamlead")
+    $hasPendingLocalApproval = ($null -ne $pendingLocalApproval -and [string]$pendingLocalApproval.status -eq 'pending_teamlead')
     $staleThresholdMinutes = Get-StaleRunThresholdMinutes
     $isStaleRun = $false
-    if ($state -in @("in_progress", "qa") -and $workerAlive -and $activityUtc -and -not $hasPendingApprovals -and -not $hasPendingLocalApproval) {
+    if ($state -in @('in_progress', 'qa') -and $activityUtc -and -not $hasPendingApprovals -and -not $hasPendingLocalApproval) {
         $ageMinutes = ((Get-Date).ToUniversalTime() - $activityUtc).TotalMinutes
         if ($ageMinutes -ge $staleThresholdMinutes) {
             $isStaleRun = $true
@@ -2795,36 +2870,36 @@ function Get-TaskRecommendation {
     if ($GateContext) {
         $archiveBlocking += @($GateContext.dispatch_todo | Where-Object { $_ -ne $TaskId })
         $archiveBlocking += @($GateContext.running | Where-Object { $_ -ne $TaskId })
-        $archiveBlocking += @($GateContext.other_active | Where-Object { -not $_.StartsWith($TaskId + ":") })
+        $archiveBlocking += @($GateContext.other_active | Where-Object { -not $_.StartsWith($TaskId + ':') })
     }
 
     $blockedBodyPreview = Get-LockRouteBodyPreview -Lock $Lock
     $blockedDecision = Get-BlockedDecision -body $blockedBodyPreview
     $serviceRestoreTaskId = Get-BackendServiceRestoreTaskId
 
-    $summary = ""
-    $color = "Gray"
+    $summary = ''
+    $color = 'Gray'
     $priority = 500
 
     switch ($state) {
-        "assigned" {
-            $summary = "待派遣开发"
-            $color = "Yellow"
+        'assigned' {
+            $summary = '待派遣开发'
+            $color = 'Yellow'
             $priority = 60
             $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $TaskId) | Out-Null
         }
-        "waiting_qa" {
-            $summary = "待派遣 QA"
-            $color = "Cyan"
+        'waiting_qa' {
+            $summary = '待派遣 QA'
+            $color = 'Cyan'
             $priority = 70
             $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch-qa -TaskId ' + $TaskId) | Out-Null
         }
-        "in_progress" {
+        'in_progress' {
             if ($hasPendingLocalApproval) {
                 $localWorker = if ($pendingLocalApproval.worker) { [string]$pendingLocalApproval.worker } else { $assignedWorker }
                 $localPromptType = if ($pendingLocalApproval.prompt_type) { [string]$pendingLocalApproval.prompt_type } else { 'auto' }
-                $summary = "开发中，但有本地审批待处理"
-                $color = "Red"
+                $summary = '开发中，但有本地审批待处理'
+                $color = 'Red'
                 $priority = 9
                 if ($localWorker) {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-local -WorkerName ' + $localWorker + ' -PromptType ' + $localPromptType) | Out-Null
@@ -2834,39 +2909,61 @@ function Get-TaskRecommendation {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-local -WorkerName ' + $localWorker + ' -PromptType ' + $localPromptType) | Out-Null
                 }
             } elseif ($hasPendingApprovals) {
-                $summary = "开发中，但有待处理审批"
-                $color = "Red"
+                $summary = '开发中，但有待处理审批'
+                $color = 'Red'
                 $priority = 10
                 foreach ($req in @($PendingApprovals)) {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId ' + [string]$req.id) | Out-Null
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId ' + [string]$req.id) | Out-Null
                 }
+            } elseif ($dispatchMode -eq 'headless' -and $headlessSnapshot -and $headlessSnapshot.runtime_status -eq 'success' -and -not $headlessSnapshot.process_alive) {
+                $summary = '开发 headless 已退出，等待 route 收口'
+                $color = 'Yellow'
+                $priority = 18
+            } elseif ($dispatchMode -eq 'headless' -and $headlessSnapshot -and $headlessSnapshot.runtime_status -eq 'failed') {
+                $summary = '开发 headless 运行失败，先 requeue 后重派'
+                $color = 'Red'
+                $priority = 19
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "headless_failed"') | Out-Null
             } elseif (-not $workerAlive) {
-                $summary = "开发执行漂移，worker 已离线"
-                $color = "Red"
-                $priority = 20
-                if ($assignedWorker) {
-                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                if ($dispatchMode -eq 'headless') {
+                    $summary = '开发 headless 执行漂移，进程已离线'
+                } else {
+                    $summary = '开发执行漂移，worker 已离线'
+                    if ($assignedWorker) {
+                        $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                    }
                 }
+                $color = 'Red'
+                $priority = 20
                 $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "offline_drift"') | Out-Null
             } elseif ($isStaleRun) {
-                $summary = "开发长时间无新 route [STALE-RUN " + $activityAgeText + "]"
-                $color = "Yellow"
-                $priority = 25
-                if ($assignedWorker) {
-                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                if ($dispatchMode -eq 'headless') {
+                    $summary = '开发 headless 长时间无新 route/输出 [STALE-RUN ' + $activityAgeText + ']'
+                } else {
+                    $summary = '开发长时间无新 route [STALE-RUN ' + $activityAgeText + ']'
+                    if ($assignedWorker) {
+                        $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                    }
                 }
+                $color = 'Yellow'
+                $priority = 25
                 $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "stale_run"') | Out-Null
             } else {
-                $summary = "开发进行中，等待新 route"
+                if ($dispatchMode -eq 'headless') {
+                    $summary = '开发进行中（headless），等待新 route'
+                    $color = 'Cyan'
+                } else {
+                    $summary = '开发进行中，等待新 route'
+                }
             }
         }
-        "qa" {
+        'qa' {
             if ($hasPendingLocalApproval) {
                 $localWorker = if ($pendingLocalApproval.worker) { [string]$pendingLocalApproval.worker } else { $assignedWorker }
                 $localPromptType = if ($pendingLocalApproval.prompt_type) { [string]$pendingLocalApproval.prompt_type } else { 'auto' }
-                $summary = "QA 中，但有本地审批待处理"
-                $color = "Red"
+                $summary = 'QA 中，但有本地审批待处理'
+                $color = 'Red'
                 $priority = 9
                 if ($localWorker) {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-local -WorkerName ' + $localWorker + ' -PromptType ' + $localPromptType) | Out-Null
@@ -2876,91 +2973,113 @@ function Get-TaskRecommendation {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-local -WorkerName ' + $localWorker + ' -PromptType ' + $localPromptType) | Out-Null
                 }
             } elseif ($hasPendingApprovals) {
-                $summary = "QA 中，但有待处理审批"
-                $color = "Red"
+                $summary = 'QA 中，但有待处理审批'
+                $color = 'Red'
                 $priority = 10
                 foreach ($req in @($PendingApprovals)) {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId ' + [string]$req.id) | Out-Null
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId ' + [string]$req.id) | Out-Null
                 }
+            } elseif ($dispatchMode -eq 'headless' -and $headlessSnapshot -and $headlessSnapshot.runtime_status -eq 'success' -and -not $headlessSnapshot.process_alive) {
+                $summary = 'QA headless 已退出，等待 route 收口'
+                $color = 'Yellow'
+                $priority = 18
+            } elseif ($dispatchMode -eq 'headless' -and $headlessSnapshot -and $headlessSnapshot.runtime_status -eq 'failed') {
+                $summary = 'QA headless 运行失败，先 requeue 后重派'
+                $color = 'Red'
+                $priority = 19
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "headless_failed"') | Out-Null
             } elseif (-not $workerAlive) {
-                $summary = "QA 执行漂移，worker 已离线"
-                $color = "Red"
-                $priority = 20
-                if ($assignedWorker) {
-                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                if ($dispatchMode -eq 'headless') {
+                    $summary = 'QA headless 执行漂移，进程已离线'
+                } else {
+                    $summary = 'QA 执行漂移，worker 已离线'
+                    if ($assignedWorker) {
+                        $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                    }
                 }
+                $color = 'Red'
+                $priority = 20
                 $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "offline_drift"') | Out-Null
             } elseif ($isStaleRun) {
-                $summary = "QA 长时间无新 route [STALE-RUN " + $activityAgeText + "]"
-                $color = "Yellow"
-                $priority = 25
-                if ($assignedWorker) {
-                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                if ($dispatchMode -eq 'headless') {
+                    $summary = 'QA headless 长时间无新 route/输出 [STALE-RUN ' + $activityAgeText + ']'
+                } else {
+                    $summary = 'QA 长时间无新 route [STALE-RUN ' + $activityAgeText + ']'
+                    if ($assignedWorker) {
+                        $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
+                    }
                 }
+                $color = 'Yellow'
+                $priority = 25
                 $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "stale_run"') | Out-Null
             } else {
-                $summary = "QA 进行中，等待新 route"
+                if ($dispatchMode -eq 'headless') {
+                    $summary = 'QA 进行中（headless），等待新 route'
+                    $color = 'Cyan'
+                } else {
+                    $summary = 'QA 进行中，等待新 route'
+                }
             }
         }
-        "qa_passed" {
+        'qa_passed' {
             if ($archiveBlocking.Count -gt 0) {
-                $summary = "QA 已通过，等待其它活跃任务收口后再 archive"
-                $color = "Yellow"
+                $summary = 'QA 已通过，等待其它活跃任务收口后再 archive'
+                $color = 'Yellow'
                 $priority = 80
             } else {
-                $summary = "QA 已通过，可复审后 archive"
-                $color = "Green"
+                $summary = 'QA 已通过，可复审后 archive'
+                $color = 'Green'
                 $priority = 90
                 $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action archive -TaskId ' + $TaskId) | Out-Null
             }
             $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "review_reject"') | Out-Null
         }
-        "blocked" {
+        'blocked' {
             if ($hasPendingApprovals) {
-                $summary = "blocked，先处理审批"
-                $color = "Red"
+                $summary = 'blocked，先处理审批'
+                $color = 'Red'
                 $priority = 10
                 foreach ($req in @($PendingApprovals)) {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action approve-request -RequestId ' + [string]$req.id) | Out-Null
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action deny-request -RequestId ' + [string]$req.id) | Out-Null
                 }
-            } elseif ($phase -eq "qa" -and $blockedDecision -eq 'service_down') {
-                $summary = "QA 因 3033/health 不可达而 blocked，先恢复后端服务再重派 QA"
-                $color = "Red"
+            } elseif ($phase -eq 'qa' -and $blockedDecision -eq 'service_down') {
+                $summary = 'QA 因 3033/health 不可达而 blocked，先恢复后端服务再重派 QA'
+                $color = 'Red'
                 $priority = 22
                 $commands.Add('powershell -Command "curl.exe -sS http://localhost:3033/health"') | Out-Null
                 if ($serviceRestoreTaskId) {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $serviceRestoreTaskId) | Out-Null
                 }
-            } elseif ($phase -eq "qa") {
-                $summary = "QA 驳回后待回开发"
-                $color = "Red"
+            } elseif ($phase -eq 'qa') {
+                $summary = 'QA 驳回后待回开发'
+                $color = 'Red'
                 $priority = 30
                 $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "qa_reject"') | Out-Null
             } else {
-                $summary = "开发 blocked，需人工恢复后再派遣"
-                $color = "Red"
+                $summary = '开发 blocked，需人工恢复后再派遣'
+                $color = 'Red'
                 $priority = 35
-                if ($assignedWorker) {
+                if ($dispatchMode -ne 'headless' -and $assignedWorker) {
                     $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-worker -WorkerName ' + $assignedWorker) | Out-Null
                 }
                 $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "manual_recovery"') | Out-Null
             }
         }
-        "archiving" {
-            $summary = "归档链路进行中，等待 doc-updater / repo-committer"
-            $color = "Cyan"
+        'archiving' {
+            $summary = '归档链路进行中，等待 doc-updater / repo-committer'
+            $color = 'Cyan'
             $priority = 110
         }
-        "completed" {
-            $summary = "已完成"
-            $color = "Green"
+        'completed' {
+            $summary = '已完成'
+            $color = 'Green'
             $priority = 900
         }
         default {
-            $summary = "未知状态，建议人工检查"
-            $color = "Yellow"
+            $summary = '未知状态，建议人工检查'
+            $color = 'Yellow'
             $priority = 300
             $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action status') | Out-Null
         }
@@ -2977,9 +3096,10 @@ function Get-TaskRecommendation {
         worker_alive = $workerAlive
         activity_age = $activityAgeText
         stale = $isStaleRun
+        dispatch_mode = $dispatchMode
+        headless_snapshot = $headlessSnapshot
     }
 }
-
 function Invoke-Status {
     Write-Host ''
     Write-Host '==========================================' -ForegroundColor Cyan
@@ -3263,15 +3383,18 @@ function Invoke-Status {
             }
             $tidPad = $tid.PadRight(18)
             $lState = $l.state
+            $dispatchMode = Get-LockDispatchMode -lock $l
             $line = '  ' + $tidPad + ' state=' + $lState
             if ($tid -notmatch '^(BACKEND|SHOP-FE|ADMIN-FE)-\d+$') {
                 $line += ' [INVALID-TASKID]'
                 $stateColor = "Red"
                 $invalidLocks.Add($tid) | Out-Null
             }
-            if ([string]$lState -in @("in_progress", "qa")) {
-                $displayWorker = Get-AssignedWorkerFromLock -TaskId $tid -lock $l -State ([string]$lState) -WorkerMap $workerMapForStatus
-                if ($displayWorker) {
+            $displayWorker = Get-AssignedWorkerFromLock -TaskId $tid -lock $l -State ([string]$lState) -WorkerMap $workerMapForStatus
+            if ($displayWorker) {
+                if ($dispatchMode -eq 'headless') {
+                    $line += ' worker=' + $displayWorker + ' mode=headless'
+                } elseif ([string]$lState -in @('in_progress', 'qa')) {
                     if (Test-WorkerPaneAlive -WorkerName $displayWorker) {
                         $line += ' worker=' + $displayWorker
                     } else {
@@ -3282,9 +3405,6 @@ function Invoke-Status {
                 }
             }
             $activityUtc = Get-TaskLatestActivityUtc -lock $l
-            if ($activityUtc) {
-                $line += ' last=' + (Get-TaskActivityAgeText -ActivityUtc $activityUtc)
-            }
             $recApprovals = @()
             if ($pendingApprovalsByTask.ContainsKey($tid)) {
                 $recApprovals = @($pendingApprovalsByTask[$tid].ToArray())
@@ -3294,7 +3414,31 @@ function Invoke-Status {
                 $recLocalApproval = $pendingLocalApprovalsByTask[$tid]
             }
             $recommendation = Get-TaskRecommendation -TaskId $tid -Lock $l -PendingApprovals $recApprovals -PendingLocalApproval $recLocalApproval -WorkerMap $workerMapForStatus -GateContext $gate
+            if ($recommendation -and $recommendation.activity_age -and $recommendation.activity_age -ne '-') {
+                $line += ' last=' + $recommendation.activity_age
+            } elseif ($activityUtc) {
+                $line += ' last=' + (Get-TaskActivityAgeText -ActivityUtc $activityUtc)
+            }
             if ($recommendation) {
+                if ($recommendation.dispatch_mode -eq 'headless' -and $recommendation.headless_snapshot) {
+                    $hs = $recommendation.headless_snapshot
+                    if ($hs.runtime_status) {
+                        $line += ' runtime=' + $hs.runtime_status
+                    }
+                    if ($hs.runtime_phase) {
+                        $line += '/' + $hs.runtime_phase
+                    }
+                    if ($hs.process_id -gt 0) {
+                        $line += ' pid=' + [string]$hs.process_id
+                    }
+                    $line += ' proc=' + $(if ($hs.process_alive) { 'alive' } else { 'gone' })
+                    if ($hs.runtime_updated_age -and $hs.runtime_updated_age -ne '-') {
+                        $line += ' rt_last=' + $hs.runtime_updated_age
+                    }
+                    if (-not $recommendation.worker_alive -and [string]$lState -in @('in_progress', 'qa')) {
+                        $stateColor = 'Red'
+                    }
+                }
                 if ($recommendation.stale -and $stateColor -notin @("Red")) {
                     $line += ' [STALE-RUN>' + $staleThresholdMinutes + 'm]'
                     $stateColor = "Yellow"
@@ -3307,6 +3451,17 @@ function Invoke-Status {
                 }
             }
             Write-Host $line -ForegroundColor $stateColor
+            if ($recommendation -and $recommendation.dispatch_mode -eq 'headless' -and $recommendation.headless_snapshot) {
+                $hs = $recommendation.headless_snapshot
+                if ($hs.run_dir) {
+                    Write-Host ('    run_dir=' + $hs.run_dir) -ForegroundColor DarkGray
+                }
+                if ($hs.runtime_note) {
+                    $runtimeNote = [string]$hs.runtime_note
+                    if ($runtimeNote.Length -gt 120) { $runtimeNote = $runtimeNote.Substring(0, 120) + '...' }
+                    Write-Host ('    note=' + $runtimeNote) -ForegroundColor DarkGray
+                }
+            }
         }
     }
     if (-not $hasLocks) {

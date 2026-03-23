@@ -78,6 +78,7 @@ flowchart TD
 - `doc-updater` / `repo-committer`：已通过 `scripts/start-headless-run.ps1` 走 headless `codex exec`
 - 状态收口：统一仍由 `route-monitor` 处理
 - Team Lead 唤醒：统一仍由 `route-notifier` 处理
+- 状态观测：`status` 已能直接读取 headless run 的 `state.json`，显示 `runtime / pid / proc / rt_last / run_dir / note`
 
 这意味着当前版本已经把“辅助链路”从 pane 中剥离出来，但业务主链的开发 / QA 仍未迁移。下一步目标不是继续堆 watcher，而是把 dev / qa 的执行层也切成 headless，同时保留 Team Lead 的交互式决策模式。
 
