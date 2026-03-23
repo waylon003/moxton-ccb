@@ -93,3 +93,13 @@ SHOP-FE-013 的 QA 过程中，前端开发环境异常：
 
 **相关任务:**
 - SHOP-FE-013（支付意图智能复用）
+
+<!-- AUTO-QA-SUMMARY:BEGIN -->
+## QA 摘要（自动回写）
+
+- 最后更新: `2026-03-23T18:12:15+08:00`
+- QA Worker: `shop-fe-qa`
+- 路由状态: `blocked`
+- 结论摘要: 前端开发环境已恢复，但 QA success 合同无法完成，因为 Playwright 自带 chromium_headless_shell 在本机启动即崩溃。
+- 原始证据仍以 `05-verification/` 中的文件为准。
+<!-- AUTO-QA-SUMMARY:END -->

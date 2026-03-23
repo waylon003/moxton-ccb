@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $false)]
     [double]$Refresh = 2,
 
@@ -76,11 +76,11 @@ if (-not $RunChild.IsPresent) {
         $spawnOutput = & wezterm @childArgs 2>&1
         $newPaneId = Normalize-PaneId([string]$spawnOutput)
         if ($LASTEXITCODE -ne 0 -or -not $newPaneId) {
-            Write-Error ('rich-monitor split-pane 启动失败: ' + [string]$spawnOutput)
+            Write-Error ('Rich 看板右侧分栏启动失败：' + [string]$spawnOutput)
             exit 1
         }
 
-        Write-Host ('[OK] rich-monitor 已附着到 Team Lead 右侧窗格: pane ' + $newPaneId) -ForegroundColor Green
+        Write-Host ('[OK] Rich 看板已附着到 Team Lead 右侧窗格：pane ' + $newPaneId) -ForegroundColor Green
         exit 0
     }
 }

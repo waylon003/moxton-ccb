@@ -2185,13 +2185,13 @@ function Ensure-RouteNotifier($tlPaneId) {
 
 function Ensure-RichMonitor($tlPaneId) {
     if (-not (Test-RichMonitorEnabled)) {
-        Write-Host '[INFO] rich-monitor disabled by CCB_DISABLE_RICH_MONITOR=1' -ForegroundColor DarkGray
+        Write-Host '[INFO] 已通过 CCB_DISABLE_RICH_MONITOR=1 禁用 Rich 看板' -ForegroundColor DarkGray
         return
     }
 
     $richScript = Join-Path $scriptDir 'start-rich-monitor.ps1'
     if (-not (Test-Path $richScript)) {
-        Write-Host '[WARN] start-rich-monitor.ps1 not found, skipping Rich monitor' -ForegroundColor Yellow
+        Write-Host '[WARN] 未找到 start-rich-monitor.ps1，跳过 Rich 看板启动' -ForegroundColor Yellow
         return
     }
 
@@ -2233,7 +2233,7 @@ function Ensure-RichMonitor($tlPaneId) {
             $scriptWriteTime = (Get-Item $richScript).LastWriteTime
             if ($scriptWriteTime -gt $proc.StartTime) {
                 $needsRestart = $true
-                Write-Host ('[WARN] rich-monitor binary drift detected: script=' + $scriptWriteTime.ToString('yyyy-MM-dd HH:mm:ss') + ' > process=' + $proc.StartTime.ToString('yyyy-MM-dd HH:mm:ss')) -ForegroundColor Yellow
+                Write-Host ('[WARN] Rich 看板脚本时间戳晚于现有进程，准备重启：script=' + $scriptWriteTime.ToString('yyyy-MM-dd HH:mm:ss') + ' > process=' + $proc.StartTime.ToString('yyyy-MM-dd HH:mm:ss')) -ForegroundColor Yellow
             }
         } catch {}
     }
@@ -2243,12 +2243,12 @@ function Ensure-RichMonitor($tlPaneId) {
             $noteText = [string]$richState.note
             if ($noteText -match 'error|traceback|fail') {
                 $needsRestart = $true
-                Write-Host ('[WARN] rich-monitor state reported error note: ' + $noteText) -ForegroundColor Yellow
+                Write-Host ('[WARN] Rich 看板状态文件报告异常备注：' + $noteText) -ForegroundColor Yellow
             }
         }
         if ($richState.status -and ([string]$richState.status -eq 'error')) {
             $needsRestart = $true
-            Write-Host '[WARN] rich-monitor state=error, will restart.' -ForegroundColor Yellow
+            Write-Host '[WARN] Rich 看板状态为 error，准备重启。' -ForegroundColor Yellow
         }
     }
 
@@ -2256,13 +2256,13 @@ function Ensure-RichMonitor($tlPaneId) {
         $richPaneInfo = Get-WeztermPaneInfo $savedPaneId $panes
         if (-not $richPaneInfo) {
             $needsRestart = $true
-            Write-Host '[WARN] rich-monitor process is alive but pane is missing; will restart.' -ForegroundColor Yellow
+            Write-Host '[WARN] Rich 看板进程仍存活，但窗格已丢失；准备重启。' -ForegroundColor Yellow
         } elseif ($tlPaneInfo) {
             $sameWindow = ([string]$richPaneInfo.window_id -eq [string]$tlPaneInfo.window_id)
             $sameTab = ([string]$richPaneInfo.tab_id -eq [string]$tlPaneInfo.tab_id)
             if ((-not $sameWindow) -or (-not $sameTab)) {
                 $needsRestart = $true
-                Write-Host '[WARN] rich-monitor is not attached to the Team Lead tab; will reattach on the right side.' -ForegroundColor Yellow
+                Write-Host '[WARN] Rich 看板未附着在 Team Lead 当前标签页；将重新挂到右侧分栏。' -ForegroundColor Yellow
             }
         }
     }
@@ -2272,7 +2272,7 @@ function Ensure-RichMonitor($tlPaneId) {
             Stop-Process -Id $savedPid -Force -ErrorAction Stop
             Start-Sleep -Milliseconds 300
         } catch {
-            Write-Host ('[WARN] Failed to stop stale rich-monitor PID ' + $savedPid + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+            Write-Host ('[WARN] 停止过期 Rich 看板进程失败，PID=' + $savedPid + '：' + $_.Exception.Message) -ForegroundColor Yellow
         }
         $richRunning = $false
         Remove-Item $richMonitorPidFile -Force -ErrorAction SilentlyContinue
@@ -2280,18 +2280,18 @@ function Ensure-RichMonitor($tlPaneId) {
     if ($savedPaneId -and (-not $richRunning -or $needsRestart)) {
         try {
             wezterm cli kill-pane --pane-id $savedPaneId 2>$null | Out-Null
-            Write-Host ('[INFO] Closed stale rich-monitor pane ' + $savedPaneId) -ForegroundColor DarkGray
+            Write-Host ('[INFO] 已关闭过期 Rich 看板窗格 ' + $savedPaneId) -ForegroundColor DarkGray
         } catch {
-            Write-Host ('[WARN] Failed to close stale rich-monitor pane ' + $savedPaneId + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+            Write-Host ('[WARN] 关闭过期 Rich 看板窗格失败，pane=' + $savedPaneId + '：' + $_.Exception.Message) -ForegroundColor Yellow
         }
         Remove-Item $richMonitorPaneFile -Force -ErrorAction SilentlyContinue
     }
 
     if (-not $richRunning) {
-        Write-Host '[INFO] Starting rich-monitor...' -ForegroundColor Yellow
+        Write-Host '[INFO] 正在启动 Rich 看板...' -ForegroundColor Yellow
         if (-not $panes -or @($panes).Count -eq 0) {
-            Write-Host '[WARN] Cannot start rich-monitor: wezterm cli is unavailable in current session.' -ForegroundColor Yellow
-            Write-Host '       Rich monitor is optional; dispatch will continue without it.' -ForegroundColor DarkGray
+            Write-Host '[WARN] 无法启动 Rich 看板：当前会话不可用 wezterm cli。' -ForegroundColor Yellow
+            Write-Host '       Rich 看板属于只读观察层；即使未启动，派遣链路也会继续。' -ForegroundColor DarkGray
             return
         }
 
@@ -2326,7 +2326,7 @@ function Ensure-RichMonitor($tlPaneId) {
         $spawnOutput = & wezterm @spawnArgs 2>&1
         $newPaneId = Normalize-PaneId ([string]$spawnOutput)
         if ($LASTEXITCODE -ne 0 -or -not $newPaneId) {
-            Write-Host ('[WARN] rich-monitor spawn failed: ' + [string]$spawnOutput) -ForegroundColor Yellow
+            Write-Host ('[WARN] Rich 看板拉起失败：' + [string]$spawnOutput) -ForegroundColor Yellow
             return
         }
 
@@ -2350,27 +2350,27 @@ function Ensure-RichMonitor($tlPaneId) {
         if ($launchedPid) {
             Set-Content $richMonitorPidFile $launchedPid -Force -Encoding UTF8
             if ($launchMode -eq 'merged-right') {
-                Write-Host ('[OK] rich-monitor started (merged right pane ' + $newPaneId + ', PID ' + $launchedPid + ')') -ForegroundColor Green
+                Write-Host ('[OK] Rich 看板已启动（同窗右侧 pane=' + $newPaneId + '，PID=' + $launchedPid + '）') -ForegroundColor Green
             } else {
-                Write-Host ('[OK] rich-monitor started (pane ' + $newPaneId + ', PID ' + $launchedPid + ')') -ForegroundColor Green
+                Write-Host ('[OK] Rich 看板已启动（pane=' + $newPaneId + '，PID=' + $launchedPid + '）') -ForegroundColor Green
             }
         } else {
             Remove-Item $richMonitorPidFile -Force -ErrorAction SilentlyContinue
             if ($launchMode -eq 'merged-right') {
-                Write-Host ('[WARN] rich-monitor right pane started (pane ' + $newPaneId + '), but PID sync timed out. Check status.') -ForegroundColor Yellow
+                Write-Host ('[WARN] Rich 看板右侧窗格已启动（pane=' + $newPaneId + '），但 PID 同步超时，请执行 status 检查。') -ForegroundColor Yellow
             } else {
-                Write-Host ('[WARN] rich-monitor pane started (pane ' + $newPaneId + '), but PID sync timed out. Check status.') -ForegroundColor Yellow
+                Write-Host ('[WARN] Rich 看板窗格已启动（pane=' + $newPaneId + '），但 PID 同步超时，请执行 status 检查。') -ForegroundColor Yellow
             }
         }
     } else {
         if ($savedPaneId) {
             if ($tlPaneInfo -and $richPaneInfo -and ([string]$richPaneInfo.window_id -eq [string]$tlPaneInfo.window_id) -and ([string]$richPaneInfo.tab_id -eq [string]$tlPaneInfo.tab_id)) {
-                Write-Host ('[OK] rich-monitor running (same tab right pane ' + $savedPaneId + ', PID ' + $savedPid + ')') -ForegroundColor Green
+                Write-Host ('[OK] Rich 看板运行中（同窗右侧 pane=' + $savedPaneId + '，PID=' + $savedPid + '）') -ForegroundColor Green
             } else {
-                Write-Host ('[OK] rich-monitor running (PID ' + $savedPid + ', pane ' + $savedPaneId + ')') -ForegroundColor Green
+                Write-Host ('[OK] Rich 看板运行中（PID=' + $savedPid + '，pane=' + $savedPaneId + '）') -ForegroundColor Green
             }
         } else {
-            Write-Host ('[OK] rich-monitor running (PID ' + $savedPid + ')') -ForegroundColor Green
+            Write-Host ('[OK] Rich 看板运行中（PID=' + $savedPid + '）') -ForegroundColor Green
         }
     }
 }
@@ -3672,12 +3672,12 @@ function Invoke-Status {
             'standalone' { '独立窗口' }
             default { $richLayout }
         }
-        Write-Host ('  rich-monitor 状态=' + $richStatus + ' pane=' + $richPaneText + ' 布局=' + $richLayoutLabel + ' last_loop=' + $richLastLoop + ' visible_tasks=' + $richTaskCount) -ForegroundColor $richColor
+        Write-Host ('  rich-monitor 状态=' + $richStatus + ' pane=' + $richPaneText + ' 布局=' + $richLayoutLabel + ' 最近轮询=' + $richLastLoop + ' 可见任务=' + $richTaskCount) -ForegroundColor $richColor
         if ($delivery.rich.note) {
             Write-Host ('  rich note=' + [string]$delivery.rich.note) -ForegroundColor DarkGray
         }
     } else {
-        Write-Host '  (rich-monitor state not found)' -ForegroundColor Yellow
+        Write-Host '  （未找到 rich-monitor 状态文件）' -ForegroundColor Yellow
     }
     Write-Host ('  recent delivery attempts: ok=' + $delivery.success_count + ' fail=' + $delivery.failure_count) -ForegroundColor DarkGray
     $unresolvedDeliveries = @($delivery.unresolved | Select-Object -First 5)
