@@ -90,9 +90,9 @@ report_route(
 - 新增端点必须有对应的中间件保护（auth/admin/guest）。
 - 不要修改 `prisma/schema.prisma` 除非任务明确要求。
 - 禁止把“注册新账号”作为默认开发自测路径；涉及登录/权限时优先使用固定测试凭据。
-- 如果被阻塞（权限审批、缺少上下文、依赖未就绪、环境异常），必须在 2 分钟内调用 `report_route`：
+- 如果被阻塞（缺少上下文、依赖未就绪、环境异常），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
-  - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+  - `body: "blocker_type=<api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
 - 长任务建议周期性调用 `report_route`：`status: "in_progress"` 同步当前进展与下一步。
 - 禁止在 pane 中提问后停滞等待；需要决策时直接走 `report_route(status="blocked")`。
 - 若仓库存在大量既有未提交改动：先采集 `git status --porcelain` 和 `git diff --name-only`，再继续执行，并在报告中单列 `pre-existing changes`。

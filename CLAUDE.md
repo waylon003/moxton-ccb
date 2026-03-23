@@ -1,4 +1,4 @@
-﻿# CLAUDE.md
+# CLAUDE.md
 
 本文件用于指导 Claude Code 在 `E:\moxton-ccb` 仓库中的 Team Lead 协作流程。
 
@@ -74,7 +74,7 @@ wezterm cli send-text --pane-id 123 --no-paste "hello"
 - 每次 `dispatch/dispatch-qa` 都会生成新的 `run_id`。
 - `dispatch/dispatch-qa` 会自动确保 `route-monitor` 与 `route-notifier` 常驻。
 - `status` 会优先读取 headless run 的 `state.json`，直接显示 `runtime / pid / proc / rt_last / run_dir / note`，不要再只凭 pane 文本判断是否卡住。
-- 只有 pane worker 会自动附着 `pane-approval-watcher`；headless worker 不再依赖此兼容层。
+- 当前业务主链默认不依赖审批弹窗；Codex worker 统一以 `-a never --sandbox danger-full-access` 启动。
 
 ### 回传/收口
 
@@ -87,13 +87,13 @@ wezterm cli send-text --pane-id 123 --no-paste "hello"
 - worker 必须至少回传一次 `in_progress`。
 - worker 结束时必须回传 `success` / `blocked` / `fail` 之一。
 - `run_id` 必须原样带回。
+- 主任务若收到 `report_route(status=fail)`，`route-monitor` 会把任务锁收敛到 `blocked`；Team Lead 必须按 `blocked` 终态处理，不得继续等待。
 - `doc-updater` / `repo-committer` 也走同一条链路，并且它们的 `in_progress` 与终态都必须触发 Team Lead 提醒。
 
 ### 组件职责边界
 
 - `route-monitor.ps1`：唯一收口者。负责消费 `route-inbox.json`、校验 `run_id`、更新任务锁、更新文档同步状态、推进 archive job，并把提醒事件写入 `config/teamlead-alerts.jsonl`。
 - `route-notifier.ps1`：唯一唤醒器。负责消费 `teamlead-alerts.jsonl` 并通过 WezTerm `send-text` 唤醒 Team Lead；送达结果写入 `config/teamlead-delivery.jsonl` / `config/teamlead-delivery-failures.jsonl`。
-- `pane-approval-watcher.ps1`：每个活跃 worker 一个。负责本地低风险最小按键处理，并把高风险/未知审批写入 `config/teamlead-alerts.jsonl`。
 - `doc-updater`：后端 QA 成功后由 `route-monitor`/控制器触发，用于同步 `02-api/*` 与 `04-projects/*`。
 - `repo-committer`：归档阶段负责 commit / push，回传也必须走同一条 route 链路。
 
@@ -114,16 +114,6 @@ wezterm cli send-text --pane-id 123 --no-paste "hello"
 - `route-monitor -> teamlead-alerts.jsonl -> route-notifier` 仍是统一回传与唤醒链
 
 因此，现阶段 Team Lead 在做主链决策时应把系统理解为“交互式指挥 + headless 执行层”；只有在明确回退或人工调试时才应重新启用 pane worker。
-
----
-## 本地审批兼容链路
-
-当前主链默认无审批弹窗，但兼容层仍然保留：
-
-- `pane-approval-watcher.ps1` 随派遣自动启动。
-- 低风险审批由 watcher 在 worker pane 内处理。
-- 高风险/未知审批会被写入 `teamlead-alerts.jsonl`，再由 `route-notifier` 唤醒 Team Lead。
-- Team Lead 日常关注重点应是 MCP route 上报；审批类命令属于兼容工具，不是主链核心。
 
 ---
 
@@ -170,11 +160,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 
 补充：
 
-- `baseline-clean` 改为手动触发；控制器不会在每次派遣前自动清理 pending route / approval。
+- `baseline-clean` 改为手动触发；控制器不会在每次派遣前自动清理 pending route。
 - `prune-orphan-locks` 用于清理任务文件已不存在的孤立锁。
-- `show-approval` / `approve-local` / `deny-local` 仅用于本地审批兼容场景。
 
 ---
+
+## 阻塞分类决策树（强制）
+- 收到 `blocked` 或 `fail` 后，第一步永远是执行 `status`，不得直接 `requeue / dispatch`。
+- 然后必须把阻塞归类为以下四类之一，再决策：
+  1. `runtime/orchestration`：锁脏、旧 `run_id`、残留 `pid/run_dir`、worker 漂移、stale run。
+     - 处理：由 Team Lead 直接执行 `recover -RecoverAction restart-task / reap-stale / restart-worker`，不要回开发。
+  2. `env/service`：端口占用、`/health` 不通、`connection refused`、服务未启动、测试环境不可达、测试账号/种子数据缺失。
+     - 处理：先恢复环境或派发环境恢复任务；环境未恢复前，禁止对原任务直接重派。
+  3. `qa_evidence`：截图缺失、证据路径不存在、结构化 JSON 不合规、`has_5xx=true`。
+     - 处理：回 QA 补证据或重跑 QA；不要回开发。
+  4. `code/contract/ui`：接口契约不符、实现错误、页面行为不符合验收。
+     - 处理：才允许 `requeue` 回开发并重新 `dispatch`。
+- Team Lead 默认不是“只会重派的调度器”；它必须主动解决 `runtime/orchestration` 与 `env/service` 阻塞。
+- 只有在确认阻塞属于 `code/contract/ui` 时，才把问题退回开发 worker。
+- 换言之：符合链路的决策一律不问用户；只有未知阻塞、未知依赖、未知风险才升级给用户。
 
 ## Team Lead 决策规则
 
@@ -182,6 +186,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - `assign_task.py` 不作为默认规划入口；仅允许使用只读参数（如 `--list`、`--scan`）做诊断。
 - 禁止把 `docs/plans/*` 当作执行输入。
 - Team Lead 先跑 `status`，再决定是否 `dispatch / requeue / recover / archive`；禁止只凭 pane 没输出就判定卡住。
+- 若某个动作已被链路规则明确覆盖，Team Lead 必须直接执行，不得把本应自主决策的 `requeue / recover / dispatch / dispatch-qa / archive` 再抛回给用户。
+- 若收到 `fail` 回传，视为终态失败而不是“继续等待”；必须先读 `body / note / routeUpdate.bodyPreview`，再按 `blocked` 流程决策。
 - 同一 `get-text/check_routes` 无变化最多 3 轮，随后必须转 `status/recover`。
 
 ---
@@ -189,6 +195,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 ## Worker / QA 硬约束
 
 - Worker 遇阻塞必须 `report_route(status=blocked, ...)`，不得静默等待。
+- Worker 若回传 `status=fail`，必须把失败原因写进 `body`；Team Lead 会按 `blocked` 终态处理。
 - QA 回传 `status=success` 时，`body` 必须是 JSON 结构化证据；不合规会被 `route-monitor` 自动降级为 `blocked`。
 - QA worker 不得调用 `teamlead-control.ps1`，不得直接编辑 `TASK-LOCKS.json`，不得向用户询问“归档还是 qa_passed”这类编排决策。
 - QA 若以环境/服务阻塞回传 `blocked`（例如 `localhost:3033/health` 不可达），应先恢复环境或派发环境恢复任务，再回到原任务继续 `requeue + dispatch-qa`；不要直接重派同一 QA。

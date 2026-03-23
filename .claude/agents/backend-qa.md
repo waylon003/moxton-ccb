@@ -114,9 +114,9 @@ report_route(
 - 跨角色问题必须通过 `report_route(status="blocked", ...)` 发给 Team Lead，禁止自建私有信封协议。
 - `PASS` 后只执行一次 `report_route(status="success", body=<结构化 JSON>)`，然后停止；不要追问用户“归档还是 qa_passed”。
 - 禁止调用 `teamlead-control.ps1`、禁止直接编辑 `01-tasks/TASK-LOCKS.json`、禁止替 Team Lead 做状态编排。
-- 若被阻塞（权限审批、环境、依赖、契约不明），必须在 2 分钟内调用 `report_route`：
+- 若被阻塞（环境、依赖、契约不明），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
-  - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+  - `body: "blocker_type=<api|env|dependency|qa_evidence_invalid|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
 - 若证据文件缺失、路径不在 CCB 根目录、或 `validate-qa-evidence.ps1` 校验失败，必须回传：
   - `status: "blocked"`
   - `body: "blocker_type=qa_evidence_invalid; question=<缺失或错路径的证据>; attempted=<已尝试>; next_action_needed=补齐证据并重新验证"`

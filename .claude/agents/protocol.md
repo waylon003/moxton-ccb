@@ -78,7 +78,7 @@ report_route(
 阻塞消息必须包含以下字段：
 
 ```text
-blocker_type=<approval|api|env|dependency|unknown>;
+blocker_type=<api|env|dependency|qa_evidence_invalid|unknown>;
 question=<需要 Team Lead 决策/补充的信息>;
 attempted=<已尝试动作>;
 next_action_needed=<希望 Team Lead 执行的动作>

@@ -21,15 +21,12 @@ flowchart TD
     D --> WM["worker-map.json"]
     D --> WR["worker-panels.json / WezTerm pane"]
     WR --> W["Workers (Codex)"]
-    D --> PAW["pane-approval-watcher"]
   end
 
   subgraph Work["执行/验收"]
     W --> Repo["业务仓库"]
     W --> Evidence["05-verification/*"]
     W -->|report_route| Inbox["route-inbox.json"]
-    W -->|本地审批提示| PAW
-    PAW --> Alerts["teamlead-alerts.jsonl"]
   end
 
   subgraph Monitor["收口/通知"]
@@ -55,7 +52,7 @@ flowchart TD
 - **Team Lead**：Claude Code 会话（本仓库）— 需求拆分、任务分派、进度监控
 - **主指挥约束**：Team Lead 只能使用 Claude Code（禁止 Codex 作为主指挥）
 - **Workers**：当前业务主链与辅助 worker 均默认走 headless `codex exec`。`backend-dev`、`shop-fe-dev`、`admin-fe-dev`、`backend-qa`、`shop-fe-qa`、`admin-fe-qa`、`doc-updater`、`repo-committer` 都已接入 headless runner；WezTerm pane 仅保留兼容回退用途。
-- **通信**：统一走 MCP `report_route` 回传 + WezTerm CLI `send-text` 唤醒。`route-monitor` 负责收口、写锁、文档/归档状态更新与事件落盘；`route-notifier` 独立负责唤醒 Team Lead；`pane-approval-watcher` 仅保留给 pane worker 的本地审批兼容。
+- **通信**：统一走 MCP `report_route` 回传 + WezTerm CLI `send-text` 唤醒。`route-monitor` 负责收口、写锁、文档/归档状态更新与事件落盘；`route-notifier` 独立负责唤醒 Team Lead。
 
 - **控制入口**：`scripts/teamlead-control.ps1`（业务动作统一入口）
 
@@ -105,14 +102,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 
 # 查看状态
 ... -Action status
-... -Action show-approval -RequestId APR-20260228120000-0001
 ```
 
 派遣规则（强约束）：
 - `dispatch/dispatch-qa` 必须串行执行（一次只执行一条）。
 - 不要并行启动两条 dispatch 命令；同角色并发由控制器自动分配 worker pool 实例。
 - 引擎默认来自 `worker-map.json`，可用 `-DispatchEngine codex|gemini` 做单次覆盖。
-- `baseline-clean` 改为手动触发；控制器不会在每次派遣前自动清理 pending route / approval。
+- `baseline-clean` 改为手动触发；控制器不会在每次派遣前自动清理 pending route。
 - `prune-orphan-locks` 用于清理“任务文件在 `active/` 和 `completed/` 都不存在”的孤立锁；不要再用临时脚本直改 `TASK-LOCKS.json`。
 - `requeue` 只做“记录 + 改状态”，不会自动通知旧 worker，也不会自动重新派遣。
 - `requeue/reset-task` 现在会清空旧 `run_id / assigned_worker / headless_pid / headless_run_dir / pane_id / dispatch_mode`，避免脏运行态残留。
@@ -134,7 +130,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 
 ## Rich 监控台（只读）
 
-用于实时查看任务锁、headless 运行态、最近 `report_route` / Team Lead 唤醒记录、attempt 历史。该监控台只读，不参与派遣、改锁或决策。
+用于实时查看任务锁、headless 运行态、最近 `report_route` / Team Lead 唤醒记录、attempt 历史。该监控台只读，不参与派遣、改锁或决策。控制器会优先把看板附着到 Team Lead 所在 WezTerm 窗口的右侧，形成“左侧 Team Lead、右侧看板”的双栏布局。
 
 ```bash
 # 实时监控（默认刷新 2 秒）
@@ -142,6 +138,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start
 
 # 只看某个任务
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-rich-monitor.ps1" -TaskId SHOP-FE-013
+
+# 手动附着到当前 Team Lead pane 右侧
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-rich-monitor.ps1" -TeamLeadPaneId $env:WEZTERM_PANE
 
 # 渲染一次快照后退出
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-rich-monitor.ps1" -Once
@@ -176,7 +175,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start
 
 默认由 `route-notifier` 通过 WezTerm `send-text` 唤醒 Team Lead；`route-monitor` 不再直接发送唤醒，只负责事件落盘。
 所有经 Team Lead 派遣的 worker（含 `doc-updater` / `repo-committer`）只要按协议走 `report_route`，都会先被 `route-monitor` 收口，再由 `route-notifier` 唤醒 Team Lead。
-本地 pane 审批由 `pane-approval-watcher` 负责兼容处理；高风险/未知审批会追加到 `teamlead-alerts.jsonl` 后再提醒 Team Lead。
 如需关闭直接唤醒，设置 `CCB_ROUTE_MONITOR_NOTIFY=0`。
 Agent Teams / `notify-sentinel` 已从主链移除，不再作为派遣前置门槛。
 
@@ -210,7 +208,7 @@ Agent Teams / `notify-sentinel` 已从主链移除，不再作为派遣前置门
 - QA 若以 `blocked` 回传环境/服务阻塞（如 `localhost:3033/health` 不可达），先恢复环境或派发环境恢复任务，再回到原任务继续 `requeue + dispatch-qa`；不要直接重派同一 QA。
 - 前端 QA 默认顺序：`Playwright smoke -> agent-browser 真实交互验收 -> playwright-mcp/截图/网络证据补充`。
 - Team Lead 监控 Worker 时禁止无限轮询：同一 `get-text/check_routes` 无变化最多 3 轮，随后必须转 `status/recover`。
-- MCP 上报由 `route-notifier` 独立发送提醒；高风险审批相关命令仅做兼容保留。
+- MCP 上报由 `route-notifier` 独立发送提醒；Team Lead 日常只围绕 route/status/dispatch/requeue/archive 决策。
 
 ## 目录结构
 
@@ -220,7 +218,7 @@ Agent Teams / `notify-sentinel` 已从主链移除，不再作为派遣前置门
 03-guides/         技术指南
 04-projects/       项目文档与协调关系
 05-verification/   QA 验证报告与原始证据
-config/            配置（worker-map、approval-policy）
+config/            配置（worker-map、route/runtime/notifier 状态）
 scripts/           控制器与工具脚本
 mcp/route-server/  MCP 路由服务（report_route / check_routes / clear_route）
 ```

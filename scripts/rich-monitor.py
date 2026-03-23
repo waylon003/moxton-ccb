@@ -35,10 +35,102 @@ STATE_STYLES = {
     "completed": "dim",
     "archiving": "magenta",
     "failed": "red",
+    "fail": "red",
     "success": "green",
     "running": "yellow",
+    "starting": "yellow",
     "dispatched": "cyan",
+    "snapshot": "cyan",
+    "error": "bold red",
+    "unknown": "white",
 }
+
+STATE_LABELS = {
+    "assigned": "待派遣开发",
+    "waiting_qa": "待派遣 QA",
+    "in_progress": "进行中",
+    "blocked": "阻塞",
+    "qa_passed": "QA 已通过",
+    "completed": "已完成",
+    "archiving": "归档中",
+    "failed": "失败",
+    "fail": "失败",
+    "success": "成功",
+    "running": "运行中",
+    "starting": "启动中",
+    "dispatched": "已派遣",
+    "requeued": "已回退",
+    "snapshot": "快照",
+    "error": "异常",
+    "pending": "待处理",
+    "unknown": "未知",
+}
+
+MODE_LABELS = {
+    "headless": "无头",
+    "pane": "窗格",
+}
+
+PHASE_LABELS = {
+    "headless": "无头",
+    "pane": "窗格",
+    "spawn": "启动",
+    "route": "回传",
+    "dev": "开发",
+    "qa": "验收",
+    "archive": "归档",
+    "archiving": "归档中",
+    "running": "运行中",
+    "starting": "启动中",
+    "completed": "已完成",
+    "blocked": "阻塞",
+    "success": "成功",
+    "fail": "失败",
+    "failed": "失败",
+}
+
+LAYOUT_LABELS = {
+    "merged-right": "同窗右栏",
+    "standalone": "独立窗口",
+}
+
+
+def humanize_token(value: Any) -> str:
+    if value is None:
+        return "-"
+    raw = str(value).strip()
+    if not raw:
+        return "-"
+    return raw.replace("_", " ")
+
+
+def normalize_lookup_key(value: Any) -> str:
+    raw = humanize_token(value)
+    return raw.lower().replace("-", "_").replace(" ", "_")
+
+
+def localize_state(value: Any) -> str:
+    raw = humanize_token(value)
+    key = normalize_lookup_key(value)
+    return STATE_LABELS.get(key, raw)
+
+
+def localize_mode(value: Any) -> str:
+    raw = humanize_token(value)
+    key = normalize_lookup_key(value)
+    return MODE_LABELS.get(key, raw)
+
+
+def localize_phase(value: Any) -> str:
+    raw = humanize_token(value)
+    key = normalize_lookup_key(value)
+    return PHASE_LABELS.get(key, raw)
+
+
+def localize_layout(value: Any) -> str:
+    raw = humanize_token(value)
+    key = normalize_lookup_key(value)
+    return LAYOUT_LABELS.get(key, raw)
 
 
 @dataclass
@@ -113,6 +205,8 @@ def write_monitor_state(
         "status": status,
         "pid": os.getpid(),
         "monitor_pane_id": wezterm_pane_id(),
+        "layout_mode": os.environ.get("CCB_RICH_LAYOUT_MODE") or "standalone",
+        "paired_teamlead_pane_id": os.environ.get("CCB_RICH_TEAMLEAD_PANE_ID") or "",
         "started_at": started_at,
         "last_loop_at": datetime.now().astimezone().isoformat(),
         "refresh_seconds": args.refresh,
@@ -203,11 +297,11 @@ def age_text(value: Any) -> str:
 
 
 def state_style(state: str) -> str:
-    return STATE_STYLES.get((state or "").strip().lower(), "white")
+    return STATE_STYLES.get(normalize_lookup_key(state), "white")
 
 
 def style_state(state: str) -> str:
-    label = state or "-"
+    label = localize_state(state)
     return f"[{state_style(state)}]{label}[/]"
 
 
@@ -459,24 +553,27 @@ def make_header(state: dict[str, Any], args: argparse.Namespace) -> Panel:
     assigned = counts.get("assigned", 0)
     waiting_qa = counts.get("waiting_qa", 0)
     in_progress = counts.get("in_progress", 0)
-    title = Text("Moxton-CCB Rich 监控台", style="bold cyan")
+
+    title = Text("Moxton-CCB 指挥看板", style="bold cyan")
     subtitle = Text()
-    subtitle.append(f"root={state['paths'].root}  ")
-    subtitle.append(f"refresh={args.refresh:.1f}s  ")
-    subtitle.append(f"locks={len(tasks)}  ")
-    subtitle.append(f"running_headless={running_headless}  ", style="yellow")
-    subtitle.append(f"blocked={blocked}  ", style="red" if blocked else "green")
-    subtitle.append(f"assigned={assigned}  waiting_qa={waiting_qa}  qa_passed={qa_passed}  in_progress={in_progress}")
+    subtitle.append(f"根目录={state['paths'].root}  ", style="dim")
+    subtitle.append(f"刷新={args.refresh:.1f}s  ")
+    subtitle.append(f"任务锁={len(tasks)}  ")
+    subtitle.append(f"无头运行={running_headless}  ", style="yellow" if running_headless else "dim")
+    subtitle.append(f"阻塞={blocked}  ", style="red" if blocked else "green")
+    subtitle.append(f"待开发={assigned}  待 QA={waiting_qa}  QA通过={qa_passed}  进行中={in_progress}")
+    if args.task:
+        subtitle.append(f"  焦点任务={args.task}", style="bold cyan")
     group = Group(title, subtitle)
     return Panel(group, border_style="cyan")
 
 
 def make_tasks_panel(state: dict[str, Any]) -> Panel:
     table = Table(expand=True, box=None)
-    table.add_column("Task", style="bold")
-    table.add_column("State", no_wrap=True)
-    table.add_column("Worker")
-    table.add_column("Mode", no_wrap=True)
+    table.add_column("任务", style="bold")
+    table.add_column("状态", no_wrap=True)
+    table.add_column("执行者")
+    table.add_column("模式", no_wrap=True)
     table.add_column("更新")
     table.add_column("摘要")
 
@@ -496,22 +593,22 @@ def make_tasks_panel(state: dict[str, Any]) -> Panel:
             task_label,
             style_state(task.get("state") or ""),
             worker,
-            mode,
+            localize_mode(mode),
             updated,
             shorten(summary, 72),
         )
-    title = f"任务锁 / TASK-LOCKS  更新={age_text(state.get('locks_updated_at'))}"
+    title = f"任务总览 / TASK-LOCKS  更新={age_text(state.get('locks_updated_at'))}"
     return Panel(table, title=title, border_style="blue")
 
 
 def make_runtime_panel(state: dict[str, Any]) -> Panel:
     table = Table(expand=True, box=None)
-    table.add_column("Task", style="bold")
-    table.add_column("Worker")
-    table.add_column("Runtime")
+    table.add_column("任务", style="bold")
+    table.add_column("执行者")
+    table.add_column("运行态")
     table.add_column("PID")
     table.add_column("更新")
-    table.add_column("Note")
+    table.add_column("备注")
 
     rows = state["runtime_rows"]
     if not rows:
@@ -522,9 +619,9 @@ def make_runtime_panel(state: dict[str, Any]) -> Panel:
         pid = row.get("pid") or 0
         pid_text = "-"
         if pid:
-            pid_text = f"{pid} {'alive' if row.get('pid_alive') else 'gone'}"
+            pid_text = f"{pid} {'存活' if row.get('pid_alive') else '已退出'}"
         note = row.get("note") or path_tail(row.get("run_dir"), 2)
-        runtime_label = f"{style_state(runtime_state)} / {phase}"
+        runtime_label = f"{style_state(runtime_state)} / {localize_phase(phase)}"
         table.add_row(
             row.get("task_id") or "-",
             row.get("worker") or "-",
@@ -539,8 +636,8 @@ def make_runtime_panel(state: dict[str, Any]) -> Panel:
 def make_delivery_panel(state: dict[str, Any]) -> Panel:
     table = Table(expand=True, box=None)
     table.add_column("时间")
-    table.add_column("Task")
-    table.add_column("Status")
+    table.add_column("任务")
+    table.add_column("状态")
     table.add_column("送达")
     table.add_column("消息")
 
@@ -550,7 +647,7 @@ def make_delivery_panel(state: dict[str, Any]) -> Panel:
     for row in rows:
         status = row.get("status") or row.get("action") or "-"
         sent = row.get("sent")
-        delivery = "ok" if sent is True else "fail" if sent is False else "-"
+        delivery = "已送达" if sent is True else "失败" if sent is False else "-"
         if row.get("error"):
             delivery = f"{delivery}:{shorten(row.get('error'), 18)}"
         table.add_row(
@@ -566,10 +663,10 @@ def make_delivery_panel(state: dict[str, Any]) -> Panel:
 def make_attempts_panel(state: dict[str, Any]) -> Panel:
     table = Table(expand=True, box=None)
     table.add_column("开始")
-    table.add_column("Task")
-    table.add_column("Phase")
-    table.add_column("Result")
-    table.add_column("Reason")
+    table.add_column("任务")
+    table.add_column("阶段")
+    table.add_column("结果")
+    table.add_column("原因")
 
     attempts = state["attempts"]
     if not attempts:
@@ -578,11 +675,11 @@ def make_attempts_panel(state: dict[str, Any]) -> Panel:
         table.add_row(
             age_text(item.get("started_at")),
             item.get("task_id") or "-",
-            item.get("phase") or "-",
+            localize_phase(item.get("phase") or "-"),
             style_state(item.get("result") or "-"),
             shorten(item.get("requeue_reason") or item.get("updated_by") or "", 40),
         )
-    title = f"最近 Attempts  更新={age_text(state.get('attempts_updated_at'))}"
+    title = f"最近尝试  更新={age_text(state.get('attempts_updated_at'))}"
     return Panel(table, title=title, border_style="yellow")
 
 
@@ -593,39 +690,33 @@ def watcher_line(name: str, doc: dict[str, Any]) -> Text:
     pane = doc.get("monitor_pane_id") or doc.get("notifier_pane_id") or "-"
     pid = doc.get("pid") or "-"
     note = shorten(doc.get("note") or "", 70)
-    text.append(f"{name}: ")
-    text.append(status, style=state_style(status))
-    text.append(f"  lag={lag}  pid={pid}  pane={pane}")
+    text.append(f"{name}：")
+    text.append(localize_state(status), style=state_style(status))
+    text.append(f"  间隔={lag}  PID={pid}  Pane={pane}")
     if note:
-        text.append(f"  note={note}", style="dim")
+        text.append(f"  备注={note}", style="dim")
     return text
 
 
 def make_summary_panel(state: dict[str, Any]) -> Panel:
     workers = state["workers"] or {}
-    approval_state = state.get("approval_state") or {}
-    local_pending = 0
-    if isinstance(approval_state, dict):
-        for value in approval_state.values():
-            if isinstance(value, dict) and str(value.get("status") or "") == "pending":
-                local_pending += 1
-
     blocked_tasks = [task for task in state["tasks"] if (task.get("state") or "") == "blocked"]
+    alive_runtime = sum(1 for row in state["runtime_rows"] if row.get("pid_alive"))
     lines: list[Any] = [
         watcher_line("route-monitor", state.get("route_monitor") or {}),
         watcher_line("route-notifier", state.get("route_notifier") or {}),
-        Text(f"worker registry={len(workers)}  approval_requests={state.get('approval_count', 0)}  local_pending={local_pending}")
+        Text(f"worker注册={len(workers)}  活跃运行态={alive_runtime}  阻塞任务={len(blocked_tasks)}"),
     ]
 
     if blocked_tasks:
-        lines.append(Text("阻塞任务:", style="bold red"))
+        lines.append(Text("阻塞任务：", style="bold red"))
         for task in blocked_tasks[:5]:
             route = task.get("route_update") or {}
             lines.append(Text(f"- {task['task_id']} {shorten(route.get('bodyPreview') or task.get('note') or '', 88)}"))
     else:
-        lines.append(Text("阻塞任务: 无", style="green"))
+        lines.append(Text("阻塞任务：无", style="green"))
 
-    return Panel(Group(*lines), title="监控器 / 告警摘要", border_style="red")
+    return Panel(Group(*lines), title="监控摘要 / 告警", border_style="red")
 
 
 def render_dashboard(state: dict[str, Any], args: argparse.Namespace) -> Layout:

@@ -328,36 +328,33 @@ function Invoke-NotifyReady {
     Write-Host '[INFO] notify-ready 已弃用。当前由 route-monitor 写事件、route-notifier 独立通知 Team Lead，无需 notify-sentinel ready 标记。' -ForegroundColor Yellow
 }
 function Resolve-TeamLeadPaneId {
+    $currentPane = Normalize-PaneId ([string]$env:WEZTERM_PANE)
+    if (-not $currentPane) {
+        $currentPane = Normalize-PaneId ([string]$env:WEZTERM_PANE_ID)
+    }
+    if ($currentPane) {
+        $env:TEAM_LEAD_PANE_ID = $currentPane
+        return $env:TEAM_LEAD_PANE_ID
+    }
+
     $normalizedEnvTeamLead = Normalize-PaneId ([string]$env:TEAM_LEAD_PANE_ID)
     if ($normalizedEnvTeamLead) {
         $env:TEAM_LEAD_PANE_ID = $normalizedEnvTeamLead
         return $env:TEAM_LEAD_PANE_ID
     }
-    try {
-        $raw = wezterm cli list --format json 2>$null
-        if ($raw) {
-            try {
-                $panes = @($raw | ConvertFrom-Json)
-                $tlPane = $panes | Where-Object { ([string]$_.pane_id) -eq '0' } | Select-Object -First 1
-                if (-not $tlPane) {
-                    $tlPane = $panes | Where-Object { $_.title -like '*claude*' -or $_.title -like '*codex*' } | Select-Object -First 1
-                }
-                if (-not $tlPane) {
-                    $tlPane = $panes | Select-Object -First 1
-                }
-                if ($tlPane -and $tlPane.pane_id) {
-                    $resolvedPaneId = Normalize-PaneId ([string]$tlPane.pane_id)
-                    if ($resolvedPaneId) {
-                        $env:TEAM_LEAD_PANE_ID = $resolvedPaneId
-                        return $env:TEAM_LEAD_PANE_ID
-                    }
-                }
-            } catch {}
-        }
-    } catch {}
-    $env:TEAM_LEAD_PANE_ID = '0'
-    Write-Host '[WARN] Cannot reliably detect Team Lead Pane ID. Fallback to pane 0.' -ForegroundColor Yellow
-    return $env:TEAM_LEAD_PANE_ID
+
+    Write-Host '[FAIL] Cannot reliably detect Team Lead Pane ID.' -ForegroundColor Red
+    Write-Host '       请在真正的 Team Lead WezTerm pane 内执行，或先显式设置 $env:TEAM_LEAD_PANE_ID。' -ForegroundColor Yellow
+    Write-Host '       示例：$env:TEAM_LEAD_PANE_ID = $env:WEZTERM_PANE' -ForegroundColor DarkGray
+    return $null
+}
+
+function Assert-TeamLeadPaneId([string]$PaneId, [string]$ActionName = 'action') {
+    if ($PaneId) { return }
+    Write-Host ('[FAIL] Missing Team Lead Pane ID for ' + $ActionName + '.') -ForegroundColor Red
+    Write-Host '       请切到真正的 Team Lead WezTerm pane 后重试，或先执行：' -ForegroundColor Yellow
+    Write-Host '       $env:TEAM_LEAD_PANE_ID = $env:WEZTERM_PANE' -ForegroundColor White
+    exit 1
 }
 
 function Normalize-PaneId([string]$value) {
@@ -1411,6 +1408,22 @@ function Get-WeztermPanes {
     }
 }
 
+function Get-WeztermPaneInfo([string]$PaneId, $Panes = $null) {
+    $normalized = Normalize-PaneId $PaneId
+    if (-not $normalized) { return $null }
+    if (-not $Panes) {
+        $Panes = Get-WeztermPanes
+    }
+    if (-not $Panes) { return $null }
+    foreach ($pane in @($Panes)) {
+        $candidate = Normalize-PaneId ([string]$pane.pane_id)
+        if ($candidate -eq $normalized) {
+            return $pane
+        }
+    }
+    return $null
+}
+
 function Read-WorkerRegistryData {
     if (-not (Test-Path $registryPath)) {
         return @{ updated_at = (Get-Date -Format "o"); workers = @{} }
@@ -2188,6 +2201,19 @@ function Ensure-RichMonitor($tlPaneId) {
     $savedPaneId = Get-RichMonitorPaneId
     $proc = $null
     $richState = Read-RichMonitorState
+    $panes = Get-WeztermPanes
+    $tlPaneInfo = Get-WeztermPaneInfo $tlPaneId $panes
+    $richPaneInfo = $null
+    $targetPercent = 38
+
+    if ($env:CCB_RICH_MONITOR_PERCENT) {
+        try {
+            $parsedPercent = [int]$env:CCB_RICH_MONITOR_PERCENT
+            if ($parsedPercent -ge 20 -and $parsedPercent -le 70) {
+                $targetPercent = $parsedPercent
+            }
+        } catch {}
+    }
 
     if (Test-Path $richMonitorPidFile) {
         $savedPid = (Get-Content $richMonitorPidFile -Raw).Trim()
@@ -2226,6 +2252,21 @@ function Ensure-RichMonitor($tlPaneId) {
         }
     }
 
+    if ($richRunning -and $savedPaneId) {
+        $richPaneInfo = Get-WeztermPaneInfo $savedPaneId $panes
+        if (-not $richPaneInfo) {
+            $needsRestart = $true
+            Write-Host '[WARN] rich-monitor process is alive but pane is missing; will restart.' -ForegroundColor Yellow
+        } elseif ($tlPaneInfo) {
+            $sameWindow = ([string]$richPaneInfo.window_id -eq [string]$tlPaneInfo.window_id)
+            $sameTab = ([string]$richPaneInfo.tab_id -eq [string]$tlPaneInfo.tab_id)
+            if ((-not $sameWindow) -or (-not $sameTab)) {
+                $needsRestart = $true
+                Write-Host '[WARN] rich-monitor is not attached to the Team Lead tab; will reattach on the right side.' -ForegroundColor Yellow
+            }
+        }
+    }
+
     if ($richRunning -and $needsRestart) {
         try {
             Stop-Process -Id $savedPid -Force -ErrorAction Stop
@@ -2248,19 +2289,40 @@ function Ensure-RichMonitor($tlPaneId) {
 
     if (-not $richRunning) {
         Write-Host '[INFO] Starting rich-monitor...' -ForegroundColor Yellow
-        $panes = Get-WeztermPanes
         if (-not $panes -or @($panes).Count -eq 0) {
             Write-Host '[WARN] Cannot start rich-monitor: wezterm cli is unavailable in current session.' -ForegroundColor Yellow
             Write-Host '       Rich monitor is optional; dispatch will continue without it.' -ForegroundColor DarkGray
             return
         }
 
-        $spawnArgs = @(
-            'cli', 'spawn',
-            '--cwd', $rootDir,
-            'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-            '-File', $richScript
-        )
+        $launchMode = 'standalone'
+        if ($tlPaneInfo) {
+            $spawnArgs = @(
+                'cli', 'split-pane',
+                '--pane-id', $tlPaneId,
+                '--horizontal',
+                '--percent', [string]$targetPercent,
+                '--cwd', $rootDir,
+                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', $richScript,
+                '-RunChild',
+                '-LayoutMode', 'merged-right',
+                '-PairedTeamLeadPaneId', $tlPaneId,
+                '-SplitPercent', [string]$targetPercent
+            )
+            $launchMode = 'merged-right'
+        } else {
+            $spawnArgs = @(
+                'cli', 'spawn',
+                '--cwd', $rootDir,
+                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', $richScript,
+                '-RunChild',
+                '-LayoutMode', 'standalone',
+                '-SplitPercent', [string]$targetPercent
+            )
+        }
+
         $spawnOutput = & wezterm @spawnArgs 2>&1
         $newPaneId = Normalize-PaneId ([string]$spawnOutput)
         if ($LASTEXITCODE -ne 0 -or -not $newPaneId) {
@@ -2287,14 +2349,26 @@ function Ensure-RichMonitor($tlPaneId) {
 
         if ($launchedPid) {
             Set-Content $richMonitorPidFile $launchedPid -Force -Encoding UTF8
-            Write-Host ('[OK] rich-monitor started (pane ' + $newPaneId + ', PID ' + $launchedPid + ')') -ForegroundColor Green
+            if ($launchMode -eq 'merged-right') {
+                Write-Host ('[OK] rich-monitor started (merged right pane ' + $newPaneId + ', PID ' + $launchedPid + ')') -ForegroundColor Green
+            } else {
+                Write-Host ('[OK] rich-monitor started (pane ' + $newPaneId + ', PID ' + $launchedPid + ')') -ForegroundColor Green
+            }
         } else {
             Remove-Item $richMonitorPidFile -Force -ErrorAction SilentlyContinue
-            Write-Host ('[WARN] rich-monitor pane started (pane ' + $newPaneId + '), but PID sync timed out. Check status.') -ForegroundColor Yellow
+            if ($launchMode -eq 'merged-right') {
+                Write-Host ('[WARN] rich-monitor right pane started (pane ' + $newPaneId + '), but PID sync timed out. Check status.') -ForegroundColor Yellow
+            } else {
+                Write-Host ('[WARN] rich-monitor pane started (pane ' + $newPaneId + '), but PID sync timed out. Check status.') -ForegroundColor Yellow
+            }
         }
     } else {
         if ($savedPaneId) {
-            Write-Host ('[OK] rich-monitor running (PID ' + $savedPid + ', pane ' + $savedPaneId + ')') -ForegroundColor Green
+            if ($tlPaneInfo -and $richPaneInfo -and ([string]$richPaneInfo.window_id -eq [string]$tlPaneInfo.window_id) -and ([string]$richPaneInfo.tab_id -eq [string]$tlPaneInfo.tab_id)) {
+                Write-Host ('[OK] rich-monitor running (same tab right pane ' + $savedPaneId + ', PID ' + $savedPid + ')') -ForegroundColor Green
+            } else {
+                Write-Host ('[OK] rich-monitor running (PID ' + $savedPid + ', pane ' + $savedPaneId + ')') -ForegroundColor Green
+            }
         } else {
             Write-Host ('[OK] rich-monitor running (PID ' + $savedPid + ')') -ForegroundColor Green
         }
@@ -2486,6 +2560,7 @@ function Invoke-Bootstrap {
     Write-Host ''
 
     $tlPaneId = Resolve-TeamLeadPaneId
+    Assert-TeamLeadPaneId $tlPaneId 'bootstrap'
     Write-Host ('[OK] Team Lead Pane ID: ' + $tlPaneId) -ForegroundColor Green
 
     # Doctor diagnostics
@@ -2584,6 +2659,7 @@ function Invoke-Dispatch {
     }
     Assert-CanonicalTaskId $TaskId
     $tlPaneId = Resolve-TeamLeadPaneId
+    Assert-TeamLeadPaneId $tlPaneId 'dispatch'
     Write-Host '[INFO] Pre-dispatch baseline-clean is disabled by default; controller will preserve pending routes/approvals unless you run recover -RecoverAction baseline-clean manually.' -ForegroundColor DarkGray
 
     $workerMap = Get-WorkerMap
@@ -2798,6 +2874,7 @@ function Invoke-DispatchQA {
     }
     Assert-CanonicalTaskId $TaskId
     $tlPaneId = Resolve-TeamLeadPaneId
+    Assert-TeamLeadPaneId $tlPaneId 'dispatch-qa'
     Write-Host '[INFO] Pre-dispatch baseline-clean is disabled by default; controller will preserve pending routes/approvals unless you run recover -RecoverAction baseline-clean manually.' -ForegroundColor DarkGray
 
     $workerMap = Get-WorkerMap
@@ -3318,6 +3395,28 @@ function Get-TaskRecommendation {
             }
             $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState waiting_qa -RequeueReason "review_reject"') | Out-Null
         }
+        'fail' {
+            if ($phase -eq 'qa' -and $blockedDecision -eq 'service_down') {
+                $summary = 'QA fail（环境阻塞），先恢复后端服务再重派 QA'
+                $color = 'Red'
+                $priority = 21
+                $commands.Add('powershell -Command "curl.exe -sS http://localhost:3033/health"') | Out-Null
+                if ($serviceRestoreTaskId) {
+                    $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action dispatch -TaskId ' + $serviceRestoreTaskId) | Out-Null
+                }
+            } elseif ($phase -eq 'qa') {
+                $summary = 'QA fail，按驳回处理并回开发'
+                $color = 'Red'
+                $priority = 29
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "qa_fail"') | Out-Null
+            } else {
+                $summary = '开发 fail，按 blocked 终态处理并优先 restart-task'
+                $color = 'Red'
+                $priority = 34
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action recover -RecoverAction restart-task -TaskId ' + $TaskId) | Out-Null
+                $commands.Add('powershell -File scripts/teamlead-control.ps1 -Action requeue -TaskId ' + $TaskId + ' -TargetState assigned -RequeueReason "dev_fail"') | Out-Null
+            }
+        }
         'blocked' {
             if ($hasPendingApprovals) {
                 $summary = 'blocked，先处理审批'
@@ -3398,16 +3497,9 @@ function Invoke-Status {
     # Environment
     Write-Host ''
     Write-Host '--- Environment ---' -ForegroundColor Cyan
-    $tlPaneId = $env:TEAM_LEAD_PANE_ID
-    if (-not $tlPaneId -and $env:WEZTERM_PANE) { $tlPaneId = $env:WEZTERM_PANE }
-    if (-not $tlPaneId -and $env:WEZTERM_PANE_ID) { $tlPaneId = $env:WEZTERM_PANE_ID }
-    if (-not $tlPaneId) {
-        try {
-            $panes = wezterm cli list --format json 2>$null | ConvertFrom-Json
-            $tlPane = $panes | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1
-            if ($tlPane) { $tlPaneId = $tlPane.pane_id.ToString() }
-        } catch {}
-    }
+    $tlPaneId = Normalize-PaneId ([string]$env:WEZTERM_PANE)
+    if (-not $tlPaneId -and $env:WEZTERM_PANE_ID) { $tlPaneId = Normalize-PaneId ([string]$env:WEZTERM_PANE_ID) }
+    if (-not $tlPaneId) { $tlPaneId = Normalize-PaneId ([string]$env:TEAM_LEAD_PANE_ID) }
     if ($tlPaneId) {
         Write-Host ('  Team Lead Pane: ' + $tlPaneId) -ForegroundColor Green
     } else {
@@ -3574,7 +3666,13 @@ function Invoke-Status {
                 $richTaskCount = 0
             }
         }
-        Write-Host ('  rich-monitor status=' + $richStatus + ' pane=' + $richPaneText + ' role=dashboard last_loop=' + $richLastLoop + ' visible_tasks=' + $richTaskCount) -ForegroundColor $richColor
+        $richLayout = if ($delivery.rich.layout_mode) { [string]$delivery.rich.layout_mode } else { 'standalone' }
+        $richLayoutLabel = switch ($richLayout) {
+            'merged-right' { '同窗右栏' }
+            'standalone' { '独立窗口' }
+            default { $richLayout }
+        }
+        Write-Host ('  rich-monitor 状态=' + $richStatus + ' pane=' + $richPaneText + ' 布局=' + $richLayoutLabel + ' last_loop=' + $richLastLoop + ' visible_tasks=' + $richTaskCount) -ForegroundColor $richColor
         if ($delivery.rich.note) {
             Write-Host ('  rich note=' + [string]$delivery.rich.note) -ForegroundColor DarkGray
         }
@@ -4181,6 +4279,7 @@ function Invoke-Recover {
     $tlPaneId = $null
     if ($RecoverAction -eq "restart-worker") {
         $tlPaneId = Resolve-TeamLeadPaneId
+        Assert-TeamLeadPaneId $tlPaneId 'recover'
     }
 
     switch ($RecoverAction) {
@@ -4649,6 +4748,7 @@ function Invoke-Archive {
     Assert-CanonicalTaskId $TaskId
 
     $tlPaneId = Resolve-TeamLeadPaneId
+    Assert-TeamLeadPaneId $tlPaneId 'archive'
     $locks = Read-TaskLocks
     $prefix = Resolve-TaskPrefix $TaskId
     if (-not $prefix) {

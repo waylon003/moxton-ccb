@@ -47,9 +47,9 @@
 - Keep project docs consistent with completed tasks and API docs.
 - If change details are unclear, ask Team Lead for clarification.
 - When updating `04-projects/*.md`, always update the `last_verified` and `verified_against` frontmatter.
-- 若被阻塞（权限审批、输入信息不足、环境异常），必须在 2 分钟内调用 `report_route`：
+- 若被阻塞（输入信息不足、环境异常），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
-  - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+  - `body: "blocker_type=<api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
 
 ## Report Format
 任务完成后必须通过 MCP `report_route` 回传：

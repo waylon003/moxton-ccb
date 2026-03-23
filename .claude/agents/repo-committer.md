@@ -24,9 +24,9 @@
 - 禁止使用子代理（sub-agent / background agent）。
 - 不执行 `git push`，除非任务正文明确要求。
 - 不执行破坏性命令（`git reset --hard`、`git clean -fd`、强制 checkout 等）。
-- 若被阻塞（提交失败、权限审批、环境异常、无身份），必须在 2 分钟内调用 `report_route`：
+- 若被阻塞（提交失败、环境异常、无身份），必须在 2 分钟内调用 `report_route`：
   - `status: "blocked"`
-  - `body: "blocker_type=<approval|api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
+  - `body: "blocker_type=<api|env|dependency|unknown>; question=<需要Team Lead决策>; attempted=<已尝试>; next_action_needed=<希望Team Lead执行的动作>"`
 
 ## 回传格式（MCP tool）
 
