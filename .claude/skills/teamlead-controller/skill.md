@@ -25,6 +25,7 @@ triggers:
 1. 先执行 bootstrap（每个新会话一次）
 2. 再执行 status 确认当前锁、路由与运行态
 3. 默认由 `route-monitor` + `route-notifier` 负责回传收口与唤醒，无需再创建 `notify-sentinel`
+4. Rich 看板只作为二级观察层：先 `status`，只有在多任务并行、阻塞根因不清、通知异常或 runtime 需要对照时才看 Rich
 
 ## 控制器动作表
 
@@ -62,7 +63,7 @@ recover 可用动作：
 - **不得**手工拼 `wezterm cli send-text` 派遣任务文本
 - **不得**在新会话跳过 bootstrap
 - **不得**使用 `Task(...)` / `Backgrounded agent` 进行派遣
-- **不得**无限轮询：同一 pane `get-text` 连续 3 次无变化必须停止；同一 task `check_routes` 3 次无变化必须停止
+- **不得**把 pane 轮询当主观察方式：主链默认看 `status` / Rich / route 提醒。只有人工调试时才短时使用 `get-text`，且同一任务连续 3 轮 `status` 无新 route/runtime 变化必须停止并转 `recover`
 - **不得**直接用 `assign_task.py` 做写入动作（仅允许只读诊断参数）
 
 ## 决策优先级
@@ -75,7 +76,7 @@ recover 可用动作：
 ## 复审流转
 
 - QA 通过后默认 `qa-pass` 等人工复审。
-- 复审不通过：`requeue` 回退，不把驳回原因直接发到旧 worker 窗口。
+- 复审不通过：`requeue` 回退，不把驳回原因直接塞回旧 QA 运行上下文。
 - 重新派遣：`requeue` 后再 `dispatch` 或 `dispatch-qa`。
 
 ## 结构化输出模板

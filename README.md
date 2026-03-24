@@ -1,4 +1,4 @@
-﻿# Moxton-CCB 指挥中心
+# Moxton-CCB 指挥中心
 
 多 AI 协作的任务编排系统，协调三个业务仓库的开发工作。
 
@@ -208,19 +208,23 @@ Agent Teams / `notify-sentinel` 已从主链移除，不再作为派遣前置门
 
 ## 关键约束
 
-- 禁止 Team Lead 使用子代理（`Task(...)` / `Backgrounded agent`）执行派遣。
-- 禁止直接调用控制器子脚本（如 `dispatch-task.ps1` / `start-worker.ps1`）。
-- 禁止 Team Lead 直接使用 `assign_task.py` 执行写入动作（建任务/改锁/拆分）；仅允许只读诊断参数。
-- Worker 遇阻塞必须 `report_route(status=blocked, ...)`，不得静默等待。
-- QA 回传 `status=success` 时，`body` 必须是 JSON 结构化证据；不合规会被 route-monitor 自动降级为 `blocked`。
-- QA worker 不得调用 `teamlead-control.ps1`、不得直接编辑 `TASK-LOCKS.json`、不得向用户询问“归档还是 qa_passed”这类编排决策。
-- QA 通过不自动提交；仅在 `archive` 成功迁移 `active -> completed` 后触发提交发布流程。
-- QA 通过后若复审不通过，先 `requeue -TargetState waiting_qa`，不要把驳回原因直接发到旧 QA 窗口。
-- QA 若以 `blocked` 回传环境/服务阻塞（如 `localhost:3033/health` 不可达），先恢复环境或派发环境恢复任务，再回到原任务继续 `requeue + dispatch-qa`；不要直接重派同一 QA。
-- 前端 QA 默认顺序：`Playwright smoke -> agent-browser 真实交互验收 -> playwright-mcp/截图/网络证据补充`。
-- Team Lead 监控 Worker 时禁止无限轮询：同一 `get-text/check_routes` 无变化最多 3 轮，随后必须转 `status/recover`。
-- MCP 上报由 `route-notifier` 独立发送提醒；Team Lead 日常只围绕 route/status/dispatch/requeue/archive 决策。
-
+- Team Lead 只能是 Claude Code；Codex 只作为 worker。不要让其他 CLI 充当主指挥。
+- 派遣、重派、归档、恢复统一走 `scripts/teamlead-control.ps1`；不要直接调用 `dispatch-task.ps1`、`start-worker.ps1`，也不要手改 `TASK-LOCKS.json`。
+- `assign_task.py` 不作为默认执行入口；仅允许只读扫描/诊断参数，禁止用它直接建任务、改锁或拆分任务。
+- 当前业务主链默认是 headless `codex exec`；WezTerm pane 只用于 Team Lead 宿主、通知投递和人工调试回退，不再作为日常 worker 主执行现场。
+- 观察主链时以 `status` 和 Rich 看板为主；pane 文本、`get-text` 只用于人工调试，不要把“pane 没变化”直接等价成任务卡住。
+- 所有经 Team Lead 派遣的 worker 都必须按协议回传：至少一次 `in_progress`，结束时必须回传 `success` / `blocked` / `fail`，并原样带回本轮 `run_id`。
+- `route-monitor` 是唯一收口者，负责写锁、同步文档/归档状态并落提醒事件；`route-notifier` 是唯一唤醒器，只负责把提醒投递回 Team Lead。
+- 收到 `blocked` 或 `fail` 后，第一步永远先执行 `status`；不要直接 `requeue` 或直接重派。
+- 阻塞要先分类再处理：`runtime/orchestration` 先 `recover`，`env/service` 先修环境，`qa_evidence` 先补证据，只有 `code/contract/ui` 才回开发。
+- 对 headless 任务，若存在旧 `run_id / pid / run_dir / assigned_worker` 残留，优先 `recover -RecoverAction restart-task`；不要在脏运行态上反复 `requeue + dispatch`。
+- QA 回传 `status=success` 时，`body` 必须是 JSON 结构化证据，且引用的截图/日志/网络文件必须真实存在；不合规会被自动降级为 `blocked`。
+- QA worker 不得调用 `teamlead-control.ps1`、不得编辑任务锁、不得替 Team Lead 做“归档还是 qa_passed”这类编排决策。
+- QA 通过不自动提交；只有 `archive` 成功迁移 `active -> completed` 后，才进入提交流程。
+- 人工复审驳回 `qa_passed` 时，先 `requeue -TargetState waiting_qa`，再决定是否重新派发 QA；不要把驳回原因直接塞回旧 QA 上下文继续跑。
+- QA 若回传环境/服务阻塞（如端口占用、`/health` 不通、测试账号缺失），先恢复环境或派发环境恢复任务；不要直接重派同一 QA 期待它自愈。
+- 前端 QA 默认顺序是 `Playwright smoke -> agent-browser 真实交互 -> 结构化证据补充（截图 / console / network）`；`agent-browser` 是增强层，不替换 Playwright。
+- 已知链路内的决策由 Team Lead 直接执行，不需要反问用户；只有未知阻塞、未知依赖或高风险动作才升级给用户确认。
 ## 目录结构
 
 ```

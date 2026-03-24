@@ -185,10 +185,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - 若当前没有 active 任务，而用户输入的是问题描述、截图、缺陷列表或需求说明，默认进入 `planning-gate`，不得直接进入 `dispatch`。
 - `assign_task.py` 不作为默认规划入口；仅允许使用只读参数（如 `--list`、`--scan`）做诊断。
 - 禁止把 `docs/plans/*` 当作执行输入。
-- Team Lead 先跑 `status`，再决定是否 `dispatch / requeue / recover / archive`；禁止只凭 pane 没输出就判定卡住。
+- Team Lead 先跑 `status`，再决定是否 `dispatch / requeue / recover / archive`；禁止只凭终端暂时无输出就判定卡住。
 - 若某个动作已被链路规则明确覆盖，Team Lead 必须直接执行，不得把本应自主决策的 `requeue / recover / dispatch / dispatch-qa / archive` 再抛回给用户。
 - 若收到 `fail` 回传，视为终态失败而不是“继续等待”；必须先读 `body / note / routeUpdate.bodyPreview`，再按 `blocked` 流程决策。
-- 同一 `get-text/check_routes` 无变化最多 3 轮，随后必须转 `status/recover`。
+- 主链默认以 `status` 为主，不依赖 `wezterm cli get-text` 轮询 worker。只有在人工调试回退到 pane 时才允许短时查看 `get-text`，且同一任务连续 3 轮 `status` 无新 route/runtime 变化后必须停止轮询并转入 `recover`。
+- Rich 看板是二级观察入口：当 `status` 显示多任务并行、阻塞根因不清、notifier 投递异常或 headless 运行态需要对照时，再查看 Rich；Rich 只辅助判断，不替代 `dispatch / requeue / recover / archive`。
 
 ---
 

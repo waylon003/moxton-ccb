@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-03-23
+last_verified: 2026-03-24
 verified_against: [BACKEND-016, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
@@ -7,7 +7,7 @@ verified_against: [BACKEND-016, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-
 
 > **用途**: Team Lead 通过此文件感知三个项目的协调状态
 > **更新频率**: 每次修改跨项目接口时更新
-> **最后更新**: 2026-03-23
+> **最后更新**: 2026-03-24
 
 ## 📊 项目概览
 
@@ -171,14 +171,15 @@ POST /upload/image  // 图片上传
 
 ## 🚨 待同步事项
 
-### 运行基线（2026-03-23 复核 / BACKEND-016）
+### 运行基线（2026-03-24 复核 / BACKEND-016）
 - 本地联调与 QA 统一以 `http://localhost:3033` 作为后端入口
 - 可用性探针为 `GET /health`、`GET /version`，本次文档同步 spot check 仍返回 `200`
-- 未知根路由错误路径已复核：`GET /health-not-found` 当前仍返回标准 `404` JSON 包（历史证据见 `05-verification/BACKEND-016/failure-path.json`）
+- 未知根路由错误路径已复核：`GET /health-not-found` 当前仍返回标准 `404` JSON 包（最新证据见 `05-verification/BACKEND-016/failure-path.json`）
+- `BACKEND-016` 最新 QA 契约证据已与 `02-api/system.md` 对齐，`contract-check.json` 不再残留旧的 `addresses.md` 指向
 
 ### 当前后端基线
 - `BACKEND-014`（2026-03-20）已确认支付闭环可用：`activePayment=null` 时可继续创建新的 Stripe intent
-- `BACKEND-014` 与 `BACKEND-016` 已确认后端 `npm run build`、`tests/api`、运行时探活均为绿色；其中 `BACKEND-016` 于 2026-03-23 再次确认运行服务持续可用，旧的“后端编译 242 条错误”结论不再适用
+- `BACKEND-014` 与 `BACKEND-016` 已确认后端 `npm run build`、`tests/api`、运行时探活均为绿色；其中 `BACKEND-016` 于 2026-03-24 再次确认运行服务持续可用，旧的“后端编译 242 条错误”结论不再适用
 
 ### 缺失功能
 - 管理后台：用户管理模块未实现

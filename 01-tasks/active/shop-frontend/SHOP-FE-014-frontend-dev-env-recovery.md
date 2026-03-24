@@ -94,12 +94,36 @@ SHOP-FE-013 的 QA 过程中，前端开发环境异常：
 **相关任务:**
 - SHOP-FE-013（支付意图智能复用）
 
+## QA 阻塞补充（2026-03-24）
+
+- 结论：环境恢复已达成（首页 200、`/_nuxt/builds/meta/dev.json` 200、console 0 errors），但 **Playwright smoke 测试在本机崩溃**。
+- 失败命令：`pnpm test:e2e -- tests/e2e/smoke.spec.ts`
+- 报错关键字：`chromium_headless_shell` + `Invalid file descriptor to ICU data received`
+- 证据目录：`E:\moxton-ccb\05-verification\SHOP-FE-014\`
+  - `smoke.txt`
+  - `playwright-console.txt`
+  - `playwright-network.txt`
+- 处理要求：必须修复本机 Playwright/Chromium 运行环境（或明确替代 smoke 的允许策略），**修复前不得重新派发 QA**。
+
 <!-- AUTO-QA-SUMMARY:BEGIN -->
 ## QA 摘要（自动回写）
 
-- 最后更新: `2026-03-23T18:12:15+08:00`
-- QA Worker: `shop-fe-qa`
-- 路由状态: `blocked`
-- 结论摘要: 前端开发环境已恢复，但 QA success 合同无法完成，因为 Playwright 自带 chromium_headless_shell 在本机启动即崩溃。
+- 最后更新: `2026-03-24T15:13:19+08:00`
+- QA Worker: `shop-fe-qa-2`
+- 路由状态: `success`
+- 验收结论: `PASS`
+- 结论摘要: 前端开发环境已恢复：3666 dev server 正常，/_nuxt/builds/meta/dev.json 稳定返回 200，首页无 manifest/hydration 错误，type-check/build/smoke 全部通过；正常路径控制台仍有 4 条既有 Vue warning，但无 error。
+- 证据索引:
+  - `component_api`: `PASS` -> `05-verification/SHOP-FE-014/context7-notes.txt`
+  - `console`: `PASS` -> `05-verification/SHOP-FE-014/playwright-console-final.txt`, `05-verification/SHOP-FE-014/browser-console-summary.txt`
+  - `failure_path`: `PASS` -> `05-verification/SHOP-FE-014/failure-path-order-500.png`, `05-verification/SHOP-FE-014/failure-path-text.txt`
+  - `network`: `PASS` -> `05-verification/SHOP-FE-014/playwright-network-final.txt`, `05-verification/SHOP-FE-014/meta-dev-response-stable.txt`
+  - `ui`: `PASS` -> `05-verification/SHOP-FE-014/home-final-fresh.png`
+- 验证命令:
+  - `node -e "const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,['-v']);console.log(r.error?.code||'OK')"`
+  - `curl.exe -sS http://localhost:3033/health`
+  - `pnpm type-check`
+  - `pnpm build`
+  - `pnpm test:e2e -- tests/e2e/smoke.spec.ts`
 - 原始证据仍以 `05-verification/` 中的文件为准。
 <!-- AUTO-QA-SUMMARY:END -->

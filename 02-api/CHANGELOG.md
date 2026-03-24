@@ -2,6 +2,16 @@
 
 ## [未发布]
 
+### 2026-03-24
+
+#### 更新 (Changed)
+- **系统与诊断** - 按 `BACKEND-016` 2026-03-24 最新 QA 成功与本地 spot check 刷新运行探针文档
+  - 复核 `GET /health`、`GET /version` 当前仍返回 `200`
+  - 复核未知根路由错误示例：`GET /health-not-found` 当前仍返回标准 `404` JSON 包
+  - 刷新 `system.md` 与 `README.md` 中的最后核对时间、示例时间戳与错误包字段顺序
+  - 清理失效的历史说明：`contract-check.json` 现已与 `system.md` 对齐，不再指向 `addresses.md`
+  - 依据：`01-tasks/active/backend/BACKEND-016-start-backend-dev-server.md`（2026-03-24 QA 摘要）、`05-verification/BACKEND-016/contract-check.json`、`05-verification/BACKEND-016/failure-path.json`、2026-03-24 14:51 +08:00 本地 spot check
+
 ### 2026-03-23
 
 #### 更新 (Changed)

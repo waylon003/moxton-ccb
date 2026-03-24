@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-03-23
+last_verified: 2026-03-24
 verified_against: [BACKEND-016, BACKEND-014, BACKEND-012, BACKEND-011, BACKEND-007, BUG-004, BACKEND-006]
 ---
 
@@ -192,11 +192,11 @@ PENDING → 自动清理（15天未支付，node-cron 定时任务）
 
 ## 运行验证基线
 
-- `BACKEND-016`（2026-03-23）QA 摘要再次确认：`http://localhost:3033/health`、`http://localhost:3033/version` 仍可访问，3033 端口开发服务持续监听
-- `BACKEND-016`（2026-03-23）文档同步 spot check：`http://localhost:3033/health-not-found` 仍返回标准 `404` JSON 错误包
-- `BACKEND-016` 现存原始构建/契约/探活证据位于 `05-verification/BACKEND-016/`，其中 `npm run build`、`tests/api` 与根路由探针证据时间为 2026-03-19
+- `BACKEND-016`（2026-03-24）QA 摘要再次确认：`http://localhost:3033/health`、`http://localhost:3033/version` 仍可访问，3033 端口开发服务持续监听
+- `BACKEND-016`（2026-03-24）文档同步 spot check：`http://localhost:3033/health-not-found` 仍返回标准 `404` JSON 错误包，字段顺序为 `code/message/data/timestamp/success`
+- `BACKEND-016` 现存构建/契约/探活证据位于 `05-verification/BACKEND-016/`；最新 `contract-check.json`、`failure-path.json` 更新时间为 2026-03-24 14:48 +08:00，原始 `curl-*`/`automated-test.json` 探活证据时间为 2026-03-19
 - `BACKEND-014`（2026-03-20）QA `PASS`：`GET /payments/order/:orderId` 与 `POST /payments/stripe/create-intent` 的“先查询后创建”闭环通过验证
-- 历史遗漏补录：`05-verification/BACKEND-016/contract-check.json` 的 `api_doc` 仍指向 `02-api/addresses.md`，实际权威文档已迁移至 `02-api/system.md`
+- 历史遗漏已修正：`05-verification/BACKEND-016/contract-check.json` 的 `api_doc` 已回正为 `02-api/system.md`，与当前权威文档一致
 
 ## 已知质量问题
 

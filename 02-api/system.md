@@ -6,14 +6,14 @@
 
 - Base URL: `http://localhost:3033`
 - 认证: 无需认证
-- 依据: `BACKEND-016` QA `PASS`，核心证据位于 `05-verification/BACKEND-016/`；并于 2026-03-23 12:40 +08:00 本地 spot check 复核 `/health`、`/version` 与未知路由错误包
-- 最后核对时间: 2026-03-23 12:40 +08:00（实时 spot check）+ 2026-03-23 12:38:27 +08:00（任务文件内 QA 摘要）；历史原始证据时间为 2026-03-19 17:49-17:50 +08:00（`curl-health.txt`、`curl-version.txt`、`failure-path.json`、`automated-test.json`）
+- 依据: `BACKEND-016` QA `PASS`，核心证据位于 `05-verification/BACKEND-016/`；其中 `contract-check.json`、`failure-path.json` 于 2026-03-24 14:48:26 +08:00 更新，任务文件 QA 摘要最后更新于 2026-03-24 14:49:31 +08:00，并于 2026-03-24 14:51 +08:00 本地 spot check 复核 `/health`、`/version` 与未知路由错误包
+- 最后核对时间: 2026-03-24 14:51 +08:00（实时 spot check）+ 2026-03-24 14:49:31 +08:00（任务文件内 QA 摘要）+ 2026-03-24 14:48:26 +08:00（`contract-check.json`、`failure-path.json`）；历史原始探活证据时间为 2026-03-19 17:49-17:50 +08:00（`curl-health.txt`、`curl-version.txt`、`failure-path.json`、`automated-test.json`）
 
 ## 统一响应包说明
 
 - 成功响应包含顶层字段：`code`、`message`、`data`、`timestamp`、`success`
 - 错误响应同样保留顶层 `timestamp`，便于联调和 QA 对时排查
-- 历史说明：`05-verification/BACKEND-016/contract-check.json` 中 `api_doc` 仍显示旧路径 `02-api/addresses.md`，这是旧校验脚本残留；自 2026-03-19 起，根路由系统接口以本文档为准，迁移依据见 `02-api/addresses.md` 末尾说明
+- 文档归属已与 QA 证据对齐：`05-verification/BACKEND-016/contract-check.json` 当前 `api_doc` 为 `02-api/system.md`
 
 ## 健康检查
 
@@ -32,11 +32,11 @@
   "message": "Server is healthy",
   "data": {
     "status": "ok",
-    "timestamp": "2026-03-23T04:40:02.560Z",
-    "uptime": 51549.939524,
+    "timestamp": "2026-03-24T06:51:00.782Z",
+    "uptime": 405.0732188,
     "environment": "development"
   },
-  "timestamp": "2026-03-23T04:40:02.560Z",
+  "timestamp": "2026-03-24T06:51:00.782Z",
   "success": true
 }
 ```
@@ -67,9 +67,9 @@
     "version": "1.0.0",
     "name": "Moxton Lot API",
     "environment": "development",
-    "timestamp": "2026-03-23T04:40:02.633Z"
+    "timestamp": "2026-03-24T06:51:00.969Z"
   },
-  "timestamp": "2026-03-23T04:40:02.633Z",
+  "timestamp": "2026-03-24T06:51:00.969Z",
   "success": true
 }
 ```
@@ -93,10 +93,10 @@
 
 ```json
 {
-  "message": "API endpoint not found",
   "code": 404,
+  "message": "API endpoint not found",
   "data": null,
-  "timestamp": "2026-03-23T04:40:02.693Z",
+  "timestamp": "2026-03-24T06:51:00.783Z",
   "success": false
 }
 ```

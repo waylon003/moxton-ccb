@@ -50,23 +50,24 @@
 <!-- AUTO-QA-SUMMARY:BEGIN -->
 ## QA 摘要（自动回写）
 
-- 最后更新: `2026-03-23T12:38:27+08:00`
+- 最后更新: `2026-03-24T14:49:31+08:00`
 - QA Worker: `backend-qa`
 - 路由状态: `success`
 - 验收结论: `PASS`
-- 结论摘要: 3033 端口当前由 E:\moxton-lotapi 的开发服务持续监听，/health 与 /version 返回 200，构建与健康检查测试通过，可继续供前端联调/QA 使用。
+- 结论摘要: 3033 端口当前由 E:\moxton-lotapi 的 ts-node-dev 开发服务监听，/health 与 /version 返回 200，未知路由返回标准 404，构建和健康检查测试通过，可继续供前端联调/QA 使用。
 - 证据索引:
   - `contract`: `PASS` -> `05-verification/BACKEND-016/contract-check.json`, `05-verification/BACKEND-016/curl-health.txt`, `05-verification/BACKEND-016/curl-version.txt`
   - `failure_path`: `PASS` -> `05-verification/BACKEND-016/failure-path.json`, `05-verification/BACKEND-016/curl-health-not-found.txt`
-  - `network`: `PASS` -> `05-verification/BACKEND-016/network.json`, `05-verification/BACKEND-016/process.json`, `05-verification/BACKEND-016/build.txt`, `05-verification/BACKEND-016/automated-test.json`, `05-verification/BACKEND-016/curl-health.txt`, `05-verification/BACKEND-016/curl-version.txt`
+  - `network`: `PASS` -> `05-verification/BACKEND-016/network.json`, `05-verification/BACKEND-016/process.json`, `05-verification/BACKEND-016/build.txt`, `05-verification/BACKEND-016/automated-test.json`, `05-verification/BACKEND-016/curl-health.txt`, `05-verification/BACKEND-016/curl-version.txt`, `05-verification/BACKEND-016/env-precheck.json`
 - 验证命令:
   - `node -e "const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,['-v']);console.log(r.error?.code||'OK')"`
   - `Get-NetTCPConnection -LocalPort 3033 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,State,OwningProcess | ConvertTo-Json -Compress`
-  - `Get-CimInstance Win32_Process -Filter "ProcessId = 270132" | Select-Object ProcessId,Name,CommandLine,ExecutablePath | ConvertTo-Json -Compress`
+  - `Get-CimInstance Win32_Process -Filter "ProcessId = 28580" | Select-Object ProcessId,Name,CommandLine,ExecutablePath | ConvertTo-Json -Compress`
   - `curl.exe -sS -i http://localhost:3033/health`
   - `curl.exe -sS -i http://localhost:3033/version`
   - `curl.exe -sS -i http://localhost:3033/health-not-found`
   - `npm run build`
-  - `mcp__vitest__run_tests target=./tests/api/health.spec.ts format=detailed showLogs=true`
+  - `npx vitest run tests\api\health.spec.ts`
+  - `E:\moxton-ccb\scripts\validate-qa-evidence.ps1 -TaskId BACKEND-016 -EvidencePaths <validated>`
 - 原始证据仍以 `05-verification/` 中的文件为准。
 <!-- AUTO-QA-SUMMARY:END -->

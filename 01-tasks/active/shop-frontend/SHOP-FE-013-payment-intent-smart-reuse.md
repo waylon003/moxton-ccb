@@ -490,9 +490,24 @@ checkout: {
 <!-- AUTO-QA-SUMMARY:BEGIN -->
 ## QA 摘要（自动回写）
 
-- 最后更新: `2026-03-23T17:24:36+08:00`
+- 最后更新: `2026-03-24T15:21:54+08:00`
 - QA Worker: `shop-fe-qa`
-- 路由状态: `blocked`
-- 回传摘要: blocker_type=env; question=3666 端口已有现成前端进程占用且运行时异常，首页请求会触发 /_nuxt/builds/meta/577d89a5-db61-4486-a7ef-8e2ec2c73260.json 500，浏览器控制台存在 manifest/hydration 错误，无法继续支付页真实验收并满足 console=0 errors 合同； attempted=已完成 role/protocol/task/CLAUDE/AGENTS/API 阅读，完成 node spawn 与后端健康检查，记录 git 状态，执行 pnpm type-check、pnpm build、pnpm test:e2e -- tests/e2e/smoke.spec.ts 均通过，并使用 agen...
+- 路由状态: `success`
+- 验收结论: `PASS`
+- 结论摘要: 支付页已验证通过：首次进入会创建 intent，刷新后会复用 active intent，查询接口网络失败时会降级创建，403 失败路径的中英文提示均已产品化且不透出后端原文。
+- 证据索引:
+  - `component_api`: `PASS` -> `05-verification/SHOP-FE-013/context7-stripe-check-20260324.txt`
+  - `console`: `PASS` -> `05-verification/SHOP-FE-013/console-refresh-reuse.log`, `05-verification/SHOP-FE-013/page-errors-refresh.log`
+  - `failure_path`: `PASS` -> `05-verification/SHOP-FE-013/payment-failure-en.png`, `05-verification/SHOP-FE-013/payment-failure-zh.png`, `05-verification/SHOP-FE-013/console-failure-en.log`
+  - `network`: `PASS` -> `05-verification/SHOP-FE-013/network-reuse-refresh.json`, `05-verification/SHOP-FE-013/network-fallback-network-error.json`, `05-verification/SHOP-FE-013/network-failure-en.json`
+  - `smart_reuse`: `PASS` -> `05-verification/SHOP-FE-013/console-first-create.log`, `05-verification/SHOP-FE-013/payment-en-1280.png`, `05-verification/SHOP-FE-013/payment-reuse-refresh-1280.png`, `05-verification/SHOP-FE-013/payment-fallback-network-error.png`
+  - `ui`: `PASS` -> `05-verification/SHOP-FE-013/payment-reuse-1280.png`, `05-verification/SHOP-FE-013/payment-reuse-768.png`, `05-verification/SHOP-FE-013/payment-reuse-390.png`
+- 验证命令:
+  - `pnpm type-check`
+  - `pnpm build`
+  - `$env:PLAYWRIGHT_SKIP_WEBSERVER='1'; pnpm test:e2e -- tests/e2e/smoke.spec.ts`
+  - `agent-browser open/snapshot/click runtime verification`
+  - `node inline runtime probes for fallback/i18n/responsive evidence`
+  - `E:\moxton-ccb\scripts\validate-qa-evidence.ps1 -TaskId SHOP-FE-013 -EvidencePaths ...`
 - 原始证据仍以 `05-verification/` 中的文件为准。
 <!-- AUTO-QA-SUMMARY:END -->
