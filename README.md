@@ -19,8 +19,8 @@ flowchart TD
     TL --> CTRL["teamlead-control.ps1"]
     CTRL --> D{"dispatch / dispatch-qa / archive"}
     D --> WM["worker-map.json"]
-    D --> WR["worker-panels.json / WezTerm pane"]
-    WR --> W["Workers (Codex)"]
+    D --> RUN["start-headless-run.ps1"]
+    RUN --> W["Workers (Codex Headless)"]
   end
 
   subgraph Work["执行/验收"]
@@ -51,7 +51,7 @@ flowchart TD
 
 - **Team Lead**：Claude Code 会话（本仓库）— 需求拆分、任务分派、进度监控
 - **主指挥约束**：Team Lead 只能使用 Claude Code（禁止 Codex 作为主指挥）
-- **Workers**：当前业务主链与辅助 worker 均默认走 headless `codex exec`。`backend-dev`、`shop-fe-dev`、`admin-fe-dev`、`backend-qa`、`shop-fe-qa`、`admin-fe-qa`、`doc-updater`、`repo-committer` 都已接入 headless runner；WezTerm pane 仅保留兼容回退用途。
+- **Workers**：当前业务主链与辅助 worker 均默认走 headless `codex exec`。`backend-dev`、`shop-fe-dev`、`admin-fe-dev`、`backend-qa`、`shop-fe-qa`、`admin-fe-qa`、`doc-updater`、`repo-committer` 都已接入 headless runner；WezTerm 主要承担 Team Lead 交互宿主、`route-notifier` 最后一跳唤醒和 Rich 看板右侧挂载。
 - **通信**：统一走 MCP `report_route` 回传 + WezTerm CLI `send-text` 唤醒。`route-monitor` 负责收口、写锁、文档/归档状态更新与事件落盘；`route-notifier` 独立负责唤醒 Team Lead。
 
 - **控制入口**：`scripts/teamlead-control.ps1`（业务动作统一入口）
@@ -66,20 +66,19 @@ flowchart TD
 | SHOP-FE | `E:\nuxt-moxton` | Codex (`-a never --sandbox danger-full-access`) | Codex (`-a never --sandbox danger-full-access`) |
 
 
-## 当前迁移状态（默认 headless）
+## 当前主链（默认 headless）
 
-当前主链默认已切到 headless，保留 WezTerm pane 作为兼容回退：
+当前业务主链已经稳定在“Team Lead 交互式决策 + Worker Headless 执行”：
 
 - Team Lead：仍然是 `E:\moxton-ccb` 内的 Claude Code 交互式会话
 - Dev / QA：`backend-dev`、`shop-fe-dev`、`admin-fe-dev`、`backend-qa`、`shop-fe-qa`、`admin-fe-qa` 已统一通过 `dispatch / dispatch-qa` 走 headless
 - `doc-updater` / `repo-committer`：已通过 `scripts/start-headless-run.ps1` 走 headless `codex exec`
-- 状态收口：统一仍由 `route-monitor` 处理
-- Team Lead 唤醒：统一仍由 `route-notifier` 处理
+- 状态收口：统一由 `route-monitor` 处理
+- Team Lead 唤醒：统一由 `route-notifier` 处理
 - 状态观测：`status` 已能直接读取 headless run 的 `state.json`，显示 `runtime / pid / proc / rt_last / run_dir / note`
+- 运行保护：`bootstrap / dispatch / dispatch-qa` 会自动确保 `route-monitor`、`route-notifier`、`rich-monitor` 存活；若 watcher 心跳过期、pane 丢失或状态文件损坏，会自动重启
 
-这意味着当前版本已经把业务主链与辅助链路一起从 pane 中剥离出来，形成“Team Lead 交互式决策 + worker headless 执行”的默认架构；WezTerm pane 只作为回退与人工调试通道保留。
-
-完整设计见 [HEADLESS-ORCHESTRATION-ARCHITECTURE.md](./HEADLESS-ORCHESTRATION-ARCHITECTURE.md)。
+这意味着当前版本已经把业务主链与辅助链路一起从 worker pane 中剥离出来；WezTerm 不再承担 worker 执行现场，而是作为 Team Lead 交互与通知承载层保留。
 
 ## 使用方式
 
@@ -119,9 +118,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - 每次 `dispatch/dispatch-qa` 都会生成新的 `run_id`；Worker 回传 `report_route` 时必须原样带回。
 - `route-monitor` 会基于 `run_id + 当前锁状态` 忽略旧 worker 迟到 route，避免状态被写回漂移。
 - `dispatch/dispatch-qa` 会自动确保 `route-monitor` 与 `route-notifier` 常驻；MCP route 上报先由 `route-monitor` 收口，再由 `route-notifier` 唤醒 Team Lead。`doc-updater` / `repo-committer` 也走同一条链路。
+- `dispatch/dispatch-qa/bootstrap` 现在会对 `route-monitor` / `route-notifier` / `rich-monitor` 做心跳判活；若检测到旧 PID 假活、pane 丢失或 `last_loop_at` 过期，会强制重启，避免“看起来在跑，实际上没工作”。
 - 所有通过 Team Lead 派遣的 worker 都必须按协议回传 `in_progress` 与终态（`success` / `blocked` / `fail`）；其中 `doc-updater` / `repo-committer` 的 `in_progress` 也会触发提醒，避免文档/归档链路静默运行。
 - `route-monitor` 只负责状态收口、任务锁更新和事件落盘；`route-notifier` 独立负责 Team Lead 唤醒。`config/teamlead-delivery.jsonl` / `config/teamlead-delivery-failures.jsonl` 用于区分“route 已收口”与“最后一跳通知失败”。
 - 前端链路保留 `Playwright` 作为 smoke/回归基座，同时加入 `agent-browser` 作为真实浏览器交互验收增强层；不做替换。
+- Windows 下的 Playwright smoke 默认优先使用本机已安装的 Chrome，其次回退到 Edge，以规避 bundled `chromium_headless_shell` 的 ICU 启动崩溃；必要时可通过 `PLAYWRIGHT_BROWSER_CHANNEL` 覆盖。
 - `agent-browser` 是命令式 CLI：单次 `open/snapshot/screenshot/...` 执行完就退出是正常行为；验收证据以输出文件（截图/console/network）为准。
 - `agent-browser` 统一全局安装在 worker 所在机器环境中，不分别安装到 `nuxt-moxton` / `moxton-lotadmin` 仓库。
 - 涉及登录/权限/真实数据流的 dev 和 QA 自测，统一先读 `05-verification/QA-IDENTITY-POOL.md`，优先使用固定测试凭据，禁止默认注册新账号探路。
@@ -153,6 +154,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start
 - 最近 task attempt / requeue / blocked 历史
 - route-monitor / route-notifier watcher 心跳摘要
 
+下一阶段增强方向：
+- 直接显示 `blocked / fail` 的建议动作，而不是只给状态
+- 显示 route 收口到 notifier 投递的时延，快速定位“卡在哪一跳”
+- 单独突出环境阻塞、QA 证据阻塞、代码阻塞三类问题
+
 ## Claude Code UI（可选）
 
 本 UI 仅作为 Claude Code CLI 的可视化壳，不改变能力边界。默认只读使用，不要在 UI 中运行派遣/改锁类命令。
@@ -177,6 +183,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start
 所有经 Team Lead 派遣的 worker（含 `doc-updater` / `repo-committer`）只要按协议走 `report_route`，都会先被 `route-monitor` 收口，再由 `route-notifier` 唤醒 Team Lead。
 如需关闭直接唤醒，设置 `CCB_ROUTE_MONITOR_NOTIFY=0`。
 Agent Teams / `notify-sentinel` 已从主链移除，不再作为派遣前置门槛。
+
+## 后续增强方向
+
+- **命名管道 / IPC**：适合增强本机执行层的实时事件传递，但不会替代任务锁、route 日志和 Team Lead 唤醒链。更合适的方向是“named pipe 负责实时事件，JSON/JSONL 负责持久化与审计”。
+- **Rich 看板二期**：应继续保持只读，重点增强“决策建议、路由时延、阻塞根因”，不要把派遣或改锁动作塞回看板。
 
 ## 技能链路（Team Lead）
 
