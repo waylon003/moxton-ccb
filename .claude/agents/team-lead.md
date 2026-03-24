@@ -300,9 +300,17 @@ TaskId 命名强约束（CRITICAL）：
    - 用户确认后执行 `archive`
    - `archive` 采用两阶段闭环：
      - 阶段 1：任务文件移动到 `completed`，主任务状态进入 `archiving`
-     - 阶段 2：等待 `doc-updater` 与 `repo-committer` 均回传 `success`
-     - 仅当两者都成功时，`route-monitor` 才将主任务最终置为 `completed`
-     - 任一失败则主任务置为 `blocked`
+     - 阶段 2：等待 `doc-updater` 与 `repo-committer` 回传终态
+     - `doc-updater`：`success` 可包含 `result=updated|noop`
+     - `repo-committer`：`success` 可包含 `result=committed|noop`；其中 `reason=no_changes_to_commit` 视为已达目标状态，不得按阻塞处理
+     - 仅当两者都进入成功语义（含 noop）时，`route-monitor` 才将主任务最终置为 `completed`
+     - 只有真实失败或 `artifact_cleanup_required` 等阻塞才将主任务置为 `blocked`
+   - 若 `archive` 被 `artifact_cleanup_required` 阻塞：
+     - 结论：这是仓库脏文件/测试垃圾问题，不是业务代码失败
+     - 先运行 `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\audit-worktree-artifacts.ps1" -RepoPath "<目标仓库>"`
+     - 先区分“临时产物”与“真实改动”，不要盲目重派 `repo-committer`
+     - 若用户明确同意清理，再执行 `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\cleanup-worktree-artifacts.ps1" -RepoPath "<目标仓库>" -AllowTracked`
+     - 未完成清污前，禁止强行再次 `archive`
 
 ## Source of Truth
 - 任务文档：`01-tasks/*`

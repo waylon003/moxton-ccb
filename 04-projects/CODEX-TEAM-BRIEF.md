@@ -42,7 +42,6 @@ Use it in Claude Code to bootstrap a Team Lead + parallel sub-agent workflow.
   - `Run targeted legacy scripts: node test-*.js`
   - `Capture request/response evidence for PASS/FAIL.`
 - Tasks:
-  - `01-tasks\active\backend\BACKEND-014-order-payment-query-api.md` (BACKEND-014)
   - `01-tasks\active\backend\BACKEND-015-fix-uuid-esm-require.md` (BACKEND-015)
 
 ## Claude Code Starter Prompt
@@ -133,7 +132,6 @@ Role assignments:
     - Run targeted legacy scripts: node test-*.js
     - Capture request/response evidence for PASS/FAIL.
   task files:
-    - 01-tasks\active\backend\BACKEND-014-order-payment-query-api.md
     - 01-tasks\active\backend\BACKEND-015-fix-uuid-esm-require.md
   optional context references:
     - E:\moxton-ccb\01-tasks\STATUS.md

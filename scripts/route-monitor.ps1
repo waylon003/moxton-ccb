@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env pwsh
+﻿﻿#!/usr/bin/env pwsh
 # [ROUTE] Message Monitor - Poll route inbox, update task locks, trigger doc-updater
 # Usage: .\route-monitor.ps1 -TeamLeadPaneId <id> [-Continuous]
 
@@ -1251,15 +1251,19 @@ function Try-RecoverArchiveCommitDispatch {
         $pushRequired = Convert-ToBoolean -value $Job.push_required -default $true
     }
 
-    $args = @("-TaskId", $TaskId, "-Force", "-EmitJson")
-    if ($TeamLeadPaneId) {
-        $args += @("-TeamLeadPaneId", $TeamLeadPaneId)
-    }
     if ($pushRequired) {
-        $args += @("-Push")
+        if ($TeamLeadPaneId) {
+            $raw = & $commitTriggerScript -TaskId $TaskId -TeamLeadPaneId $TeamLeadPaneId -Force -EmitJson -Push 2>&1
+        } else {
+            $raw = & $commitTriggerScript -TaskId $TaskId -Force -EmitJson -Push 2>&1
+        }
+    } else {
+        if ($TeamLeadPaneId) {
+            $raw = & $commitTriggerScript -TaskId $TaskId -TeamLeadPaneId $TeamLeadPaneId -Force -EmitJson 2>&1
+        } else {
+            $raw = & $commitTriggerScript -TaskId $TaskId -Force -EmitJson 2>&1
+        }
     }
-
-    $raw = & $commitTriggerScript @args 2>&1
     $exitCode = $LASTEXITCODE
     $resp = Convert-CommandOutputToJson -output $raw
     if (-not $resp) {
@@ -2001,6 +2005,29 @@ function Normalize-SubTaskStatus([string]$RouteStatus) {
     }
 }
 
+function Resolve-ArchiveCommitStatusOverride {
+    param(
+        [string]$RouteTaskId,
+        [string]$CommitTaskId,
+        [string]$WorkerName,
+        [string]$SubStatus,
+        [string]$Body
+    )
+    if (-not $RouteTaskId -or -not $CommitTaskId) { return $null }
+    if ($RouteTaskId -ne $CommitTaskId) { return $null }
+    if ($SubStatus -ne "blocked") { return $null }
+
+    $bodyText = if ($Body) { [string]$Body } else { "" }
+    if ($bodyText -match "(?i)\\breason=no_changes_to_commit\\b") {
+        return [pscustomobject]@{
+            commit_status = "success"
+            note = "Repo-committer reported no_changes_to_commit; treat as archive-safe noop"
+        }
+    }
+
+    return $null
+}
+
 function Update-ArchiveJobsFromRoute {
     param(
         [string]$RouteTaskId,
@@ -2028,6 +2055,13 @@ function Update-ArchiveJobsFromRoute {
         }
         if ($RouteTaskId -eq $commitTaskId) {
             $job.commit_status = $subStatus
+            $commitOverride = Resolve-ArchiveCommitStatusOverride -RouteTaskId $RouteTaskId -CommitTaskId $commitTaskId -WorkerName $WorkerName -SubStatus $subStatus -Body $Body
+            if ($commitOverride) {
+                Set-ObjectField -obj $job -name "commit_status" -value ([string]$commitOverride.commit_status)
+                if ($commitOverride.note) {
+                    Set-ObjectField -obj $job -name "note" -value ([string]$commitOverride.note)
+                }
+            }
         }
 
         $docState = if ($job.doc_status) { [string]$job.doc_status } else { "pending" }
@@ -2081,7 +2115,7 @@ function Update-ArchiveJobsFromRoute {
             $job.status = "success"
             $job.updated_at = Get-Date -Format "o"
             $job.updated_by = "route-monitor/archive"
-            $job.completed_at = Get-Date -Format "o"
+            Set-ObjectField -obj $job -name "completed_at" -value (Get-Date -Format "o")
             if ($taskId) {
                 Set-TaskLockState -TaskId $taskId -State "completed" -UpdatedBy "route-monitor/archive" -Note "Archive finalized: doc-updater + repo-committer success"
             }

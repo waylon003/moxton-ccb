@@ -1,7 +1,7 @@
 ﻿# 任务状态总览
 
 **更新时间**: 2026-03-24
-**活跃任务**: 6 个
+**活跃任务**: 4 个
 
 ## 项目映射
 
@@ -17,8 +17,8 @@
 |------|---------|--------|-----------|------|
 | SHOP-FE | 0 | 3 | 8 | 11 |
 | ADMIN-FE | 0 | 0 | 10 | 10 |
-| BACKEND | 0 | 3 | 18 | 21 |
-| **TOTAL** | **0** | **6** | **36** | **42** |
+| BACKEND | 0 | 1 | 20 | 21 |
+| **TOTAL** | **0** | **4** | **38** | **42** |
 
 ## 目录结构
 
@@ -45,8 +45,6 @@
 
 | 任务ID | 标题 |
 |--------|------|
-| [BACKEND-014](./active/backend/BACKEND-014-order-payment-query-api.md) | order payment query api |
-| [BACKEND-015](./active/backend/BACKEND-015-fix-uuid-esm-require.md) | fix uuid esm require |
 | [BACKEND-016](./active/backend/BACKEND-016-start-backend-dev-server.md) | start backend dev server |
 
 ### 独立站前端 (SHOP-FE)
@@ -111,6 +109,8 @@
 | [BACKEND-011](./completed/backend/BACKEND-011-backend-fix-1-fix-order-get-orders-user-500-2.md) | backend fix 1 fix order get orders user 500 2 |
 | [BACKEND-012](./completed/backend/BACKEND-012-pagination.md) | pagination |
 | [BACKEND-013](./completed/backend/BACKEND-013-order-images-format.md) | order images format |
+| [BACKEND-014](./completed/backend/BACKEND-014-order-payment-query-api.md) | order payment query api |
+| [BACKEND-015](./completed/backend/BACKEND-015-fix-uuid-esm-require.md) | fix uuid esm require |
 | [BUG-001](./completed/backend/BUG-001-order-api-500-error.md) | order api 500 error |
 | [BUG-002](./completed/backend/BUG-002-order-items-field-name.md) | order items field name |
 | [BUG-004](./completed/backend/BUG-004-stripe-payment-intent-params.md) | stripe payment intent params |

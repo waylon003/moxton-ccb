@@ -6,13 +6,14 @@
 
 - Base URL: `http://localhost:3033`
 - 认证: 无需认证
-- 依据: `BACKEND-016` QA `PASS`，核心证据位于 `05-verification/BACKEND-016/`；其中 `contract-check.json`、`failure-path.json` 于 2026-03-24 14:48:26 +08:00 更新，任务文件 QA 摘要最后更新于 2026-03-24 14:49:31 +08:00，并于 2026-03-24 14:51 +08:00 本地 spot check 复核 `/health`、`/version` 与未知路由错误包
-- 最后核对时间: 2026-03-24 14:51 +08:00（实时 spot check）+ 2026-03-24 14:49:31 +08:00（任务文件内 QA 摘要）+ 2026-03-24 14:48:26 +08:00（`contract-check.json`、`failure-path.json`）；历史原始探活证据时间为 2026-03-19 17:49-17:50 +08:00（`curl-health.txt`、`curl-version.txt`、`failure-path.json`、`automated-test.json`）
+- 依据: `BACKEND-015` 于 2026-03-20 QA `PASS` 首次确认根路由探针已修复为统一响应包，并在 `/health`、`/version` 响应头中稳定返回 `X-Request-ID`；`BACKEND-016` 归档任务 `01-tasks/completed/backend/BACKEND-016-start-backend-dev-server.md` 的 QA 摘要与 `05-verification/BACKEND-016/contract-check.json`、`05-verification/BACKEND-016/failure-path.json` 于 2026-03-24 再次复核当前接口与错误路径，并将权威文档归属回正到 `02-api/system.md`
+- 最后核对时间: 2026-03-24 16:19 +08:00（实时 spot check：`/health`、`/version`）+ 2026-03-24 14:48:26 +08:00（`BACKEND-016` `contract-check.json`、`failure-path.json`）+ 2026-03-20 12:21:04 +08:00（`BACKEND-015` 任务文件 QA 摘要）；历史原始探活证据时间为 2026-03-19 17:49-17:50 +08:00（`curl-health.txt`、`curl-version.txt`、`failure-path.json`、`automated-test.json`）
 
 ## 统一响应包说明
 
 - 成功响应包含顶层字段：`code`、`message`、`data`、`timestamp`、`success`
 - 错误响应同样保留顶层 `timestamp`，便于联调和 QA 对时排查
+- 根路由探针与未知根路由错误包当前都会返回 `X-Request-ID` 响应头，用于串联 `requestIdMiddleware` 的日志追踪（依据：`BACKEND-015`、2026-03-24 16:19 +08:00 spot check、`BACKEND-016` 错误路径证据）
 - 文档归属已与 QA 证据对齐：`05-verification/BACKEND-016/contract-check.json` 当前 `api_doc` 为 `02-api/system.md`
 
 ## 健康检查
@@ -23,6 +24,9 @@
 
 **状态码**:
 - `200 OK`: 服务正常
+
+**响应头**:
+- `X-Request-ID`: 请求追踪 ID，联调用于串联日志与错误排查
 
 **响应示例**:
 
@@ -57,6 +61,9 @@
 **状态码**:
 - `200 OK`: 版本信息读取成功
 
+**响应头**:
+- `X-Request-ID`: 请求追踪 ID，联调用于串联日志与错误排查
+
 **响应示例**:
 
 ```json
@@ -88,6 +95,9 @@
 
 **状态码**:
 - `404 Not Found`: 路由不存在
+
+**响应头**:
+- `X-Request-ID`: 请求追踪 ID，错误路径同样会携带，便于关联失败日志
 
 **响应示例**:
 

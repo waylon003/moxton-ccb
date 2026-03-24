@@ -5026,15 +5026,18 @@ function Invoke-Archive {
     & $upsertArchiveJob -status "running" -docId $docTaskId -commitId "" -docStatus "pending" -commitStatus "pending" -note "Doc updater dispatched" -blockedReason ""
 
     # Trigger repo-committer（默认 push）
-    $commitArgs = @("-TaskId", $TaskId, "-TeamLeadPaneId", $tlPaneId, "-Force", "-EmitJson")
-    if (-not $NoPush.IsPresent) {
-        $commitArgs += "-Push"
-    }
-    if ($CommitMessage) {
-        $commitArgs += @("-CommitMessage", $CommitMessage)
-    }
     try {
-        $commitRaw = & $commitTriggerScript @commitArgs
+        if ($CommitMessage) {
+            if ($NoPush.IsPresent) {
+                $commitRaw = & $commitTriggerScript -TaskId $TaskId -TeamLeadPaneId $tlPaneId -Force -EmitJson -CommitMessage $CommitMessage
+            } else {
+                $commitRaw = & $commitTriggerScript -TaskId $TaskId -TeamLeadPaneId $tlPaneId -Force -EmitJson -Push -CommitMessage $CommitMessage
+            }
+        } elseif ($NoPush.IsPresent) {
+            $commitRaw = & $commitTriggerScript -TaskId $TaskId -TeamLeadPaneId $tlPaneId -Force -EmitJson
+        } else {
+            $commitRaw = & $commitTriggerScript -TaskId $TaskId -TeamLeadPaneId $tlPaneId -Force -EmitJson -Push
+        }
         $commitResp = Convert-CommandOutputToJson -output $commitRaw
     } catch {
         Write-Host ('[FAIL] trigger-repo-committer exception: ' + $_.Exception.Message) -ForegroundColor Red

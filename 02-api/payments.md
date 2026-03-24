@@ -1,7 +1,7 @@
 # Moxton Lot API - 支付系统接口文档
 
-**版本**: v1.15.3
-**最后更新**: 2026-03-20
+**版本**: v1.15.4
+**最后更新**: 2026-03-24
 **服务地址**: http://localhost:3033
 
 ---
@@ -87,6 +87,16 @@ X-Guest-ID: <guest-session-id>     // 游客必填，用于验证订单归属
 }
 ```
 
+**错误响应示例 2：存在活跃支付意图（刷新/并发竞态）**:
+```json
+{
+  "code": 400,
+  "message": "Failed to create payment intent: Payment already in progress",
+  "timestamp": "2026-03-24T06:12:15.000Z",
+  "success": false
+}
+```
+
 **错误码**:
 - `400`: `orderId is required` - 缺少订单ID
 - `400`: `X-Guest-ID header is required for guest payments` - 游客支付缺少访客标识
@@ -96,6 +106,12 @@ X-Guest-ID: <guest-session-id>     // 游客必填，用于验证订单归属
 - `403`: `Access denied: This is not a guest order` - 访客请求试图为用户订单创建支付意图
 - `403`: `Access denied: Order does not belong to user` - 订单不属于当前登录用户
 - `403`: `Access denied: Order does not belong to this guest session` - 游客订单与 X-Guest-ID 不匹配
+
+**前端接入补充（依据 `SHOP-FE-013` QA 与前端实现）**:
+- 支付页初始化顺序应固定为：先调用 `GET /payments/order/:orderId`，有 `activePayment` 即复用，没有再调用当前接口
+- 若 `GET /payments/order/:orderId` 因网络异常或 `5xx` 失败，可降级调用当前接口，避免支付页被查询失败阻塞
+- 若已经按上述顺序执行，但当前接口仍返回 `400 Payment already in progress`，说明存在刷新或并发竞态；前端应立即再次查询 `GET /payments/order/:orderId`，若取到 `activePayment` 则直接复用
+- 对 `403`、`404`、参数错误等非重试类失败，不应盲目重试创建支付意图，应直接提示用户并做本地化文案映射
 
 **权限验证逻辑**:
 
@@ -512,9 +528,8 @@ import { loadStripe } from '@stripe/stripe-js';
 const stripe = await loadStripe('pk_test_51SWp4fAdUxdJL62WadIF0ekRQWLcoQ0RHijCvfQXePy0QHPt7uqJ407X02vgpVvo0SgAkwMZWEqK13JturY4q8cv0015drns3F');
 ```
 
-**3. 创建支付意图**:
+**3. 优先复用活跃支付意图**:
 ```typescript
-// 调用后端API创建支付意图
 const headers: Record<string, string> = {
   'Content-Type': 'application/json',
 };
@@ -529,25 +544,60 @@ if (!isLoggedIn) {
   headers['X-Guest-ID'] = guestId;
 }
 
-const response = await fetch('http://localhost:3033/payments/stripe/create-intent', {
-  method: 'POST',
-  headers,
-  body: JSON.stringify({
-    orderId: 'clt123456789'
-  })
-});
+async function resolvePaymentIntent(orderId: string) {
+  const orderPaymentResponse = await fetch(`http://localhost:3033/payments/order/${orderId}`, {
+    method: 'GET',
+    headers,
+  });
 
-const result = await response.json();
+  const orderPaymentResult = await orderPaymentResponse.json();
+  const activePayment = orderPaymentResult?.data?.activePayment;
 
-if (result.success) {
-  const { clientSecret, publishableKey } = result.data;
+  if (orderPaymentResult.success && activePayment?.clientSecret) {
+    return {
+      clientSecret: activePayment.clientSecret,
+      publishableKey: stripePublishableKey,
+      paymentIntentId: activePayment.paymentIntentId,
+    };
+  }
 
-  // 使用返回的clientSecret初始化Elements
-  const stripe = await loadStripe(publishableKey);
-  const elements = stripe.elements({ clientSecret });
-} else {
-  // 处理错误，包括权限错误
-  console.error('Payment intent creation failed:', result.message);
+  const queryFailedWithRetryableStatus =
+    !orderPaymentResult.success && (!orderPaymentResponse.status || orderPaymentResponse.status >= 500);
+
+  if (!orderPaymentResult.success && !queryFailedWithRetryableStatus) {
+    throw new Error('payment_query_failed');
+  }
+
+  const createIntentResponse = await fetch('http://localhost:3033/payments/stripe/create-intent', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ orderId }),
+  });
+
+  const createIntentResult = await createIntentResponse.json();
+
+  if (createIntentResult.success) {
+    return createIntentResult.data;
+  }
+
+  if (createIntentResult.message?.includes('Payment already in progress')) {
+    const retryOrderPaymentResponse = await fetch(`http://localhost:3033/payments/order/${orderId}`, {
+      method: 'GET',
+      headers,
+    });
+    const retryOrderPaymentResult = await retryOrderPaymentResponse.json();
+    const retryActivePayment = retryOrderPaymentResult?.data?.activePayment;
+
+    if (retryOrderPaymentResult.success && retryActivePayment?.clientSecret) {
+      return {
+        clientSecret: retryActivePayment.clientSecret,
+        publishableKey: stripePublishableKey,
+        paymentIntentId: retryActivePayment.paymentIntentId,
+      };
+    }
+  }
+
+  throw new Error('payment_init_failed');
 }
 ```
 
@@ -832,6 +882,11 @@ ctx.forbidden(message)
 - 基于 `BACKEND-014` QA 结果补充“先查询后创建”的支付页接入顺序
 - 明确 `GET /payments/order/:orderId` 的 403/404 错误示例与闭环行为
 - 补充已过期支付记录被标记为 `CANCELLED` 后允许重新创建 intent 的验证依据
+
+### v1.15.4 (2026-03-24)
+- 基于 `SHOP-FE-013` QA 与前端落地实现，补充支付页“查询失败降级创建”的接入说明
+- 为 `POST /payments/stripe/create-intent` 补充 `400 Payment already in progress` 错误示例与前端重查复用建议
+- 修正前端集成指南，避免继续使用“直接调用 create-intent”的过时示例
 
 ### v1.15.2 (2026-03-16)
 - 修复 create-intent 对已过期支付记录的阻塞，过期判断统一基于 expiresAt / createdAt+24h

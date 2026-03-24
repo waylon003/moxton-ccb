@@ -5,12 +5,23 @@
 ### 2026-03-24
 
 #### 更新 (Changed)
-- **系统与诊断** - 按 `BACKEND-016` 2026-03-24 最新 QA 成功与本地 spot check 刷新运行探针文档
-  - 复核 `GET /health`、`GET /version` 当前仍返回 `200`
+- **订单管理** - 按 `SHOP-FE-012` 归档补齐用户/游客订单详情接口的历史遗漏说明
+  - 修正 `GET /orders/:id`、`GET /orders/guest/orders/:id`：当前返回原始订单详情结构，字段以 `items[].price`、顶层 `address` 字符串和 `addresses[]` 为准，不返回 `unitPrice/subtotal`
+  - 补充上述两个端点的常见状态码与错误响应示例（`400/403/404/500`）
+  - 明确 `OrderResponseDTO` 仅适用于 `POST /orders/checkout` 与管理端订单接口
+  - 依据：`01-tasks/completed/shop-frontend/SHOP-FE-012-order-detail-fixes.md`（含 2026-03-20 QA 摘要与历史问题记录）、`E:/nuxt-moxton/05-verification/SHOP-FE-012/shop-fe-qa-order-detail-api-response.json`、`E:/moxton-lotapi/src/controllers/Order.ts`、`E:/moxton-lotapi/src/transformers/OrderTransformer.ts`
+- **前端归档一致性复核** - `SHOP-FE-014` 仅涉及前端开发环境恢复，无 API 契约变更
+  - 已复核 `orders.md`、`payments.md` 与 `system.md`：支付页依赖的接口、字段、状态码、错误示例均无需改动
+  - 归档依据已回正到 `01-tasks/completed/shop-frontend/SHOP-FE-014-frontend-dev-env-recovery.md`；任务结论为端口 `3666` dev server 恢复、`/_nuxt/builds/meta/dev.json` 返回 `200`、首页无 manifest/hydration error
+  - 本次同步仅补齐文档一致性记录，未新增或删除任何 API 端点
+- **系统与诊断** - 按 `BACKEND-015` 归档补齐首次修复依据，并结合 `BACKEND-016` 2026-03-24 最新 QA 成功与本地 spot check 刷新运行探针文档
+  - 补记历史遗漏：`BACKEND-015` 首次修复 `GET /health`、`GET /version` 的统一 envelope 与 `X-Request-ID`；`BACKEND-016` 为后续复核任务
+  - 归档一致性复核：`BACKEND-016` 任务文件已迁移至 `01-tasks/completed/backend/BACKEND-016-start-backend-dev-server.md`，相关依据引用同步回正
+  - 复核 `GET /health`、`GET /version` 当前仍返回 `200`，且响应头继续携带 `X-Request-ID`
   - 复核未知根路由错误示例：`GET /health-not-found` 当前仍返回标准 `404` JSON 包
-  - 刷新 `system.md` 与 `README.md` 中的最后核对时间、示例时间戳与错误包字段顺序
+  - 刷新 `system.md` 与 `README.md` 中的最后核对时间、响应头说明、示例时间戳与错误包字段顺序
   - 清理失效的历史说明：`contract-check.json` 现已与 `system.md` 对齐，不再指向 `addresses.md`
-  - 依据：`01-tasks/active/backend/BACKEND-016-start-backend-dev-server.md`（2026-03-24 QA 摘要）、`05-verification/BACKEND-016/contract-check.json`、`05-verification/BACKEND-016/failure-path.json`、2026-03-24 14:51 +08:00 本地 spot check
+  - 依据：`01-tasks/completed/backend/BACKEND-015-fix-uuid-esm-require.md`（2026-03-20 QA 摘要）、`05-verification/BACKEND-015/curl-health.txt`、`05-verification/BACKEND-015/curl-version.txt`、`01-tasks/completed/backend/BACKEND-016-start-backend-dev-server.md`（2026-03-24 QA 摘要）、`05-verification/BACKEND-016/contract-check.json`、`05-verification/BACKEND-016/failure-path.json`、2026-03-24 16:19 +08:00 本地 spot check
 
 ### 2026-03-23
 
@@ -19,7 +30,7 @@
   - 复核 `GET /health`、`GET /version` 当前仍返回 `200`
   - 补充未知根路由错误示例：`GET /health-not-found` 当前返回标准 `404` JSON 包
   - 刷新 `system.md` 与 `README.md` 中的最后核对时间，并保留旧 `contract-check.json` 指向 `addresses.md` 的历史遗漏说明
-  - 依据：`01-tasks/active/backend/BACKEND-016-start-backend-dev-server.md`（QA 摘要）、`05-verification/BACKEND-016/`、2026-03-23 12:40 +08:00 本地 spot check
+  - 依据：`01-tasks/completed/backend/BACKEND-016-start-backend-dev-server.md`（QA 摘要）、`05-verification/BACKEND-016/`、2026-03-23 12:40 +08:00 本地 spot check
 
 ### 2026-03-03
 

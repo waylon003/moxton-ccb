@@ -25,8 +25,8 @@
 - **认证方式**: Bearer Token / X-Guest-ID
 - **数据格式**: JSON
 - **字符编码**: UTF-8
-- **运行探针**: `GET /health`、`GET /version`（已于 2026-03-24 14:51 +08:00 再次复核；`200/200/404` 的字段、状态码与错误包以 [system.md](system.md) 为准）
-- **文档归属**: `BACKEND-016` 最新 QA 证据中的 `contract-check.json` 已明确指向 [system.md](system.md)
+- **运行探针**: `GET /health`、`GET /version`（已于 2026-03-24 16:19 +08:00 再次复核；两个接口当前均返回标准 envelope 并携带 `X-Request-ID`，未知根路由 `404` 错误包以 [system.md](system.md) 为准）
+- **文档归属**: `BACKEND-015` 首次修复根路由统一响应契约与 `X-Request-ID`，`BACKEND-016` 最新 QA 证据中的 `contract-check.json` 已明确指向 [system.md](system.md)
 
 ## 📝 使用指南
 

@@ -27,6 +27,7 @@ $scriptDir = $PSScriptRoot
 $rootDir = Split-Path $scriptDir -Parent
 $workerMapPath = Join-Path $rootDir 'config\worker-map.json'
 $historyFile = Join-Path $rootDir 'config\repo-commit-history.json'
+$auditScript = Join-Path $scriptDir 'audit-worktree-artifacts.ps1'
 
 function Exit-WithResult([int]$Code, [string]$Status, [string]$Message, [hashtable]$Extra = @{}) {
     if ($EmitJson.IsPresent) {
@@ -101,6 +102,43 @@ if (-not (Test-Path $repoPath)) {
     Write-Host ('Skip: repo path not found ' + $repoPath) -ForegroundColor Yellow
     Exit-WithResult -Code 0 -Status 'noop' -Message 'repo_path_not_found' -Extra @{ repo = $repoPath }
 }
+if (-not (Test-Path $auditScript)) {
+    Write-Host ('Skip: audit script not found ' + $auditScript) -ForegroundColor Yellow
+    Exit-WithResult -Code 1 -Status 'blocked' -Message 'artifact_audit_script_missing' -Extra @{ repo = $repoPath }
+}
+
+$auditJson = & $auditScript -RepoPath $repoPath -EmitJson
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ('Skip: worktree artifact audit failed for ' + $repoPath) -ForegroundColor Yellow
+    Exit-WithResult -Code 1 -Status 'blocked' -Message 'artifact_audit_failed' -Extra @{ repo = $repoPath }
+}
+$audit = $null
+try {
+    $audit = $auditJson | ConvertFrom-Json
+} catch {
+    Write-Host ('Skip: worktree artifact audit returned invalid JSON for ' + $repoPath) -ForegroundColor Yellow
+    Exit-WithResult -Code 1 -Status 'blocked' -Message 'artifact_audit_invalid_json' -Extra @{ repo = $repoPath }
+}
+if ($audit -and [int]$audit.artifact_count -gt 0) {
+    $artifactCandidates = @()
+    if ($audit.artifact_candidates) {
+        foreach ($entry in (Normalize-ToList -value $audit.artifact_candidates)) {
+            if ($entry -and $entry.path) {
+                $artifactCandidates += [string]$entry.path
+            }
+        }
+    }
+    Write-Host ('Skip: repo contains artifact candidates, archive commit is blocked: ' + $repoPath) -ForegroundColor Yellow
+    foreach ($path in ($artifactCandidates | Select-Object -First 12)) {
+        Write-Host ('  - ' + $path) -ForegroundColor DarkYellow
+    }
+    Exit-WithResult -Code 0 -Status 'blocked' -Message 'artifact_cleanup_required' -Extra @{
+        repo = $repoPath
+        artifactCount = [int]$audit.artifact_count
+        artifactCandidates = $artifactCandidates
+    }
+}
+
 
 $history = Read-Json -path $historyFile
 $historyList = @(Normalize-ToList -value $history)
@@ -149,20 +187,26 @@ $taskLines = @(
     "- Worker: $commitWorker",
     '',
     '## Steps',
-    '1. Run git status --short to inspect pending changes.',
-    '2. If no changes, report blocked with reason no_changes_to_commit.',
-    '3. If changes exist:',
-    '   - git add -A',
+    "1. Run `powershell -NoProfile -ExecutionPolicy Bypass -File ""E:\moxton-ccb\scripts\audit-worktree-artifacts.ps1"" -RepoPath ""$repoPath""` first.",
+    '2. If artifact candidates exist, report blocked with reason artifact_cleanup_required and do not commit.',
+    '3. Run both `git status --short` and `git status --porcelain=v1 -b` to inspect pending changes and branch state.',
+    '4. If there are no changes to commit:',
+    '   - do NOT report blocked',
+    '   - report `status=success` with `body` containing `result=noop; reason=no_changes_to_commit`',
+    '   - include current HEAD / branch status / push result when available',
+    '5. If changes exist and audit is clean:',
+    '   - stage intended source/doc changes only; never stage artifact paths',
     "   - git commit -m '$resolvedCommitMessage'",
     '   - git rev-parse HEAD and report commit SHA.',
-    '4. If no local changes but branch may be ahead, check: git status --porcelain=v1 -b',
-    '5. If push is required for this task, run: git push',
-    '6. Report completion through report_route (include commit SHA and push result).',
+    '6. If push is required for this task and a new commit was created, run: git push',
+    '7. Report completion through report_route (include committed or noop result).',
     '',
     '## Constraints',
     '- No sub-agent usage.',
-    ($(if ($Push.IsPresent) { '- Push is REQUIRED for this task.' } else { '- Do not run git push unless Team Lead explicitly asks.' })),
-    '- No destructive git commands (reset/clean/force checkout).'
+    ($(if ($Push.IsPresent) { '- Push is REQUIRED for this task when a new commit exists.' } else { '- Do not run git push unless Team Lead explicitly asks.' })),
+    '- No destructive git commands (reset/clean/force checkout).',
+    '- Never commit: .golutra / .ccb-tmp / .tmp-* / playwright-report / test-results / repo-local 05-verification.',
+    '- `artifact_cleanup_required` is the only normal blocking path before commit; `no_changes_to_commit` must be treated as success/noop.'
 )
 $taskContent = $taskLines -join "`n"
 

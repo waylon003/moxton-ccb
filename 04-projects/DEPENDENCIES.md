@@ -1,6 +1,6 @@
 ---
 last_verified: 2026-03-24
-verified_against: [BACKEND-016, BACKEND-014, SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
+verified_against: [SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-016, BACKEND-015, BACKEND-014, SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
 # 跨项目依赖关系
@@ -44,7 +44,7 @@ verified_against: [BACKEND-016, BACKEND-014, SHOP-FE-011, SHOP-FE-010, SHOP-FE-0
 
 ## API 依赖详情
 
-联调与 QA 的公共可用性探针统一为 `GET http://localhost:3033/health` 与 `GET http://localhost:3033/version`；已于 2026-03-24 文档同步时再次 spot check，当前仍分别返回 `200` 与 `200`，未知根路由 `GET /health-not-found` 返回标准 `404` JSON 包，且最新 `contract-check.json` 已与 `02-api/system.md` 对齐。
+联调与 QA 的公共可用性探针统一为 `GET http://localhost:3033/health` 与 `GET http://localhost:3033/version`；该基线由 `BACKEND-015` 首次修复为标准 envelope + `X-Request-ID`，并于 2026-03-24 结合归档任务 `01-tasks/completed/backend/BACKEND-016-start-backend-dev-server.md` 的 QA 摘要再次 spot check，当前仍分别返回 `200` 与 `200`，未知根路由 `GET /health-not-found` 返回标准 `404` JSON 包，且最新 `contract-check.json` 已与 `02-api/system.md` 对齐。
 
 ### nuxt-moxton → moxton-lotapi
 
@@ -61,8 +61,10 @@ verified_against: [BACKEND-016, BACKEND-014, SHOP-FE-011, SHOP-FE-010, SHOP-FE-0
 | `/cart/merge` | POST | 合并游客购物车 | ✅ 同步 |
 | `/orders` | POST | 创建订单 | ✅ 同步 |
 | `/orders/user` | GET | 订单列表（订单项图片字段为 `items.product.images[]`） | ✅ 同步 |
-| `/orders/:id` | GET | 订单详情（订单项图片字段为 `items.product.images[]`） | ✅ 同步 |
-| `/payments/stripe/create-intent` | POST | 当 `activePayment=null` 时创建新的 Stripe 支付意图 | ✅ 同步 |
+| `/orders/:id` | GET | 登录用户订单详情（当前返回 `items[].price`、顶层 `address` 字符串、`addresses[]`，订单项图片字段为 `items.product.images[]`） | ✅ 同步 |
+| `/orders/guest/orders` | GET | 游客订单列表 | ✅ 同步 |
+| `/orders/guest/orders/:id` | GET | 游客订单详情（返回结构同当前用户订单详情） | ✅ 同步 |
+| `/payments/stripe/create-intent` | POST | 当 `activePayment=null` 或支付查询降级时创建新的 Stripe 支付意图 | ✅ 同步 |
 | `/payments/order/:orderId` | GET | 支付页首调接口，用于查询并复用订单活跃支付记录 | ✅ 同步 |
 | `/payments/stripe/status/:paymentIntentId` | GET | 查询支付状态 | ✅ 同步 |
 | `/addresses` | GET/POST/PUT/DELETE | 收货地址管理 | ✅ 同步 |
@@ -92,6 +94,18 @@ verified_against: [BACKEND-016, BACKEND-014, SHOP-FE-011, SHOP-FE-010, SHOP-FE-0
 - 依据 `BACKEND-014` QA，支付页链路调整为：先调用 `GET /payments/order/:orderId`，仅在 `activePayment=null` 时调用 `POST /payments/stripe/create-intent`
 - 游客调用 `GET /payments/order/:orderId` 缺少 `X-Guest-ID` 时返回 `403`；订单不存在时返回 `404`
 - 对已过期的历史 `PENDING` 支付，查询接口会返回 `activePayment=null`；创建新 intent 后，旧记录会被标记为 `CANCELLED`
+
+#### 契约补充（2026-03-24）
+
+- 依据 `SHOP-FE-012` 归档任务与 QA 摘要，`GET /orders/:id`、`GET /orders/guest/orders/:id` 当前返回原始订单详情结构：`items[].price` 为字符串单价，顶层 `address` 为完整地址字符串，同时附带 `addresses[]` 结构化地址数组
+- 上述两个端点当前不直接返回 `unitPrice` / `subtotal`；商城前端在 `SHOP-FE-012` 中改为兼容读取 `items[].price`、`address` 与 `addresses[0].fullAddress`
+- 订单详情页与订单列表页的“去支付”统一跳转 `/checkout?step=payment&orderId=<id>`；payment step 恢复摘要继续依赖 `GET /payments/order/:orderId`
+- 订单详情接口失败路径仍可能返回英文后端文案，商城前端展示层需做本地化映射
+- 依据 `SHOP-FE-013` QA，商城前端支付页已落地智能复用：刷新页面或返回支付页时会优先复用 `activePayment.clientSecret`
+- 若 `GET /payments/order/:orderId` 因网络异常或 `5xx` 失败，前端允许降级调用 `POST /payments/stripe/create-intent`，避免支付页初始化中断
+- 若创建接口返回 `400 Payment already in progress`，前端会立即重查 `GET /payments/order/:orderId` 并复用新出现的活跃支付记录；`403` / `404` 等非重试错误则仅展示本地化提示
+- 依据 `SHOP-FE-014` 归档 QA 摘要，`nuxt-moxton` 本地开发服务已恢复到 `:3666`，首页与 `/_nuxt/builds/meta/dev.json` 可稳定返回 `200`
+- `SHOP-FE-014` 仅为前端运行环境修复，不新增 `nuxt-moxton → moxton-lotapi` 的 API 依赖；`orders`、`payments`、`system` 契约继续沿用现有文档
 
 ### moxton-lotadmin → moxton-lotapi
 

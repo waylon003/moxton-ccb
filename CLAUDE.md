@@ -207,9 +207,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 ## 文档同步与归档
 
 - 后端 QA 成功后，`route-monitor` 会标记 `api-doc-sync-state.json` 并触发 `doc-updater`。
-- `doc-updater` 必须通过 `report_route` 回传进度与终态，Team Lead 会收到同一条提醒链路。
+- `doc-updater` 分两种模式：`backend_qa`（开发期实时同步）与 `archive_move`（归档期一致性复核）；若复核后无需改动，必须回传 `success + result=noop`，不要把“无改动”当阻塞。
 - `archive` 阶段由 `archive-jobs.json` 跟踪 `doc-updater` 与 `repo-committer` 的子状态。
-- `repo-committer` 必须通过 `report_route` 回传进度与终态；其回传也会唤醒 Team Lead。
+- `repo-committer` 在提交前必须先运行 `scripts/audit-worktree-artifacts.ps1`；若发现 `.golutra/`、`.tmp-*`、`playwright-report/`、业务仓本地 `05-verification/` 等临时产物，必须阻塞为 `artifact_cleanup_required`，禁止直接提交。
+- `repo-committer` 若返回 `reason=no_changes_to_commit`，应视为 `success + result=noop`，表示仓库已达目标状态或改动已被前序提交覆盖；不要再因此重派。
+- `doc-updater` / `repo-committer` 都必须通过 `report_route` 回传进度与终态；其回传也会唤醒 Team Lead。
 
 ---
 

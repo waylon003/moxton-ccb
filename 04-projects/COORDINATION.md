@@ -1,6 +1,6 @@
 ---
 last_verified: 2026-03-24
-verified_against: [BACKEND-016, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
+verified_against: [SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-016, BACKEND-015, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
 # 项目协调状态
@@ -40,14 +40,16 @@ verified_against: [BACKEND-016, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-
 产品管理 + 分类管理 + 在线订单管理（含发货/物流/操作历史）+ 咨询订单管理
 ```
 
-### 已完成任务统计
+### 已归档任务快照（2026-03-24）
 
-| 仓库 | 任务数 | Bug 修复 | 功能开发 |
-|------|--------|---------|----------|
-| 后端 (moxton-lotapi) | 12 | 4 | 8 |
-| 管理后台 (moxton-lotadmin) | 8 | 0 | 8 |
-| 商城前端 (nuxt-moxton) | 1 | 0 | 1 |
-| **总计** | **21** | **4** | **17** |
+> 历史表格未持续维护 bug/feature 拆分，本次按 `01-tasks/completed/` 目录实数补齐归档统计。
+
+| 仓库 | completed 归档数 | 统计依据 |
+|------|------------------|----------|
+| 后端 (moxton-lotapi) | 21 | `01-tasks/completed/backend` |
+| 管理后台 (moxton-lotadmin) | 10 | `01-tasks/completed/admin-frontend` |
+| 商城前端 (nuxt-moxton) | 14 | `01-tasks/completed/shop-frontend` |
+| **总计** | **45** | `01-tasks/completed/*` |
 
 ---
 
@@ -55,8 +57,8 @@ verified_against: [BACKEND-016, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-
 
 ### 认证
 ```typescript
-GET  /health           // 服务健康检查
-GET  /version          // 版本与环境信息
+GET  /health           // 服务健康检查（标准 envelope + X-Request-ID）
+GET  /version          // 版本与环境信息（标准 envelope + X-Request-ID）
 POST /auth/register    // 用户注册
 POST /auth/login       // 用户登录 → 返回 JWT Token
 GET  /auth/profile     // 获取用户信息 (Bearer Token)
@@ -85,7 +87,9 @@ POST   /cart/merge     // 合并游客购物车（登录后）
 ```typescript
 POST /orders                        // 创建订单（结账）
 GET  /orders/user                   // 用户订单列表
-GET  /orders/:id                    // 用户订单详情
+GET  /orders/:id                    // 用户订单详情（当前返回原始订单记录 + addresses[]）
+GET  /orders/guest/orders           // 游客订单列表（X-Guest-ID）
+GET  /orders/guest/orders/:id       // 游客订单详情（X-Guest-ID）
 GET  /orders/admin                  // 管理员订单列表（keyword 多字段搜索）
 GET  /orders/admin/:id              // 管理员订单详情（含 metadata）
 PUT  /orders/admin/:id/status       // 更新订单状态
@@ -104,6 +108,8 @@ POST /payments/stripe/webhook       // Stripe Webhook 回调
 
 - 商城支付页接入顺序已固定为“先查 `GET /payments/order/:orderId`，再决定是否调用 `POST /payments/stripe/create-intent`”
 - 依据 `BACKEND-014` QA，已过期支付不会再阻塞重新创建 intent
+- 依据 `SHOP-FE-013` QA，前端已落地智能复用闭环：支付查询 `5xx`/网络失败时降级创建，创建接口若返回 `Payment already in progress` 会立即重查并复用 `activePayment`
+- 依据 `SHOP-FE-012` 归档复核，商城订单详情链路当前仍需兼容 `GET /orders/:id` / `GET /orders/guest/orders/:id` 的原始字段：`items[].price`、顶层 `address` 字符串与 `addresses[]`
 
 ### 收货地址
 ```typescript
@@ -171,15 +177,22 @@ POST /upload/image  // 图片上传
 
 ## 🚨 待同步事项
 
-### 运行基线（2026-03-24 复核 / BACKEND-016）
+### 运行基线（2026-03-24 复核 / BACKEND-015 + BACKEND-016）
 - 本地联调与 QA 统一以 `http://localhost:3033` 作为后端入口
+- `BACKEND-015`（2026-03-20）已完成根路由基线修复：清除 `uuid` ESM require 启动报错，统一 `/health`、`/version` 为标准响应 envelope，并透出 `X-Request-ID`
 - 可用性探针为 `GET /health`、`GET /version`，本次文档同步 spot check 仍返回 `200`
 - 未知根路由错误路径已复核：`GET /health-not-found` 当前仍返回标准 `404` JSON 包（最新证据见 `05-verification/BACKEND-016/failure-path.json`）
 - `BACKEND-016` 最新 QA 契约证据已与 `02-api/system.md` 对齐，`contract-check.json` 不再残留旧的 `addresses.md` 指向
 
 ### 当前后端基线
+- `BACKEND-015`（2026-03-20）已确认根路由运行探针随 `requestIdMiddleware` 稳定返回 `X-Request-ID`，可作为联调日志追踪头
 - `BACKEND-014`（2026-03-20）已确认支付闭环可用：`activePayment=null` 时可继续创建新的 Stripe intent
 - `BACKEND-014` 与 `BACKEND-016` 已确认后端 `npm run build`、`tests/api`、运行时探活均为绿色；其中 `BACKEND-016` 于 2026-03-24 再次确认运行服务持续可用，旧的“后端编译 242 条错误”结论不再适用
+
+### 当前商城前端基线
+- `SHOP-FE-014`（2026-03-24）已恢复 Nuxt 本地开发环境，`http://localhost:3666` 可正常提供 dev server
+- 归档 QA 摘要已确认 `/_nuxt/builds/meta/dev.json` 返回 `200`，首页无 manifest/hydration error
+- 本次为运行环境修复，不涉及 API 端点、字段、状态码或错误结构变更；商城前端继续沿用既有 `orders`、`payments`、`system` 契约
 
 ### 缺失功能
 - 管理后台：用户管理模块未实现

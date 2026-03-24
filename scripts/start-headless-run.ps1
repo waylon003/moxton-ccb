@@ -133,11 +133,13 @@ function Get-DispatchPrompt {
     $lines.Add('5) 禁止子代理（sub-agent/background agent），仅主进程执行')
     $lines.Add('6) 每次调用 report_route / mcp__route__report_route 时都必须携带 run_id: ' + $routeRunId)
     $lines.Add('7) ACK 后必须立即继续执行（不要等待用户“继续/确认”）')
+    $lines.Add('8) 临时调试产物只能写到当前业务仓 `.ccb-tmp\<TASK-ID>\`；禁止把截图/日志/json/txt 散落到仓库根目录、源码目录或业务仓自己的 `05-verification/`')
+    $lines.Add('9) 任务结束前应自行清理不再需要的 `.ccb-tmp\<TASK-ID>\` 临时产物；不要把临时文件留给 repo-committer 处理')
     if ($WorkerName -match '-qa(?:-\d+)?$') {
         $lines.Add('QA 注意：success 回传必须满足 protocol.md 的 QA 回传合同（JSON + checks + evidence）。')
-        $lines.Add('QA 证据唯一合法目录: E:\moxton-ccb\05-verification\<TASK-ID>\')
+        $lines.Add('QA 证据唯一合法目录: E:\moxton-ccb-verification\<TASK-ID>')
         $lines.Add('QA 禁止把证据写到业务仓库自己的 05-verification/；磁盘真实文件必须位于上述目录。')
-        $lines.Add('QA success 前必须先运行 E:\moxton-ccb\scripts\validate-qa-evidence.ps1 校验本次 JSON 中全部 evidence 路径。')
+        $lines.Add('QA success 前必须先运行 E:\moxton-ccb\scriptsalidate-qa-evidence.ps1 校验本次 JSON 中全部 evidence 路径。')
         $lines.Add('若校验失败，只能 report_route(status=blocked, body 含 blocker_type=qa_evidence_invalid)。')
     }
     if ($hasInlineBody) {
@@ -307,7 +309,6 @@ try {
 $cmdLine = '"' + $codexPath + '" exec -C "' + $metaMap.workdir + '" -s danger-full-access --add-dir "' + $rootDir + '" --add-dir "' + $verificationDir + '" --json -o "' + $finalMessagePath + '" - < "' + $promptPath + '" >> "' + $eventsPath + '" 2>> "' + $stderrPath + '"'
 cmd.exe /d /c $cmdLine
 $exitCode = $LASTEXITCODE
-Write-Utf8NoBomFile -path $exitCodePath -content ([string]$exitCode)
 Write-Utf8NoBomFile -path $exitCodePath -content ([string]$exitCode)
 
 if ($exitCode -eq 0) {

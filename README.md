@@ -120,6 +120,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - `dispatch/dispatch-qa` 会自动确保 `route-monitor` 与 `route-notifier` 常驻；MCP route 上报先由 `route-monitor` 收口，再由 `route-notifier` 唤醒 Team Lead。`doc-updater` / `repo-committer` 也走同一条链路。
 - `dispatch/dispatch-qa/bootstrap` 现在会对 `route-monitor` / `route-notifier` / `rich-monitor` 做心跳判活；若检测到旧 PID 假活、pane 丢失或 `last_loop_at` 过期，会强制重启，避免“看起来在跑，实际上没工作”。
 - 所有通过 Team Lead 派遣的 worker 都必须按协议回传 `in_progress` 与终态（`success` / `blocked` / `fail`）；其中 `doc-updater` / `repo-committer` 的 `in_progress` 也会触发提醒，避免文档/归档链路静默运行。
+- `doc-updater` 分为两种模式：`backend_qa` 负责开发期 API 文档实时同步，`archive_move` 负责归档期一致性复核；若复核后无需改动，应回传 `success + result=noop`。
+- `repo-committer` 在真正提交前会先跑 `scripts/audit-worktree-artifacts.ps1`；若检测到 `.golutra/`、`.tmp-*`、`playwright-report/`、业务仓本地 `05-verification/` 或散落截图/日志/JSON 证据，会阻塞为 `artifact_cleanup_required`，防止脏文件进 commit。
+- `repo-committer` 若返回 `reason=no_changes_to_commit`，表示仓库已是目标状态，应按 `success + result=noop` 收口，不再视为阻塞。
+- 如需按审计结果做定向清理，可执行 `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\cleanup-worktree-artifacts.ps1" -RepoPath "<repo>" -AllowTracked`；该脚本只恢复/删除审计命中的 artifact 候选，不碰源码改动。
 - `route-monitor` 只负责状态收口、任务锁更新和事件落盘；`route-notifier` 独立负责 Team Lead 唤醒。`config/teamlead-delivery.jsonl` / `config/teamlead-delivery-failures.jsonl` 用于区分“route 已收口”与“最后一跳通知失败”。
 - 前端链路保留 `Playwright` 作为 smoke/回归基座，同时加入 `agent-browser` 作为真实浏览器交互验收增强层；不做替换。
 - Windows 下的 Playwright smoke 默认优先使用本机已安装的 Chrome，其次回退到 Edge，以规避 bundled `chromium_headless_shell` 的 ICU 启动崩溃；必要时可通过 `PLAYWRIGHT_BROWSER_CHANNEL` 覆盖。

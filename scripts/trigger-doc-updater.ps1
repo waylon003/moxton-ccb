@@ -139,31 +139,66 @@ $historyFile = Join-Path $rootDir 'config\doc-update-history.json'
 $history = Read-Json -path $historyFile
 $historyList = @(Normalize-ToList -value $history)
 
+$docMode = switch ($Reason) {
+    'backend_qa' { 'dev-sync' }
+    'archive_move' { 'archive-sync' }
+    'round_complete' { 'archive-sync' }
+    default { 'manual' }
+}
+
 $reasonText = switch ($Reason) {
-    'backend_qa' { '后端 QA 成功后实时同步 API 文档' }
-    'archive_move' { '开发任务归档（active -> completed）后触发文档一致性同步' }
-    'round_complete' { '当前无活跃任务，执行全量文档一致性兜底检查' }
+    'backend_qa' { '后端 QA 成功后实时同步 API 文档，目标是避免前端继续读取过期契约' }
+    'archive_move' { '开发任务归档（active -> completed）后触发轻量文档一致性复核' }
+    'round_complete' { '当前无活跃任务，执行轮次级文档一致性兜底检查' }
     default { '手动触发文档同步' }
 }
 
-$docLines = @(
-    "# $docTaskId",
-    '',
-    '## 触发信息',
-    "- 原任务: $TaskId",
-    "- 触发原因: $reasonText",
-    "- 参考任务文件: $taskFileRef",
-    '',
-    '## 必做事项',
-    '1. 检查并同步 `02-api/`（接口、字段、状态码、错误示例）。',
-    '2. 检查并同步 `04-projects/`（模块说明、依赖关系、`last_verified`）。',
-    '3. 若发现历史遗漏，补充到对应文档并注明依据。',
-    '4. 完成后通过 `report_route` 回传 Team Lead，列出修改文件与摘要。',
-    '',
-    '## 参考',
-    '- Agent 规则: `E:\moxton-ccb\.claude\agents\doc-updater.md`',
-    '- 文档根目录: `E:\moxton-ccb`'
-)
+$docActionLines = switch ($docMode) {
+    'dev-sync' {
+        @(
+            '1. 优先同步 `02-api/` 中与当前后端任务直接相关的接口、字段、状态码、错误示例。',
+            '2. 必要时同步 `04-projects/` 中受影响模块的说明、依赖关系、`last_verified` / `verified_against`。',
+            '3. 以“让前端尽快拿到最新契约”为第一目标；只改与本任务直接相关的文档。',
+            '4. 若检查后确认文档已经与当前实现一致，可直接回传 `status=success` 且 `body` 包含 `result=noop`。'
+        )
+    }
+    'archive-sync' {
+        @(
+            '1. 以 completed 任务文件、QA 证据与当前文档为依据，做轻量一致性复核。',
+            '2. 若文档已正确，不要为了“有动作”强行改文档；直接回传 `status=success` 且 `body` 包含 `result=noop`。',
+            '3. 若发现历史遗漏或归档后路径/元数据仍过期，再做最小必要修正。',
+            '4. 完成后回传修改文件列表或 noop 原因，不要刷过多 in_progress 心跳。'
+        )
+    }
+    default {
+        @(
+            '1. 读取任务与现有文档，判断是否需要修改。',
+            '2. 若无需修改，回传 `status=success` 且 `body` 包含 `result=noop`。',
+            '3. 若需要修改，仅做最小必要同步。'
+        )
+    }
+}
+
+$docLines = New-Object System.Collections.Generic.List[string]
+$docLines.Add("# $docTaskId") | Out-Null
+$docLines.Add('') | Out-Null
+$docLines.Add('## 触发信息') | Out-Null
+$docLines.Add("- 原任务: $TaskId") | Out-Null
+$docLines.Add("- 触发原因: $reasonText") | Out-Null
+$docLines.Add("- 模式: $docMode") | Out-Null
+$docLines.Add("- 参考任务文件: $taskFileRef") | Out-Null
+$docLines.Add('') | Out-Null
+$docLines.Add('## 必做事项') | Out-Null
+foreach ($line in $docActionLines) { $docLines.Add($line) | Out-Null }
+$docLines.Add('') | Out-Null
+$docLines.Add('## 回传要求') | Out-Null
+$docLines.Add('1. 有修改时：`status=success` + `body=result=updated; files=<...>; summary=<...>`。') | Out-Null
+$docLines.Add('2. 无需修改时：`status=success` + `body=result=noop; files=none; summary=<why no change needed>`。') | Out-Null
+$docLines.Add('3. 仅在信息不足或环境异常时才回 `blocked`。') | Out-Null
+$docLines.Add('') | Out-Null
+$docLines.Add('## 参考') | Out-Null
+$docLines.Add('- Agent 规则: `E:\moxton-ccb\.claude\agents\doc-updater.md`') | Out-Null
+$docLines.Add('- 文档根目录: `E:\moxton-ccb`') | Out-Null
 $docContent = $docLines -join "`n"
 
 $recentExisting = $historyList | Where-Object {
