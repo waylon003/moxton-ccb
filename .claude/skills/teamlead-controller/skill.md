@@ -1,4 +1,4 @@
-﻿---
+---
 name: teamlead-controller
 description: Team Lead 统一控制器 - 所有操作的单一入口
 triggers:
@@ -9,9 +9,6 @@ triggers:
   - status
   - recover
   - add-lock
-  - approve-request
-  - deny-request
-  - show-approval
   - requeue
   - qa-pass
   - reply-worker
@@ -26,8 +23,8 @@ triggers:
 ## 新会话必做
 
 1. 先执行 bootstrap（每个新会话一次）
-2. 再执行 status 确认当前锁、路由与审批
-3. 默认由 `route-monitor` 直接通知 Team Lead，无需再创建 notify-sentinel
+2. 再执行 status 确认当前锁、路由与运行态
+3. 默认由 `route-monitor` + `route-notifier` 负责回传收口与唤醒，无需再创建 `notify-sentinel`
 
 ## 控制器动作表
 
@@ -39,9 +36,6 @@ triggers:
 | 派遣 QA 任务 | dispatch-qa | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch-qa -TaskId <ID>` |
 | QA 通过后保持待复审 | qa-pass | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action qa-pass -TaskId <ID>` |
 | 复审驳回回退（不自动派遣） | requeue | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action requeue -TaskId <ID> -TargetState <assigned|waiting_qa> -RequeueReason "..."` |
-| 查看审批详情 | show-approval | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action show-approval -RequestId <ID>` |
-| 批准审批 | approve-request | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action approve-request -RequestId <ID>` |
-| 拒绝审批 | deny-request | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action deny-request -RequestId <ID>` |
 | 补建任务锁 | add-lock | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action add-lock -TaskId <ID>` |
 | 恢复流程 | recover | `... -Action recover -RecoverAction <action>` |
 | 归档并提交/推送 | archive | `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action archive -TaskId <ID>` |
@@ -58,7 +52,7 @@ recover 可用动作：
 
 ## Route Notifications
 
-- 默认由 `route-monitor.ps1` 直接通知 Team Lead，只处理 MCP route 上报。
+- 默认由 `route-monitor.ps1` 写入事件，再由 `route-notifier.ps1` 唤醒 Team Lead。
 - 如需关闭直接唤醒，设置 `CCB_ROUTE_MONITOR_NOTIFY=0`。
 - 不再依赖 Agent Teams / `notify-sentinel`。
 
@@ -71,18 +65,18 @@ recover 可用动作：
 - **不得**无限轮询：同一 pane `get-text` 连续 3 次无变化必须停止；同一 task `check_routes` 3 次无变化必须停止
 - **不得**直接用 `assign_task.py` 做写入动作（仅允许只读诊断参数）
 
-## 审批优先级
+## 决策优先级
 
-- 有 pending 审批时必须先 `show-approval` 并 `approve-request/deny-request`
-- 高风险审批不得询问用户；由 Team Lead 直接 approve/deny，默认拒绝，除非任务文档明确允许
-- 不允许先 `sleep/wait`
-- 若确认是历史遗留可用 `recover -RecoverAction baseline-clean` 一键清理
+- 当前主链默认无审批弹窗；不要把审批兼容动作当作常规入口。
+- 已知链路内决策必须直接执行：`qa-pass` / `requeue` / `recover` / `dispatch` / `dispatch-qa` / `archive`。
+- 收到 `blocked` / `fail` 后先 `status`，再按阻塞类型决策；不要直接反问用户。
+- 只有未知阻塞、未知依赖、未知风险才升级给用户。
 
 ## 复审流转
 
-- QA 通过后默认 `qa-pass` 等人工复审
-- 复审不通过：`requeue` 回退，不把驳回原因直接发到旧 worker 窗口
-- 重新派遣：`requeue` 后再 `dispatch` 或 `dispatch-qa`
+- QA 通过后默认 `qa-pass` 等人工复审。
+- 复审不通过：`requeue` 回退，不把驳回原因直接发到旧 worker 窗口。
+- 重新派遣：`requeue` 后再 `dispatch` 或 `dispatch-qa`。
 
 ## 结构化输出模板
 

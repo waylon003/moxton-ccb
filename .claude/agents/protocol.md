@@ -1,12 +1,12 @@
-﻿# Multi-agent Relay Protocol
+# Multi-agent Relay Protocol
 
 使用本协议统一 Team Lead 与各 Worker 的通信链路。主通道为 MCP `report_route`，禁止把 `[ROUTE]...[/ROUTE]` 当作必需协议。
 
 ## 短派遣兼容（重要）
 
-- Team Lead 可能只发送短派遣消息（仅包含 `task_id` 和 `task_file`）。
-- Worker 收到后必须立即读取 `task_file`，并以任务文件作为唯一执行输入源。
-- 不得因为派遣消息较短而等待补充指令；如任务文件缺失信息，按阻塞协议上报。
+- Team Lead 可能只发送短派遣消息，只包含 `task_id` 和 `task_file`
+- Worker 收到后必须立即读取 `task_file`，并以任务文件作为唯一执行输入源
+- 不得因为派遣消息较短而等待补充指令；如任务文件缺失信息，按阻塞协议上报
 
 ## 主协议
 
@@ -23,8 +23,8 @@ report_route(
 ```
 
 约束：
-- 若派遣消息中出现 `route_run_id`，Worker 每次 `report_route` 都必须原样带回同一个 `run_id`。
-- 不得自行生成新的 `run_id`，也不得省略已提供的 `run_id`。
+- 若派遣消息中出现 `route_run_id`，Worker 每次 `report_route` 都必须原样带回同一个 `run_id`
+- 不得自行生成新的 `run_id`，也不得省略已提供的 `run_id`
 
 `body` 推荐使用 `key=value;` 结构，便于 Team Lead 自动解析。例如：
 
@@ -38,21 +38,21 @@ stage=qa_running; progress=smoke_done; next=runtime_check
 所有消息默认由 Team Lead 处理，不需要手写 `to: team-lead` 信封。
 
 2. 需要跨角色协作  
-由发送方使用 `status=blocked` 报告需求，`body` 中写明 `target_role=<role>; question=<...>; next_action_needed=<...>`，再由 Team Lead 决定是否派遣/转发。
+由发送方使用 `status=blocked` 报告需求，`body` 中写明 `target_role=<role>; question=<...>; next_action_needed=<...>`，再由 Team Lead 决定是否派遣或转发。
 
-3. 权限请求  
-Worker 遇到审批卡点时必须发 `status=blocked` 给 Team Lead；Team Lead 审批低风险请求，高风险再升级给用户。
+3. 权限/交互异常  
+当前主链默认使用无审批模式 worker；若仍遇到权限墙、策略墙、交互式确认或 CLI 异常，不要在 pane 中等待，也不要向用户提问，必须以 `status=blocked` 上报给 Team Lead，由 Team Lead 决定恢复、重派或链路切换。
 
 4. Team Lead 角色边界  
-Team Lead 负责协调、派遣、审批、归档，不直接承担开发实现任务。
+Team Lead 负责协调、派遣、阻塞决策、归档，不直接承担开发实现任务。
 
 ## 生命周期
 
-1. Developer/QA 接任务后先回传一次 `status=in_progress`（开始心跳）。
-2. 执行期间每 90~120 秒发送一次 `status=in_progress`。
+1. Developer/QA 接任务后先回传一次 `status=in_progress`，作为 ACK 与开始心跳。
+2. 执行期间每 90 到 120 秒发送一次 `status=in_progress`。
 3. 遇到阻塞在 2 分钟内发送 `status=blocked`。
 4. 完成后发送 `status=success` 或 `status=fail`，并附证据摘要。
-5. Team Lead 基于回传结果继续 `dispatch / dispatch-qa / archive`。
+5. Team Lead 基于回传结果继续 `dispatch / dispatch-qa / requeue / archive`。
 
 ### ACK 行为（强制）
 
@@ -78,8 +78,8 @@ report_route(
 阻塞消息必须包含以下字段：
 
 ```text
-blocker_type=<api|env|dependency|qa_evidence_invalid|unknown>;
-question=<需要 Team Lead 决策/补充的信息>;
+blocker_type=<runtime|env|dependency|qa_evidence_invalid|code_contract_ui|unknown>;
+question=<需要 Team Lead 决策或补充的信息>;
 attempted=<已尝试动作>;
 next_action_needed=<希望 Team Lead 执行的动作>
 ```
@@ -106,16 +106,16 @@ next_action_needed=<希望 Team Lead 执行的动作>
 ```
 
 约束：
-- `status=success` 时 `verdict` 必须为 `PASS`。
-- 前端 QA 必须包含并通过：`checks.ui`、`checks.console`、`checks.network`、`checks.failure_path`。
-- 后端 QA 必须包含并通过：`checks.contract`、`checks.network`、`checks.failure_path`。
-- 每个检查项都必须带 `evidence` 文件路径且文件可访问。
-- QA 证据的唯一合法磁盘根目录是 `E:\moxton-ccb\05-verification\<TASK-ID>\`。禁止把证据写到业务仓库自己的 `05-verification/`。
-- `report_route(status=success)` 的 JSON 中，`evidence` 仍必须填写相对路径 `05-verification/<TASK-ID>/...`；但这些相对路径在磁盘上必须真实落到 `E:\moxton-ccb\05-verification\<TASK-ID>\`。
+- `status=success` 时 `verdict` 必须为 `PASS`
+- 前端 QA 必须包含并通过：`checks.ui`、`checks.console`、`checks.network`、`checks.failure_path`
+- 后端 QA 必须包含并通过：`checks.contract`、`checks.network`、`checks.failure_path`
+- 每个检查项都必须带 `evidence` 文件路径且文件可访问
+- QA 证据的唯一合法磁盘根目录是 `E:\moxton-ccb\05-verification\<TASK-ID>\`。禁止把证据写到业务仓库自己的 `05-verification/`
+- `report_route(status=success)` 的 JSON 中，`evidence` 仍必须填写相对路径 `05-verification/<TASK-ID>/...`；但这些相对路径在磁盘上必须真实落到 `E:\moxton-ccb\05-verification\<TASK-ID>\`
 - 在发送 `status=success` 之前，必须先运行：
   `powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\validate-qa-evidence.ps1" -TaskId "<TASK-ID>" -EvidencePaths <全部 evidence 路径>`
-- 若校验失败，只能回传 `status=blocked`，并说明 `blocker_type=qa_evidence_invalid`；禁止带着缺失/错根目录的证据继续回传 `success`。
-- `checks.network.has_5xx=true` 时禁止回传 `success`。
+- 若校验失败，只能回传 `status=blocked`，并说明 `blocker_type=qa_evidence_invalid`；禁止带着缺失或错根目录的证据继续回传 `success`
+- `checks.network.has_5xx=true` 时禁止回传 `success`
 
 不满足以上条件时，route-monitor 会自动把该条 success 降级为 `blocked`，并要求补证据后重跑 QA。
 

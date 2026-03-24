@@ -1,190 +1,109 @@
-﻿# Team Lead 启动检查清单
+# Team Lead 启动检查清单
 
-**每次在 E:\moxton-ccb 启动新的 Claude Code 会话时，必须执行以下步骤：**
+每次在 `E:\moxton-ccb` 启动新的 Claude Code 会话时，只执行这一套新链路，不要再走旧的 pane 派遣/审批链。
 
----
+## 1. 会话前提
 
-## 1. 环境变量设置
+- 当前目录必须是 `E:\moxton-ccb`
+- Team Lead 只能是 Claude Code
+- 所有调度动作统一走 `scripts/teamlead-control.ps1`
+- 不再依赖 Agent Teams / `notify-sentinel`
+- 当前业务主链默认无审批弹窗，Codex worker 统一使用 `-a never --sandbox danger-full-access`
 
-```powershell
-# 设置 WezTerm 路径
-$env:PATH += ";D:\WezTerm-windows-20240203-110809-5046fc22"
+## 2. 新会话第一步
 
-# 获取 Team Lead 自己的 pane_id
-$env:TEAM_LEAD_PANE_ID = (wezterm cli list --format json | ConvertFrom-Json | Where-Object { $_.title -like '*claude*' } | Select-Object -First 1).pane_id
-Write-Host "Team Lead Pane ID: $env:TEAM_LEAD_PANE_ID"
-```
-
-**验证**：
-```powershell
-wezterm --version  # 应该显示版本信息
-$env:TEAM_LEAD_PANE_ID  # 应该显示 pane ID
-```
-
-### Agent Teams（可选）
-
-Claude Code UI/手机端建议启用 Agent Teams 通知：
-`powershell
-$env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = \"1\"
-`
-在会话内创建 
-otify-sentinel teammate 并按 E:\moxton-ccb\.claude\agents\notify-sentinel.md 运行。
-
----
-
-## 2. 确认角色定位
-
-**你是 Team Lead**，职责：
-- ✅ 需求分析、任务拆分、路由协调
-- ✅ 维护任务文档和任务锁
-- ✅ 通过 WezTerm 分派任务给 Workers
-- ✅ 汇总 QA 证据并向用户报告
-
-**你不是**：
-- ❌ 代码实现者（不直接修改业务仓库代码）
-- ❌ 任务执行者（不绕过 Codex workers）
-
----
-
-## 3. 读取关键文档
-
-**必读**：
-1. `E:\moxton-ccb\CLAUDE.md` - Team Lead 工作流程
-2. `E:\moxton-ccb\01-tasks\ACTIVE-RUNNER.md` - 当前活跃任务
-3. `E:\moxton-ccb\.claude\agents\` - 各角色定义
-
-**快速命令**：
-```bash
-python scripts/assign_task.py --standard-entry
-```
-
----
-
-## 4. 检查任务状态
-
-```bash
-# 查看所有任务
-python scripts/assign_task.py --list
-
-# 查看任务锁
-python scripts/assign_task.py --show-task-locks
-
-# 扫描 active 任务
-python scripts/assign_task.py --scan
-```
-
----
-
-## 5. WezTerm 工作流程
-
-### 启动 Workers（自动注册到 Registry）
+先执行：
 
 ```powershell
-# 启动后端 Worker (Codex)
-.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotapi" -WorkerName "backend-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
-
-# 启动前端 Worker (Gemini)
-.\scripts\start-worker.ps1 -WorkDir "E:\nuxt-moxton" -WorkerName "shop-fe-dev" -Engine gemini -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
-
-# 启动管理后台 Worker (Codex)
-.\scripts\start-worker.ps1 -WorkDir "E:\moxton-lotadmin" -WorkerName "admin-fe-dev" -Engine codex -TeamLeadPaneId $env:TEAM_LEAD_PANE_ID
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action bootstrap
 ```
 
-Worker 启动后会自动注册到 `config/worker-panels.json`，无需手动记录 pane ID。
-
-### 分派任务（通过 WorkerName 自动查表）
+再执行：
 
 ```powershell
-# 方式1: 通过 WorkerName 自动查表（推荐）
-.\scripts\dispatch-task.ps1 `
-  -WorkerName "backend-dev" `
-  -TaskId "BACKEND-008" `
-  -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-008.md" -Raw)
-
-# 方式2: 直接指定 Pane ID（备用）
-.\scripts\dispatch-task.ps1 `
-  -WorkerPaneId <worker-pane-id> `
-  -WorkerName "backend-dev" `
-  -TaskId "BACKEND-008" `
-  -TaskContent (Get-Content "01-tasks\active\backend\BACKEND-008.md" -Raw)
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status
 ```
 
-### 等待 Worker 回调
+说明：
+- `bootstrap` 负责初始化 Team Lead 运行态、检测/拉起 `route-monitor` 与 `route-notifier`
+- `status` 用于查看当前任务锁、headless 运行态、最近 route 和建议动作
 
-Worker 完成后会通过 MCP tool `report_route` 通知 Team Lead，无需手动轮询。
-```
+## 3. Team Lead 允许做什么
 
-### 自动通知
+- 需求澄清、规划、拆任务
+- 写 `01-tasks/active/*` 任务文档
+- 通过控制器执行 `dispatch / dispatch-qa / qa-pass / requeue / recover / archive`
+- 查看 `status` 并根据既有链路直接决策
 
-Worker 通过 MCP tool 回报，**无论任务成功、失败或阻塞**，都必须调用 `report_route` 通知 Team Lead。
+## 4. Team Lead 禁止做什么
 
----
+- 直接调用 `start-worker.ps1`、`dispatch-task.ps1`、`route-monitor.ps1`
+- 手工拼 `wezterm cli send-text` 派遣 worker
+- 直接编辑 `01-tasks/TASK-LOCKS.json`
+- 直接修改三个业务仓库代码
+- 把审批兼容动作当作主链入口
 
-## 6. 关键路径速查
+## 5. 常用控制器命令
 
-| 路径 | 用途 |
-|------|------|
-| `01-tasks/active/` | 活跃任务文档 |
-| `01-tasks/TASK-LOCKS.json` | 任务锁状态 |
-| `01-tasks/ACTIVE-RUNNER.md` | 当前执行者 |
-| `.claude/agents/` | 角色定义 |
-| `config/worker-panels.json` | Worker 注册表 |
-| `05-verification/` | QA 验收报告 |
-
----
-
-## 7. 常见问题
-
-### Q: 如何知道当前有哪些任务？
-```bash
-python scripts/assign_task.py --list
-```
-
-### Q: 如何分派任务给 Codex？
 ```powershell
-.\scripts\dispatch-task.ps1 -WorkerName "backend-dev" -TaskId "TASK-ID" -TaskContent "任务内容"
+# 查看状态
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status
+
+# 派遣开发
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch -TaskId BACKEND-010
+
+# 派遣 QA
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action dispatch-qa -TaskId BACKEND-010
+
+# QA 通过，保持待人工复审
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action qa-pass -TaskId BACKEND-010
+
+# 驳回回退但不自动重派
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action requeue -TaskId BACKEND-010 -TargetState waiting_qa -RequeueReason "review_reject"
+
+# 恢复/清理
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action recover -RecoverAction restart-task -TaskId BACKEND-010
+
+# 归档
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action archive -TaskId BACKEND-010
 ```
 
-### Q: 如何检查 Codex 是否完成？
-**不需要手动检查**，Worker 完成后会自动发送 `[ROUTE]` 通知到 Team Lead。
+## 6. 收到 route 提醒后的标准动作
 
-### Q: 如何更新任务状态？
-```bash
-python scripts/assign_task.py --lock-task TASK-ID --task-state <状态> --lock-note "备注"
+当主窗口收到 `[ROUTE] ... next=status/check_routes`：
+
+1. 先执行 `status`
+2. 再根据当前锁状态与 route 内容做决策
+3. 决策属于既有链路时直接执行，不要反问用户
+
+已知决策示例：
+- dev 成功后进入 `waiting_qa`：执行 `dispatch-qa`
+- QA 通过待复审：执行 `qa-pass`
+- 人工复审驳回：执行 `requeue`
+- 任务完成：执行 `archive`
+- 运行态漂移/陈旧：执行 `recover`
+
+## 7. 阻塞处理原则
+
+收到 `blocked` / `fail` 后，第一步永远是：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teamlead-control.ps1" -Action status
 ```
 
----
+然后再分类处理：
+- `runtime/orchestration`：先恢复运行态，不要直接回开发
+- `env/service`：先修环境，不要直接重派原任务
+- `qa_evidence`：回 QA 补证据，不要回开发
+- `code/contract/ui`：才回开发修复
 
-## 8. 启动后第一件事
+## 8. 当前通知机制
 
-运行标准入口点：
-```bash
-python scripts/assign_task.py --standard-entry
-```
+- worker / QA / `doc-updater` / `repo-committer` 都通过 `report_route` 回传
+- `route-monitor` 负责收口、写锁、落提醒事件
+- `route-notifier` 独立负责把提醒短文本发回 Team Lead
+- 不再依赖 `notify-sentinel`
 
-这会自动：
-- 检测是否有 active 任务
-- 进入执行模式或规划模式
-- 显示下一步操作建议
+## 9. 一句话记忆
 
----
-
-## 9. 记住
-
-- **你是协调者，不是执行者**
-- **所有代码修改都通过 Codex workers**
-- **所有任务都要经过 QA 验证**
-- **Worker 完成后自动发送 [ROUTE] 通知**
-
----
-
-**最后检查**：
-```bash
-# 确认环境
-echo "当前目录: $(pwd)"
-echo "WezTerm: $(wezterm --version 2>&1 | head -1)"
-
-# 确认角色
-echo "我是 Team Lead，负责协调而非执行"
-```
-
+先 `bootstrap`，再 `status`，然后只通过 `teamlead-control.ps1` 做所有决策与派遣。

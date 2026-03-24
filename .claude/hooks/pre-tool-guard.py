@@ -19,13 +19,6 @@ def build_lock_path(payload: dict) -> str:
     return normalize_path(os.path.join(project_dir, "01-tasks", "TASK-LOCKS.json"))
 
 
-def build_approval_requests_path(payload: dict) -> str:
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    return normalize_path(
-        os.path.join(project_dir, "mcp", "route-server", "data", "approval-requests.json")
-    )
-
-
 def emit_deny(reason: str) -> None:
     result = {
         "hookSpecificOutput": {
@@ -37,22 +30,6 @@ def emit_deny(reason: str) -> None:
     print(json.dumps(result, ensure_ascii=False))
 
 
-def is_safe_approval_send(command: str) -> bool:
-    cmd = command.strip()
-    # 仅放行最小审批按键（y/n/1/2）与回车，不允许任意文本 send-text
-    safe_patterns = [
-        r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"y"|\'y\'|y)\s*$',
-        r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"n"|\'n\'|n)\s*$',
-        r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"1"|\'1\'|1)\s*$',
-        r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"2"|\'2\'|2)\s*$',
-        r'^\s*wezterm\s+cli\s+send-text\b.*--no-paste\s+(?:"`r"|\'`r\'|\$\'\\r\')\s*$',
-    ]
-    for pattern in safe_patterns:
-        if re.search(pattern, cmd, flags=re.IGNORECASE):
-            return True
-    return False
-
-
 def deny_if_direct_dispatch(command: str) -> bool:
     cmd = (command or "").lower()
     blocked_patterns = ["dispatch-task.ps1", "start-worker.ps1"]
@@ -61,15 +38,14 @@ def deny_if_direct_dispatch(command: str) -> bool:
             emit_deny(
                 "禁止绕过统一控制器直接派遣。请使用: "
                 "powershell -NoProfile -ExecutionPolicy Bypass -File "
-                "\"E:\\moxton-ccb\\scripts\\teamlead-control.ps1\" -Action dispatch|dispatch-qa|recover"
+                "\"E:\\moxton-ccb\\scripts\\teamlead-control.ps1\" -Action dispatch|dispatch-qa|recover|qa-pass|requeue|archive"
             )
             return True
 
-    if "wezterm cli send-text" in cmd and not is_safe_approval_send(command):
+    if "wezterm cli send-text" in cmd:
         emit_deny(
-            "禁止直接 send-text 派遣任务文本。审批请优先走 "
-            "teamlead-control.ps1 -Action approve-request/deny-request；"
-            "仅允许最小 y/n/1/2/回车 响应。"
+            "禁止 Team Lead 直接使用 wezterm cli send-text。"
+            "如需派遣、回退、复审、通知 worker，请统一走 teamlead-control.ps1。"
         )
         return True
     return False
@@ -81,7 +57,6 @@ def deny_if_assign_task_misuse(command: str) -> bool:
     if "assign_task.py" not in cmd_lower:
         return False
 
-    # Team Lead 仅允许只读/诊断类调用，禁止通过 assign_task.py 创建任务、改锁、拆分任务等写入动作。
     readonly_flags = [
         "--doctor",
         "--standard-entry",
@@ -102,32 +77,6 @@ def deny_if_assign_task_misuse(command: str) -> bool:
     return True
 
 
-def has_pending_approvals(approval_path: str) -> bool:
-    if not approval_path or not os.path.exists(approval_path):
-        return False
-    try:
-        with open(approval_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        reqs = data.get("requests") or []
-        for req in reqs:
-            if str(req.get("status", "")).lower() == "pending":
-                return True
-        return False
-    except Exception:
-        # 文件损坏时不阻塞流程
-        return False
-
-
-def is_wait_command(command: str) -> bool:
-    cmd = (command or "").strip()
-    patterns = [
-        r"^\s*sleep\b",
-        r"^\s*start-sleep\b",
-        r"^\s*timeout\s+/t\b",
-    ]
-    return any(re.search(p, cmd, flags=re.IGNORECASE) for p in patterns)
-
-
 def deny_if_editing_task_locks(tool_name: str, tool_input: dict, lock_path: str) -> bool:
     if tool_name not in {"Write", "Edit", "MultiEdit"}:
         return False
@@ -139,7 +88,7 @@ def deny_if_editing_task_locks(tool_name: str, tool_input: dict, lock_path: str)
     if normalize_path(str(file_path)) == lock_path:
         emit_deny(
             "禁止直接编辑 TASK-LOCKS.json。请通过 teamlead-control.ps1 执行 "
-            "add-lock / recover(reset-task|normalize-locks) 等动作。"
+            "add-lock / recover(reset-task|normalize-locks) / requeue / qa-pass 等动作。"
         )
         return True
     return False
@@ -150,8 +99,8 @@ def deny_if_teamlead_touches_code_repo(tool_name: str, tool_input: dict) -> bool
         file_path = tool_input.get("file_path")
         if file_path:
             f = normalize_path(str(file_path))
-            for root in PROTECTED_REPO_ROOTS:
-                if f.startswith(root + os.sep) or f == root:
+            for repo_root in PROTECTED_REPO_ROOTS:
+                if f.startswith(repo_root + os.sep) or f == repo_root:
                     emit_deny(
                         "Team Lead 禁止直接修改业务仓库代码。"
                         "请通过 dispatch/dispatch-qa 派遣 worker 执行开发或 QA。"
@@ -162,8 +111,8 @@ def deny_if_teamlead_touches_code_repo(tool_name: str, tool_input: dict) -> bool
         command = str((tool_input or {}).get("command", ""))
         cmd = command.lower()
         repo_hits = [
-            r for r in [r"e:\moxton-lotapi", r"e:\nuxt-moxton", r"e:\moxton-lotadmin"]
-            if r in cmd
+            repo_path for repo_path in [r"e:\moxton-lotapi", r"e:\nuxt-moxton", r"e:\moxton-lotadmin"]
+            if repo_path in cmd
         ]
         if repo_hits:
             forbidden_patterns = [
@@ -219,7 +168,7 @@ def deny_if_route_tool_misuse(tool_name: str, tool_input: dict) -> bool:
     if "report_route" in name:
         emit_deny(
             "Team Lead 禁止直接调用 report_route。"
-            "report_route 仅用于 Worker 回传；请改用 teamlead-control.ps1 执行调度/审批动作。"
+            "report_route 仅用于 Worker 回传；请改用 teamlead-control.ps1 执行调度动作。"
         )
         return True
 
@@ -246,7 +195,6 @@ def main() -> int:
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input", {}) or {}
     lock_path = build_lock_path(payload)
-    approval_path = build_approval_requests_path(payload)
 
     if deny_if_teamlead_touches_code_repo(tool_name, tool_input):
         return 0
@@ -259,12 +207,6 @@ def main() -> int:
         if deny_if_direct_dispatch(command):
             return 0
         if deny_if_assign_task_misuse(command):
-            return 0
-        if is_wait_command(command) and has_pending_approvals(approval_path):
-            emit_deny(
-                "检测到存在 pending 审批请求，禁止先 sleep/wait。"
-                "请先执行 teamlead-control.ps1 -Action status 并 approve-request/deny-request。"
-            )
             return 0
 
     if deny_if_editing_task_locks(tool_name, tool_input, lock_path):
