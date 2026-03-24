@@ -1254,6 +1254,32 @@ function ConvertTo-UtcDateSafe($value) {
     }
 }
 
+
+function Get-BackgroundWatcherStaleSeconds {
+    return (Get-EnvIntOrDefault -name 'CCB_BACKGROUND_WATCHER_STALE_SECONDS' -defaultValue 15)
+}
+
+function Get-ProcessStateAgeSeconds($State) {
+    if (-not $State) { return $null }
+    $lastLoopUtc = ConvertTo-UtcDateSafe $State.last_loop_at
+    if (-not $lastLoopUtc) { return $null }
+    try {
+        return [int][Math]::Floor(((Get-Date).ToUniversalTime() - $lastLoopUtc).TotalSeconds)
+    } catch {
+        return $null
+    }
+}
+
+function Test-ProcessStateFresh($State, [int]$MaxAgeSeconds = 0) {
+    if (-not $State) { return $false }
+    if ($MaxAgeSeconds -le 0) {
+        $MaxAgeSeconds = Get-BackgroundWatcherStaleSeconds
+    }
+    $ageSeconds = Get-ProcessStateAgeSeconds $State
+    if ($null -eq $ageSeconds) { return $false }
+    return ($ageSeconds -le $MaxAgeSeconds)
+}
+
 function Cleanup-ExpiredApprovalRequests {
     param([switch]$Persist)
 
@@ -1943,6 +1969,7 @@ function Ensure-RouteMonitor($tlPaneId) {
     $savedPaneId = Get-RouteMonitorPaneId
     $proc = $null
     $monitorState = Read-RouteMonitorState
+    $panes = $null
 
     if (Test-Path $monitorPidFile) {
         $savedPid = (Get-Content $monitorPidFile -Raw).Trim()
@@ -1975,6 +2002,23 @@ function Ensure-RouteMonitor($tlPaneId) {
         if ($tlPaneId -and $monitorState.teamlead_pane_id -and ([string]$monitorState.teamlead_pane_id -ne [string]$tlPaneId)) {
             $needsRestart = $true
             Write-Host ('[WARN] route-monitor pane target drift detected: state=' + [string]$monitorState.teamlead_pane_id + ' expected=' + [string]$tlPaneId) -ForegroundColor Yellow
+        }
+        if ($monitorRunning -and (-not (Test-ProcessStateFresh $monitorState))) {
+            $ageSeconds = Get-ProcessStateAgeSeconds $monitorState
+            $needsRestart = $true
+            Write-Host ('[WARN] route-monitor heartbeat stale: last_loop=' + [string]$monitorState.last_loop_at + ' age=' + [string]$ageSeconds + 's') -ForegroundColor Yellow
+        }
+    } elseif ($monitorRunning) {
+        $needsRestart = $true
+        Write-Host '[WARN] route-monitor process exists but state file is missing/unreadable; will restart.' -ForegroundColor Yellow
+    }
+
+    if ($monitorRunning -and $savedPaneId) {
+        if (-not $panes) { $panes = Get-WeztermPanes }
+        $monitorPaneInfo = Get-WeztermPaneInfo $savedPaneId $panes
+        if (-not $monitorPaneInfo) {
+            $needsRestart = $true
+            Write-Host ('[WARN] route-monitor pane ' + $savedPaneId + ' missing; will restart.') -ForegroundColor Yellow
         }
     }
 
@@ -2067,6 +2111,7 @@ function Ensure-RouteNotifier($tlPaneId) {
     $savedPaneId = Get-RouteNotifierPaneId
     $proc = $null
     $notifierState = Read-RouteNotifierState
+    $panes = $null
 
     if (Test-Path $notifierPidFile) {
         $savedPid = (Get-Content $notifierPidFile -Raw).Trim()
@@ -2099,6 +2144,23 @@ function Ensure-RouteNotifier($tlPaneId) {
         if ($tlPaneId -and $notifierState.teamlead_pane_id -and ([string]$notifierState.teamlead_pane_id -ne [string]$tlPaneId)) {
             $needsRestart = $true
             Write-Host ('[WARN] route-notifier pane target drift detected: state=' + [string]$notifierState.teamlead_pane_id + ' expected=' + [string]$tlPaneId) -ForegroundColor Yellow
+        }
+        if ($notifierRunning -and (-not (Test-ProcessStateFresh $notifierState))) {
+            $ageSeconds = Get-ProcessStateAgeSeconds $notifierState
+            $needsRestart = $true
+            Write-Host ('[WARN] route-notifier heartbeat stale: last_loop=' + [string]$notifierState.last_loop_at + ' age=' + [string]$ageSeconds + 's') -ForegroundColor Yellow
+        }
+    } elseif ($notifierRunning) {
+        $needsRestart = $true
+        Write-Host '[WARN] route-notifier process exists but state file is missing/unreadable; will restart.' -ForegroundColor Yellow
+    }
+
+    if ($notifierRunning -and $savedPaneId) {
+        if (-not $panes) { $panes = Get-WeztermPanes }
+        $notifierPaneInfo = Get-WeztermPaneInfo $savedPaneId $panes
+        if (-not $notifierPaneInfo) {
+            $needsRestart = $true
+            Write-Host ('[WARN] route-notifier pane ' + $savedPaneId + ' missing; will restart.') -ForegroundColor Yellow
         }
     }
 
@@ -2250,6 +2312,14 @@ function Ensure-RichMonitor($tlPaneId) {
             $needsRestart = $true
             Write-Host '[WARN] Rich 看板状态为 error，准备重启。' -ForegroundColor Yellow
         }
+        if ($richRunning -and (-not (Test-ProcessStateFresh $richState 20))) {
+            $ageSeconds = Get-ProcessStateAgeSeconds $richState
+            $needsRestart = $true
+            Write-Host ('[WARN] Rich 看板心跳过期：last_loop=' + [string]$richState.last_loop_at + ' age=' + [string]$ageSeconds + 's') -ForegroundColor Yellow
+        }
+    } elseif ($richRunning) {
+        $needsRestart = $true
+        Write-Host '[WARN] Rich 看板进程存在但状态文件缺失/不可读；准备重启。' -ForegroundColor Yellow
     }
 
     if ($richRunning -and $savedPaneId) {
