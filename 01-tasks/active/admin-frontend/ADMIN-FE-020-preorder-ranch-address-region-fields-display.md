@@ -2,12 +2,23 @@
 
 **任务ID:** ADMIN-FE-020
 **创建时间:** 2026-07-09
-**状态:** 待开发
+**状态:** migration_hold
+**执行模式:** codex-desktop
+**当前 attempt:** 0
 **角色:** CRUD前端工程师
 **项目:** moxton-lotadmin
 **优先级:** P1
 **技术栈:** Vue 3 + TypeScript + SoybeanAdmin + Naive UI
 **QA_LEVEL:** smoke
+
+## 接管上下文（2026-11-02）
+
+- 工作区：`E:\moxton-lotadmin`；提交基线 `cb425fb3`，主要地址展示位于原有未提交改动中。
+- 前置依赖：BACKEND-028 需要确认接口及隔离联调环境，不能依旧锁判断就绪。
+- 本轮无业务写入，原有修改已存快照；续派前核对 Git 差异，明确允许改动文件。
+- 必读：业务仓 `AGENTS.md`、`03-guides/codex-desktop-workflow.md` 和 `02-api/preorder-discounts.md`。
+- 直接向父会话回报任务、attempt、命令/证据和限制；证据放 `05-verification/ADMIN-FE-020/attempt-<N>`。
+- 下次入口：核对列表/详情/搜索/空值/长地址和中英文，优先补验收，不重写已有实现。
 
 ---
 

@@ -1,0 +1,23 @@
+[agents.backend-dev]
+description = "Moxton 后端开发，Koa / TypeScript / Prisma / MySQL"
+config_file = "agents/backend-dev.toml"
+
+[agents.backend-qa]
+description = "Moxton 后端独立验收，接口契约、权限和失败路径"
+config_file = "agents/backend-qa.toml"
+
+[agents.admin-fe-dev]
+description = "Moxton 管理后台开发，Vue / SoybeanAdmin / Naive UI"
+config_file = "agents/admin-fe-dev.toml"
+
+[agents.admin-fe-qa]
+description = "Moxton 管理后台独立验收，业务、界面和权限"
+config_file = "agents/admin-fe-qa.toml"
+
+[agents.shop-fe-dev]
+description = "Moxton 官网商城开发，Nuxt / Vue / Pinia"
+config_file = "agents/shop-fe-dev.toml"
+
+[agents.shop-fe-qa]
+description = "Moxton 官网商城独立验收，SSR、移动端和交易流程"
+config_file = "agents/shop-fe-qa.toml"

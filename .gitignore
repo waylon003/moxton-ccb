@@ -13,11 +13,23 @@ config/doc-update-history.json
 config/repo-commit-history.json
 mcp/route-server/data/approval-requests.json
 
-# Verification artifacts
-05-verification/
+# Local evidence, with reviewed summaries under version control
+05-verification/*
+!05-verification/*/
+05-verification/*/*
+!05-verification/*/summary.md
+05-verification/QA-IDENTITY-POOL.md
+
+# Local tools, release output and customer spreadsheets
+.state/
+.golutra/*.json
+deploy/
+docs/preorder-expo/*.xlsx
+.codex/config.local.toml
 
 # Python cache
 scripts/__pycache__/
+tests/__pycache__/
 *.pyc
 
 # Temp files

@@ -1,9 +1,9 @@
 # 任务状态总览
 
-> 2026-11-02 复核：[三项目开发现状报告](../docs/reports/2026-11-02-project-status-review.md)。下表保留 7 月的任务文件归类；4 个 active 任务已有不同程度实现，completed 也不等于全部已提交、验收或部署。恢复开发前请先核对报告。
+> 默认入口已改为 Codex 桌面主会话，先读 [当前轮次](../04-projects/CURRENT-ROUND.md) 和 [工作流](../03-guides/codex-desktop-workflow.md)。任务文件是正式状态源，旧 TASK-LOCKS 不再推进任务。历史 completed 只代表归档记录，不等于本次重新验收；原业务四项处于 migration_hold，先核实代码。
 
-**更新时间**: 2026-07-13
-**活跃任务**: 4 个
+**更新时间**: 2026-11-02
+**活跃任务**: 4 个（均为业务 migration_hold；本轮指挥迁移已归档）
 
 ## 项目映射
 
@@ -20,7 +20,8 @@
 | SHOP-FE | 0 | 1 | 21 | 22 |
 | ADMIN-FE | 0 | 2 | 21 | 23 |
 | BACKEND | 0 | 1 | 32 | 33 |
-| **TOTAL** | **0** | **4** | **74** | **78** |
+| CCB | 0 | 0 | 1 | 1 |
+| **TOTAL** | **0** | **4** | **75** | **79** |
 
 ## 目录结构
 
@@ -41,7 +42,17 @@
 `-- templates/
 ```
 
+## 本轮指挥迁移
+
+| 任务ID | 标题 | 状态 |
+|--------|------|------|
+| [CCB-MIGRATION-001](./completed/coordination/CCB-MIGRATION-001-desktop-workflow.md) | Codex 桌面指挥迁移与验收 | completed / attempt 1 |
+
+历史业务归档 74 项，加本轮指挥迁移 1 项，共 75 项；指挥迁移通过不代表业务功能重新验收。
+
 ## 当前活跃任务
+
+下面四项业务任务均为 `migration_hold / attempt 0`。其原有实现、未提交内容和下一步见任务接管上下文及 [现状复核](../docs/reports/2026-11-02-project-status-review.md)。本轮不将这些任务自动标为完成。
 
 ### 独立站前端 (SHOP-FE)
 

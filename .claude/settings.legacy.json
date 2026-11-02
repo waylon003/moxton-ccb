@@ -1,0 +1,58 @@
+{
+    "teammateMode": "auto",
+    "disableSkills": [
+        "oh-my-claudecode:autopilot",
+        "oh-my-claudecode:ultrawork",
+        "oh-my-claudecode:ralph",
+        "oh-my-claudecode:swarm",
+        "oh-my-claudecode:ultrapilot"
+    ],
+    "hooks": {
+        "SessionStart": [
+            {
+                "matcher": "startup",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/on-session-start.py",
+                        "timeout": 10
+                    }
+                ]
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/on-user-prompt-submit.py",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ],
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/pre-tool-guard.py",
+                        "timeout": 5
+                    }
+                ]
+            },
+            {
+                "matcher": "Write|Edit|MultiEdit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/pre-tool-guard.py",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ]
+    }
+}

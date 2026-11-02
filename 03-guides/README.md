@@ -2,6 +2,12 @@
 
 本目录包含前端项目集成后端 API 的指南文档。
 
+## Codex 桌面指挥
+
+- [主会话工作流](./codex-desktop-workflow.md)：任务、派遣、QA 和结果合同。
+- [会话恢复检查单](./desktop-smoke-checklist.md)：新会话核对和结束交接。
+- [旧编排系统说明](./legacy-orchestration.md)：历史脚本及本地数据保留边界。
+
 ## 📚 可用指南
 
 | 指南 | 描述 | 适用项目 |

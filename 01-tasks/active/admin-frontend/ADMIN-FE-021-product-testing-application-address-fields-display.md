@@ -2,12 +2,23 @@
 
 **任务ID:** ADMIN-FE-021
 **创建时间:** 2026-07-13
-**状态:** 待开发
+**状态:** migration_hold
+**执行模式:** codex-desktop
+**当前 attempt:** 0
 **角色:** CRUD前端工程师
 **项目:** moxton-lotadmin
 **优先级:** P1
 **技术栈:** Vue 3 + TypeScript + SoybeanAdmin + Naive UI
 **QA_LEVEL:** smoke
+
+## 接管上下文（2026-11-02）
+
+- 工作区：`E:\moxton-lotadmin`；基线提交 `cb425fb3`，测试申请主要源码尚有未跟踪内容，已存迁移快照。
+- 前置依赖：后端测试申请结构化地址接口及隔离联调环境。后端 CSV 已有六个地址字段，需要实际导出验证。
+- 已知缺口：测试申请部分新增标签仍硬编码中文。续派前明确文件范围，不能将本地编码等同验收完成。
+- 必读：业务仓 `AGENTS.md`、`03-guides/codex-desktop-workflow.md`、`02-api/product-testing-applications.md`。
+- 本轮无业务改动；直接向父会话回报 task_id、attempt、变更/命令/证据和阻塞。
+- 证据放 `05-verification/ADMIN-FE-021/attempt-<N>`。下次入口：补齐国际化，验证列表/详情/导出和既有邮件操作。
 
 ---
 

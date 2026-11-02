@@ -2,7 +2,9 @@
 
 **任务ID:** ADMIN-FE-XXX
 **创建时间:** YYYY-MM-DD
-**状态:** 准备开发
+**状态:** planned
+**执行模式:** codex-desktop
+**当前 attempt:** 0
 **角色:** CRUD前端工程师
 **项目:** moxton-lotadmin
 **优先级:** [P0|P1|P2|P3]
@@ -13,16 +15,19 @@
 
 ## 执行上下文（强约束）
 
-- **Task File = 唯一执行输入源**：派遣消息可能是短文本，必须以本任务文件为准，不得依赖派遣消息补充细节。
+- 本任务文件是正式主记录；主会话在派遣前补齐基线、范围和验证要求。
 - **工作目录**：`E:\moxton-lotadmin`
+- **基线提交 / 原有改动**：[主会话填写实际提交和差异]
+- **允许改动范围**：[明确文件或模块]
+- **前置依赖**：[无，或列出任务及所需状态和 API 契约]
 - **必读文档**：
-  - `E:\moxton-lotadmin\CLAUDE.md`
   - `E:\moxton-lotadmin\AGENTS.md`
+  - `E:\moxton-ccb\03-guides\codex-desktop-workflow.md`
+  - `E:\moxton-ccb\.codex\agents\admin-fe-dev.toml` 或 `admin-fe-qa.toml`
   - `E:\moxton-ccb\02-api\` 相关接口文档
-- **开始后 60 秒内**：必须 `report_route(status="in_progress")`
-- **执行中每 90~120 秒**：发送一次 `in_progress` 心跳
-- **遇阻塞 2 分钟内**：`report_route(status="blocked", body="blocker_type=...;question=...;attempted=...;next_action_needed=...")`
-- **完成后必须**：`report_route(status="success|fail|blocked", body=变更文件+命令+测试结果)`
+- **回报方式**：直接向父会话返回 task_id、attempt、变更、命令及退出码、证据和阻塞；主会话更新状态。
+- **证据目录**：`E:\moxton-ccb\05-verification\<TASK-ID>\attempt-<N>`。
+- **恢复记录**：每轮记录最后完成步骤、开发/QA 结果、剩余问题和下次入口。
 
 ---
 

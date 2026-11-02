@@ -2,12 +2,23 @@
 
 **任务ID:** SHOP-FE-022
 **创建时间:** 2026-07-09
-**状态:** 待开发
+**状态:** migration_hold
+**执行模式:** codex-desktop
+**当前 attempt:** 0
 **角色:** 独立站前端工程师
 **项目:** nuxt-moxton
 **优先级:** P1
 **技术栈:** Vue 3 + Nuxt 3 + TypeScript + UnoCSS + Google Places
 **QA_LEVEL:** smoke
+
+## 接管上下文（2026-11-02）
+
+- 工作区：`E:\nuxt-moxton`；基线 `74a0227`，Google 地址和 Survey 主要实现位于原有未提交改动中。
+- 前置依赖：BACKEND-028 的实际接口确认及隔离联调环境。不可用时返回阻塞，不向生产提交预约或发信。
+- 本轮不改业务代码；续派前保存并核对最新 Git 差异，明确允许文件。新 worktree 不自动含这些修改。
+- 必读：业务仓 `AGENTS.md`、`03-guides/codex-desktop-workflow.md`、`02-api/preorder-discounts.md`。
+- 直接向父会话回报任务、attempt、命令/证据和限制，证据放 `05-verification/SHOP-FE-022/attempt-<N>`。
+- 下次入口：验证 AU/NZ/Other、手填、修改后清理、无邮编、移动端和提交字段，保留已有问卷/测试报名。
 
 ---
 

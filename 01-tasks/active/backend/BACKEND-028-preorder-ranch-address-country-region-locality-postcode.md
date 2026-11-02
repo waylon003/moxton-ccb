@@ -2,12 +2,24 @@
 
 **任务ID:** BACKEND-028
 **创建时间:** 2026-07-09
-**状态:** 待开发
+**状态:** migration_hold
+**执行模式:** codex-desktop
+**当前 attempt:** 0
 **角色:** 后端工程师
 **项目:** moxton-lotapi
 **优先级:** P1
 **技术栈:** Node.js + Koa + TypeScript + Prisma + MySQL
 **QA_LEVEL:** full
+
+## 接管上下文（2026-11-02）
+
+- 工作区：`E:\moxton-lotapi`；已提交基线 `c5018ea`，结构化地址主要实现已经存在。
+- 当前只做接管记录，不重新开发或认定验收完成。先核对迁移后的实际 Git 状态，再补本任务的运行验收。
+- 前置依赖：无；联调环境需要恢复。全量构建和迁移资产问题见现状报告，不能用局部 build 替代。
+- 必读：业务仓 `AGENTS.md`、`03-guides/codex-desktop-workflow.md`、`02-api/preorder-discounts.md`。
+- 允许范围：本轮无业务改动；正式续派前由主会话列明文件和基线。
+- 子代理直接向父会话回报 task_id、attempt、变更/命令/证据和限制；证据按 `05-verification/BACKEND-028/attempt-<N>` 保存。
+- 下次入口：对比实际保存/查询/导出字段和隔离环境，决定进入 waiting_qa 或创建明确修复范围。
 
 ---
 

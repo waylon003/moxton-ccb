@@ -5,6 +5,8 @@ verified_against: [SHOP-FE-015, SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-0
 
 # 项目协调状态
 
+> 本文是 3 月的历史业务协调快照，端口、完成度及旧编排说明不作为当前运行结论。当前指挥入口见 [CURRENT-ROUND](./CURRENT-ROUND.md)，开发现状见 [2026-11-02 复核](../docs/reports/2026-11-02-project-status-review.md)。
+
 > **用途**: Team Lead 通过此文件感知三个项目的协调状态
 > **更新频率**: 每次修改跨项目接口时更新
 > **最后更新**: 2026-03-25
