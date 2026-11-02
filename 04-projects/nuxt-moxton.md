@@ -1,6 +1,6 @@
 ---
-last_verified: 2026-03-24
-verified_against: [SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-014, BACKEND-016, SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, SHOP-FE-001]
+last_verified: 2026-03-25
+verified_against: [SHOP-FE-015, SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-014, BACKEND-016, SHOP-FE-011, SHOP-FE-010, SHOP-FE-009, SHOP-FE-008, BACKEND-013, SHOP-FE-001]
 ---
 
 # nuxt-moxton 项目状态
@@ -39,9 +39,9 @@ Moxton 官方商城前端，基于 Nuxt 3 框架构建的现代化电商平台�
 | 用户认证 | 注册、登录、个人信息管理、修改密码 | ✅ 完成 |
 | 商品浏览 | 商品列表、分类筛选、搜索、详情页 | ✅ 完成 |
 | 购物车 | 添加/删除/修改数量、游客购物车、登录合并 | ✅ 完成 |
-| 结账流程 | 收货地址选择、订单创建 | ✅ 完成 |
+| 结账流程 | 收货地址选择、订单创建、确认完成后直达 `/shop` | ✅ 完成 |
 | Stripe 支付 | Stripe Elements 卡片表单、支付意图智能复用、失败路径本地化与支付结果跳转 | ✅ 完成 |
-| 订单历史 | 用户订单列表、订单详情查看 | ✅ 完成 |
+| 订单历史 | 用户订单列表、订单详情查看（已支付订单展示支付方式与支付时间） | ✅ 完成 |
 | 咨询订单 | 无价格商品咨询表单提交 | ✅ 完成 |
 | 收货地址 | 地址 CRUD、默认地址设置 | ✅ 完成 |
 | 通知中心 | 通知列表、标记已读 | ✅ 完成 |
@@ -122,7 +122,12 @@ Moxton 官方商城前端，基于 Nuxt 3 框架构建的现代化电商平台�
 - 创建接口若返回 `400 Payment already in progress`，前端会立即重查 `GET /payments/order/:orderId` 并复用已存在的活跃 intent
 - 支付初始化相关 `403` / `404` / 重复支付错误已映射为中英文产品化文案；依据为 `SHOP-FE-013` QA 摘要与 `E:\nuxt-moxton\components\checkout\CheckoutPayment.vue`
 
-## 最近同步记录（2026-03-24）
+## 最近同步记录（2026-03-25）
+
+- `SHOP-FE-015`：订单详情页在“待发货 / 已支付”场景补齐支付信息展示，支付方式固定显示 `Stripe`
+- `SHOP-FE-015`：支付时间优先读取 `paidAt`，为空时回退到 `lastPaymentAttemptAt`，两者皆空显示 `-`
+- `SHOP-FE-015`：checkout 第 4 步确认完成后直接跳转 `/shop`，不再回到第 1 步等待进度条
+- 接口复核：`SHOP-FE-015` 未引入新的 API 依赖，继续使用既有订单详情字段 `paidAt`、`lastPaymentAttemptAt`、`paymentStatus`
 
 - `SHOP-FE-012`：订单详情页兼容当前订单详情真实返回字段，商品金额从 `items[].price` 读取并由前端计算展示值，不再假设接口直接返回 `unitPrice/subtotal`
 - `SHOP-FE-012`：收货地址展示优先读取顶层 `address` 字符串，并兼容 `addresses[0].fullAddress`

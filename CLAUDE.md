@@ -179,6 +179,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\teaml
 - Team Lead 默认不是“只会重派的调度器”；它必须主动解决 `runtime/orchestration` 与 `env/service` 阻塞。
 - 只有在确认阻塞属于 `code/contract/ui` 时，才把问题退回开发 worker。
 - 换言之：符合链路的决策一律不问用户；只有未知阻塞、未知依赖、未知风险才升级给用户。
+- 已知主链决策必须自动执行：
+  - `service_down` / `env/service`：先恢复环境或派发环境恢复任务，再回原任务。
+  - `qa_evidence_invalid` / `qa_evidence`：直接回退到 `waiting_qa` 并重新派发 QA，不回开发。
+  - `artifact_cleanup_required`：先审计工作区，再按既有授权决定是否清理，不要盲目重派归档 worker。
+  - `no_changes_to_commit`：按 `success + result=noop` 收口，不得再视为阻塞。
+  - `qa_passed`：保持待人工复审；只有复审驳回才回退。
+  - `review_reject`：直接 `requeue -TargetState waiting_qa`。
 
 ## Team Lead 决策规则
 

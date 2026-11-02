@@ -75,6 +75,13 @@ recover 可用动作：
 - 若 `repo-committer` 回传 `reason=no_changes_to_commit`，按 `success/noop` 处理，表示仓库已达目标状态；不要因此重派。
 - 若用户已明确同意清理，再执行 `cleanup-worktree-artifacts.ps1 -AllowTracked` 做定向清理；未获同意时不要直接删除。
 - 只有未知阻塞、未知依赖、未知风险才升级给用户。
+- 以下属于已知主链决策，直接执行，不要再问用户：
+  - `service_down` / `env/service`：先恢复环境，再继续原任务。
+  - `qa_evidence_invalid` / `qa_evidence`：回 `waiting_qa` 并重新派遣 QA，不回开发。
+  - `artifact_cleanup_required`：先审计工作区，必要时按既有授权清理，再继续 archive。
+  - `no_changes_to_commit`：按 `success/noop` 收口。
+  - `qa_passed`：保持待人工复审。
+  - `review_reject`：直接回退到 `waiting_qa`。
 
 ## 复审流转
 

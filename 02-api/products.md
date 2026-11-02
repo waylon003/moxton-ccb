@@ -227,11 +227,35 @@ const createProductData = {
 - `minPrice` (可选): 最低价格
 - `maxPrice` (可选): 最高价格
 - `status` (可选): 商品状态(1:上架, 0:下架)
+- `purchaseMode` (可选): 购买模式筛选，合法值为 `ONLINE`、`INQUIRY_ONLY`、`PREORDER`
+
+**购买模式筛选说明（BACKEND-022）**:
+- `ONLINE`: 线上购买商品。
+- `INQUIRY_ONLY`: 仅咨询商品。
+- `PREORDER`: 预售预约商品。
+- 不传 `purchaseMode` 时保持原列表行为。
+- 响应中继续返回 `purchaseMode` 和 `hasPrice`，前端可同时兼容新旧购买模式逻辑。
 
 **示例请求**:
 ```
 GET /products/admin/all?pageNum=1&pageSize=10&keyword=传感器
+GET /products/admin/all?purchaseMode=PREORDER&pageNum=1&pageSize=10
 Authorization: Bearer <admin_or_operator_token>
+```
+
+**非法 `purchaseMode` 响应**:
+```json
+{
+  "code": 400,
+  "message": "Validation Error",
+  "data": {
+    "errors": [
+      "purchaseMode must be one of ONLINE, INQUIRY_ONLY, PREORDER"
+    ]
+  },
+  "timestamp": "2026-06-28T10:00:00.000Z",
+  "success": false
+}
 ```
 
 **权限检查**:

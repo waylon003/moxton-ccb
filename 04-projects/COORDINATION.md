@@ -1,13 +1,13 @@
 ---
-last_verified: 2026-03-24
-verified_against: [SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-016, BACKEND-015, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
+last_verified: 2026-03-25
+verified_against: [SHOP-FE-015, SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-016, BACKEND-015, BACKEND-014, BACKEND-007, ADMIN-FE-007, SHOP-FE-001]
 ---
 
 # 项目协调状态
 
 > **用途**: Team Lead 通过此文件感知三个项目的协调状态
 > **更新频率**: 每次修改跨项目接口时更新
-> **最后更新**: 2026-03-24
+> **最后更新**: 2026-03-25
 
 ## 📊 项目概览
 
@@ -40,7 +40,7 @@ verified_against: [SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-016, BACKEND-0
 产品管理 + 分类管理 + 在线订单管理（含发货/物流/操作历史）+ 咨询订单管理
 ```
 
-### 已归档任务快照（2026-03-24）
+### 已归档任务快照（2026-03-25）
 
 > 历史表格未持续维护 bug/feature 拆分，本次按 `01-tasks/completed/` 目录实数补齐归档统计。
 
@@ -48,8 +48,8 @@ verified_against: [SHOP-FE-014, SHOP-FE-013, SHOP-FE-012, BACKEND-016, BACKEND-0
 |------|------------------|----------|
 | 后端 (moxton-lotapi) | 21 | `01-tasks/completed/backend` |
 | 管理后台 (moxton-lotadmin) | 10 | `01-tasks/completed/admin-frontend` |
-| 商城前端 (nuxt-moxton) | 14 | `01-tasks/completed/shop-frontend` |
-| **总计** | **45** | `01-tasks/completed/*` |
+| 商城前端 (nuxt-moxton) | 15 | `01-tasks/completed/shop-frontend` |
+| **总计** | **46** | `01-tasks/completed/*` |
 
 ---
 

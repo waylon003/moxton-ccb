@@ -1,0 +1,66 @@
+{
+  "source": "E:\\discount-code-form-prototype",
+  "updatedAt": "2026-06-27",
+  "products": [
+    {
+      "slug": "ai-sheep-counting-camera",
+      "name": "AI Sheep Counting Camera",
+      "purchaseMode": "PREORDER",
+      "description": "Real-time sheep counting for smarter pasture management",
+      "features": [
+        "Fast Recognition",
+        "Portable",
+        "Real-time Monitoring"
+      ],
+      "images": [
+        {
+          "file": "sheep-counting-camera-main.png",
+          "sourceFile": "sheep-counting-camera-latest.png",
+          "width": 718,
+          "height": 1254,
+          "recommendedUse": "商品主图、预约页产品展示图、邮件产品图候选",
+          "alt": "Moxton AI sheep counting camera mounted on a portable stand"
+        },
+        {
+          "file": "sheep-counting-display-panel.png",
+          "sourceFile": "sheep-counting-display-panel-cropped.png",
+          "width": 274,
+          "height": 128,
+          "recommendedUse": "预约页产品展示区辅助图",
+          "alt": "Black sheep counting display panel with red LED digits 1086"
+        }
+      ],
+      "metadataPreorderSuggestion": {
+        "description": "Real-time sheep counting for smarter pasture management",
+        "heroImage": "",
+        "videoUrl": ""
+      }
+    },
+    {
+      "slug": "ai-wool-diameter-analyzer",
+      "name": "AI Wool Diameter Analyzer",
+      "purchaseMode": "PREORDER",
+      "description": "Instant wool micron analysis in the field",
+      "features": [
+        "Instant Result",
+        "Accurate Data",
+        "Handheld Device"
+      ],
+      "images": [
+        {
+          "file": "wool-diameter-analyzer-main.png",
+          "sourceFile": "wool-analyzer-cropped.png",
+          "width": 768,
+          "height": 1046,
+          "recommendedUse": "商品主图、预约页产品展示图、邮件产品图候选",
+          "alt": "Black and orange handheld Moxton wool diameter analyzer"
+        }
+      ],
+      "metadataPreorderSuggestion": {
+        "description": "Instant wool micron analysis in the field",
+        "heroImage": "",
+        "videoUrl": ""
+      }
+    }
+  ]
+}

@@ -2,6 +2,10 @@
 
 多 AI 协作的任务编排系统，协调三个业务仓库的开发工作。
 
+## 当前开发现状
+
+[2026-11-02 三项目现状复核报告](./docs/reports/2026-11-02-project-status-review.md)：汇总线上可用性、业务实现、未提交工作、4 个活跃任务的实际状态和发布缺口。历史项目状态、任务目录和运行态存在时间差，重新接手时先读此报告。
+
 ## 架构
 
 ## 编排流程图
@@ -151,17 +155,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start
 powershell -NoProfile -ExecutionPolicy Bypass -File "E:\moxton-ccb\scripts\start-rich-monitor.ps1" -Once
 ```
 
-当前第一版面板包括：
-- `TASK-LOCKS.json` 任务锁状态
+当前面板包括：
+- 顶部三栏总览：`自治状态`、`链路健康`、`人工介入`
+- `TASK-LOCKS.json` 任务锁状态、根因分类与主链动作
 - headless worker / runtime 状态与 PID
-- 最近 route-notifier 投递记录
+- 最近 route-notifier 投递记录与投递滞后
 - 最近 task attempt / requeue / blocked 历史
-- route-monitor / route-notifier watcher 心跳摘要
+- route-monitor / route-notifier / rich-monitor 心跳摘要
 
-下一阶段增强方向：
-- 直接显示 `blocked / fail` 的建议动作，而不是只给状态
-- 显示 route 收口到 notifier 投递的时延，快速定位“卡在哪一跳”
-- 单独突出环境阻塞、QA 证据阻塞、代码阻塞三类问题
+当前这一版的设计原则：
+- 看板保持只读，只做观察和诊断，不承载派遣、改锁、恢复动作
+- 顶部不再给“让用户操作”的建议，而是明确显示系统是否自治运行、链路是否健康、当前是否需要人工介入
+- 人工介入只统计真正该由用户处理的项，例如 `qa_passed` 人工复审、未知阻塞、审批请求
+- 主链已知决策仍由 Team Lead 自治执行，看板只负责把根因分类和主链动作展示清楚
 
 ## Claude Code UI（可选）
 

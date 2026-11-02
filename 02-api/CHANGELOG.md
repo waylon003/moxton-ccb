@@ -2,6 +2,41 @@
 
 ## [未发布]
 
+### 2026-06-29
+
+#### 新增 (Added)
+- **产品测试计划申请** - 新增 [product-testing-applications.md](product-testing-applications.md)
+  - 记录 AI Sheep Counting Camera 官方产品测试计划申请的数据规则
+  - 说明用户侧复用 `POST /preorder-discounts/claim`，通过 `testingProgramOptIn` 和 `testingProgram` 提交可选报名信息
+  - 记录测试申请后台列表、详情、状态更新、备注更新、资格邮件发送、导出接口
+  - 明确第一版不做筛选结果导入，导出表格保留 `applicationId`，由后台手动搜索和单条发送资格邮件
+
+#### 更新 (Changed)
+- **预售预约优惠码** - 更新 [preorder-discounts.md](preorder-discounts.md)
+  - 请求体补充 `testingProgramOptIn` 和 `testingProgram` 字段说明
+  - 成功响应补充 `testingApplication` 摘要说明
+  - 接入方说明补充官网和后台与产品测试申请的联动规则
+- **API 索引** - 更新 [README.md](README.md)，加入产品测试计划申请文档入口
+
+### 2026-06-28
+
+#### 新增 (Added)
+- **预售预约优惠码** - 新增 [preorder-discounts.md](preorder-discounts.md)
+  - 记录用户侧 `POST /preorder-discounts/claim`，提交字段以 `productIds: string[]` 为准，不再使用旧单 `productId` 作为推荐提交字段
+  - 说明一次提交可选择 1 到 2 个预售产品，后端按“一产品一 lead、一优惠码、一封邮件”处理
+  - 记录逐产品 `items[]` 响应结构，以及 `SENT`、`PENDING`、`FAILED`、`DUPLICATE`、`PARTIAL_DUPLICATE`、`PARTIAL_SENT` 状态语义
+  - 记录全部重复错误码 `PREORDER_DISCOUNT_ALREADY_CLAIMED`，以及 `productIds` 缺失、超限、邮箱格式错误、产品不存在、产品不是 `PREORDER` 等常见错误
+  - 说明优惠码有效期来自后端配置，本次上线配置为 2026 年 12 月 31 日，前端不要自行推导有效期
+  - 记录后台 `GET /preorder-discounts/admin/leads`、`GET /preorder-discounts/admin/leads/:id`、`POST /preorder-discounts/admin/leads/:id/resend`
+  - 明确后台重发使用原 lead 的原优惠码，不生成新 code，并返回最新邮件状态
+
+#### 更新 (Changed)
+- **商品管理** - 更新 [products.md](products.md)
+  - `GET /products/admin/all` 增加 `purchaseMode` 查询参数说明
+  - 合法值为 `ONLINE`、`INQUIRY_ONLY`、`PREORDER`
+  - 补充 `GET /products/admin/all?purchaseMode=PREORDER` 示例和非法值错误响应
+- **API 索引** - 更新 [README.md](README.md)，加入预售预约优惠码文档入口
+
 ### 2026-03-24
 
 #### 更新 (Changed)

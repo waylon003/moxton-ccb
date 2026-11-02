@@ -12,6 +12,14 @@ param(
     [Parameter(Mandatory = $false)]
     [int]$PollIntervalSeconds = 2
 )
+$continuousExplicit = $PSBoundParameters.ContainsKey('Continuous')
+$pollExplicit = $PSBoundParameters.ContainsKey('PollIntervalSeconds')
+if (-not $continuousExplicit -and ($env:WEZTERM_PANE -or $env:WEZTERM_PANE_ID)) {
+    $Continuous = $true
+}
+if ((-not $pollExplicit) -or $PollIntervalSeconds -lt 1) {
+    $PollIntervalSeconds = 2
+}
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path $PSScriptRoot -Parent

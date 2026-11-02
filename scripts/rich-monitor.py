@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 try:
     from rich.align import Align
+    from rich.columns import Columns
     from rich.console import Console, Group
     from rich.layout import Layout
     from rich.live import Live
@@ -537,7 +538,7 @@ def classify_task(task: dict[str, Any], runtime: dict[str, Any] | None, delivery
     elif state_key == "waiting_qa":
         category, suggestion, priority = "dispatch_qa", "执行 dispatch-qa", 70
     elif state_key == "qa_passed":
-        category, suggestion, priority = "archive_ready", "人工复审后 archive", 90
+        category, suggestion, priority = "review_pending", "等待人工复审后归档", 90
     elif state_key == "archiving":
         category, suggestion, priority = "observe", "等待 doc-updater / repo-committer", 110
     elif state_key in {"in_progress", "qa"}:
@@ -592,6 +593,7 @@ def collect_state(paths: MonitorPaths, args: argparse.Namespace) -> dict[str, An
     attempts_doc = JsonStore.load_json(paths.attempts, {"attempts": []})
     route_monitor = JsonStore.load_json(paths.route_monitor_state, {})
     route_notifier = JsonStore.load_json(paths.route_notifier_state, {})
+    rich_monitor = JsonStore.load_json(paths.rich_monitor_state, {})
     worker_panels = JsonStore.load_json(paths.worker_panels, {"workers": {}})
     approval_state = JsonStore.load_json(paths.approval_state, {})
     approval_requests = JsonStore.load_json(paths.approval_requests, [])
@@ -752,6 +754,7 @@ def collect_state(paths: MonitorPaths, args: argparse.Namespace) -> dict[str, An
         "attempts": recent_attempts,
         "route_monitor": route_monitor,
         "route_notifier": route_notifier,
+        "rich_monitor": rich_monitor,
         "workers": workers,
         "approval_state": approval_state,
         "approval_count": active_approval_count,
@@ -760,46 +763,102 @@ def collect_state(paths: MonitorPaths, args: argparse.Namespace) -> dict[str, An
     }
 
 
+def metric_line(label: str, value: Any, *, value_style: str = "white") -> Text:
+    return Text.assemble((label + "：", "dim"), (humanize_token(value), value_style))
+
+
+def make_metric_card(title: str, lines: list[Any], *, border_style: str) -> Panel:
+    return Panel(Group(*lines), title=title, border_style=border_style, padding=(0, 1))
+
+
+def compute_round_status(state: dict[str, Any]) -> tuple[str, str]:
+    counts = Counter(task.get("state") or "unknown" for task in state.get("tasks") or [])
+    if counts.get("blocked", 0) or counts.get("fail", 0) or counts.get("failed", 0):
+        return "阻塞待收敛", "bold red"
+    if counts.get("archiving", 0):
+        return "归档收口中", "magenta"
+    if counts.get("in_progress", 0) or counts.get("qa", 0) or counts.get("assigned", 0) or counts.get("waiting_qa", 0):
+        return "自治执行中", "bold yellow"
+    if counts.get("qa_passed", 0):
+        return "等待人工复审", "green"
+    return "空闲", "green"
+
 def make_header(state: dict[str, Any], args: argparse.Namespace) -> Panel:
     tasks = state["tasks"]
     counts = Counter(task["state"] or "unknown" for task in tasks)
     runtime_rows = state["runtime_rows"]
     running_headless = sum(1 for row in runtime_rows if row.get("dispatch_mode") == "headless" and row.get("pid_alive"))
-    blocked = counts.get("blocked", 0)
-    qa_passed = counts.get("qa_passed", 0)
-    assigned = counts.get("assigned", 0)
-    waiting_qa = counts.get("waiting_qa", 0)
-    in_progress = counts.get("in_progress", 0)
+    active_tasks = sum(1 for task in tasks if normalize_lookup_key(task.get("state")) != "completed")
     pending_decisions = len(state.get("decision_queue") or [])
     delivery_failures = len([item for item in state.get("delivery_events") or [] if item.get("sent") is False])
+    unknown_blockers = sum(1 for item in state.get("decision_queue") or [] if normalize_lookup_key(item.get("category")) == "unknown")
+    review_pending = counts.get("qa_passed", 0)
+    approval_count = int(state.get("approval_count") or 0)
+    user_interventions = review_pending + unknown_blockers + approval_count
+    round_status, round_style = compute_round_status(state)
 
-    title = Text("Moxton-CCB 指挥看板", style="bold cyan")
+    route_monitor = state.get("route_monitor") or {}
+    route_notifier = state.get("route_notifier") or {}
+    rich_monitor = state.get("rich_monitor") or {}
+
+    title = Text("Moxton-CCB 实时监控台", style="bold cyan")
     subtitle = Text()
     subtitle.append(f"根目录={state['paths'].root}  ", style="dim")
     subtitle.append(f"刷新={args.refresh:.1f}s  ")
-    subtitle.append(f"任务锁={len(tasks)}  ")
-    subtitle.append(f"待决策={pending_decisions}  ", style="bold yellow" if pending_decisions else "green")
-    subtitle.append(f"无头运行={running_headless}  ", style="yellow" if running_headless else "dim")
-    subtitle.append(f"阻塞={blocked}  ", style="red" if blocked else "green")
-    subtitle.append(f"通知失败={delivery_failures}  ", style="red" if delivery_failures else "green")
-    subtitle.append(f"待开发={assigned}  待 QA={waiting_qa}  QA通过={qa_passed}  进行中={in_progress}")
+    subtitle.append(f"可见任务={len(tasks)}  ")
+    subtitle.append(f"自治待收口={pending_decisions}", style="bold yellow" if pending_decisions else "green")
     if args.task:
         subtitle.append(f"  焦点任务={args.task}", style="bold cyan")
-    group = Group(title, subtitle)
-    return Panel(group, border_style="cyan")
 
+    autonomy_lines = [
+        metric_line("当前轮次", round_status, value_style=round_style),
+        metric_line("活跃任务", active_tasks, value_style="bold white"),
+        metric_line("无头执行", running_headless, value_style="yellow" if running_headless else "dim"),
+        Text(f"待开发={counts.get('assigned', 0)}  待QA={counts.get('waiting_qa', 0)}  执行中={counts.get('in_progress', 0) + counts.get('qa', 0)}", style="dim"),
+    ]
+
+    health_lines = [
+        metric_line("route-monitor", f"{localize_state(route_monitor.get('status') or 'unknown')} / {age_text(route_monitor.get('last_loop_at'))}", value_style=state_style(route_monitor.get('status') or 'unknown')),
+        metric_line("route-notifier", f"{localize_state(route_notifier.get('status') or 'unknown')} / {age_text(route_notifier.get('last_loop_at'))}", value_style=state_style(route_notifier.get('status') or 'unknown')),
+        metric_line("rich-monitor", f"{localize_state(rich_monitor.get('status') or 'unknown')} / {age_text(rich_monitor.get('last_loop_at'))}", value_style=state_style(rich_monitor.get('status') or 'unknown')),
+        metric_line("通知失败", delivery_failures, value_style="bold red" if delivery_failures else "green"),
+    ]
+
+    if user_interventions:
+        intervention_status = f"当前需人工介入 {user_interventions} 项"
+        intervention_style = "bold yellow"
+    else:
+        intervention_status = "当前无需你介入"
+        intervention_style = "green"
+    intervention_lines = [
+        metric_line("介入结论", intervention_status, value_style=intervention_style),
+        metric_line("人工复审", review_pending, value_style="green" if review_pending == 0 else "bold green"),
+        metric_line("未知阻塞", unknown_blockers, value_style="red" if unknown_blockers else "green"),
+        metric_line("审批请求", approval_count, value_style="red" if approval_count else "green"),
+    ]
+
+    cards = Columns(
+        [
+            make_metric_card("自治状态", autonomy_lines, border_style="cyan"),
+            make_metric_card("链路健康", health_lines, border_style="magenta"),
+            make_metric_card("人工介入", intervention_lines, border_style="bright_yellow"),
+        ],
+        equal=True,
+        expand=True,
+    )
+    return Panel(Group(title, subtitle, cards), border_style="cyan")
 
 def make_decision_panel(state: dict[str, Any], *, limit: int = 8) -> Panel:
     table = Table(expand=True, box=None)
     table.add_column("任务", style="bold", no_wrap=True)
     table.add_column("阶段", no_wrap=True)
-    table.add_column("分类", no_wrap=True)
-    table.add_column("建议", no_wrap=True)
-    table.add_column("原因")
+    table.add_column("根因分类", no_wrap=True)
+    table.add_column("主链动作", no_wrap=True)
+    table.add_column("摘要")
 
     queue = state.get("decision_queue") or []
     if not queue:
-        table.add_row("-", "-", style_blocker("observe"), "当前无待决策项", "等待新的 route / runtime 变化")
+        table.add_row("-", "-", style_blocker("observe"), "当前无待收口项", "等待新的 route / runtime 变化")
     else:
         for item in queue[:limit]:
             table.add_row(
@@ -809,21 +868,21 @@ def make_decision_panel(state: dict[str, Any], *, limit: int = 8) -> Panel:
                 item.get("suggestion") or "-",
                 shorten(item.get("reason") or "-", 72),
             )
-    return Panel(table, title="待决策队列 / Team Lead 下一步", border_style="bright_yellow")
-
+    return Panel(table, title="主链待收口项 / Team Lead 自治决策", border_style="bright_yellow")
 
 def make_tasks_panel(state: dict[str, Any]) -> Panel:
     table = Table(expand=True, box=None)
     table.add_column("任务", style="bold")
     table.add_column("状态", no_wrap=True)
     table.add_column("执行者")
-    table.add_column("建议", no_wrap=True)
+    table.add_column("根因", no_wrap=True)
+    table.add_column("主链动作", no_wrap=True)
     table.add_column("摘要")
 
     tasks = state["tasks"]
     decisions = {item.get("task_id"): item for item in state.get("decision_queue") or []}
     if not tasks:
-        table.add_row("-", "-", "-", "-", "没有符合条件的任务")
+        table.add_row("-", "-", "-", "-", "-", "没有符合条件的任务")
     for task in tasks:
         route = task.get("route_update") or {}
         summary = route.get("bodyPreview") or task.get("note") or ""
@@ -833,17 +892,18 @@ def make_tasks_panel(state: dict[str, Any]) -> Panel:
         if task.get("run_id"):
             task_label = f"{task_label}\n[dim]{shorten(task.get('run_id'), 34)}[/]"
         decision = decisions.get(task.get("task_id"), {})
+        category = decision.get("category") or "observe"
         suggestion = decision.get("suggestion") or localize_mode(task.get("dispatch_mode") or ("headless" if task.get("headless_run_dir") else "-"))
         table.add_row(
             task_label,
             f"{style_state(task.get('state') or '')} [dim]{updated}[/]",
             worker,
+            style_blocker(category),
             suggestion,
-            shorten(summary, 64),
+            shorten(summary, 56),
         )
     title = f"任务总览 / TASK-LOCKS  更新={age_text(state.get('locks_updated_at'))}"
     return Panel(table, title=title, border_style="blue")
-
 
 def make_runtime_panel(state: dict[str, Any], *, limit: int = 12) -> Panel:
     table = Table(expand=True, box=None)
@@ -974,7 +1034,7 @@ def make_summary_panel(state: dict[str, Any]) -> Panel:
     else:
         lines.append(Text("阻塞任务：无", style="green"))
 
-    return Panel(Group(*lines), title="监控摘要 / 告警", border_style="red")
+    return Panel(Group(*lines), title="链路健康 / 异常摘要", border_style="red")
 
 
 def make_focus_panel(state: dict[str, Any], args: argparse.Namespace) -> Panel:
@@ -1008,7 +1068,7 @@ def render_dashboard(state: dict[str, Any], args: argparse.Namespace) -> Layout:
     layout = Layout(name="root")
     if args.task:
         layout.split_column(
-            Layout(name="header", size=3),
+            Layout(name="header", size=9),
             Layout(name="body"),
             Layout(name="footer", size=12),
         )
@@ -1038,7 +1098,7 @@ def render_dashboard(state: dict[str, Any], args: argparse.Namespace) -> Layout:
         return layout
 
     layout.split_column(
-        Layout(name="header", size=3),
+        Layout(name="header", size=9),
         Layout(name="body"),
         Layout(name="footer", size=12),
     )
