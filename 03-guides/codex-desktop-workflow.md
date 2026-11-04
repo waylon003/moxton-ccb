@@ -1,6 +1,6 @@
 # Codex 桌面主会话工作流
 
-当前默认入口：在 `E:\moxton-ccb` 的 Codex 桌面会话中描述需求，由主会话组织开发和独立 QA。根 `AGENTS.md` 是指挥规则，任务 Markdown 是正式记录。
+当前默认入口：在 `E:\moxton-ccb` 的 Codex 桌面会话中描述需求，由主会话组织开发，并按风险触发独立 QA。根 `AGENTS.md` 是指挥规则，任务 Markdown 是正式记录。
 
 ## 作用范围
 
@@ -20,7 +20,7 @@
 
 用户只要求讨论时先讨论；范围明确后使用 `01-tasks/templates` 的对应模板。每个任务写清业务目标、改动边界、前置依赖、API 契约、验收、回退和隔离环境。
 
-任务正式状态：`planned -> ready -> in_progress -> waiting_qa -> qa -> qa_passed -> completed`。阻塞用 `blocked`，另记根因和恢复动作。迁移保留任务先使用 `migration_hold`，核实后由主会话选择正确入口。
+任务正式状态按 `QA_LEVEL` 分流：`skip` 走 `planned -> ready -> in_progress -> dev_verified -> completed`；`smoke` 先做开发自测和轻量冒烟，再由主会话决定是否进入独立 QA；`full` 走 `planned -> ready -> in_progress -> waiting_qa -> qa -> qa_passed -> completed`。阻塞用 `blocked`，另记根因和恢复动作。迁移保留任务先使用 `migration_hold`，核实后由主会话选择正确入口。
 
 同一任务只有主会话写正式状态；STATUS 是汇总。旧 TASK-LOCKS、route、controller 不同时参与。每次新执行或重试增加正整数 attempt，保留此前结果。
 
@@ -47,9 +47,19 @@ evidence: E:\moxton-ccb\05-verification\<TASK-ID>\attempt-<N>
 
 原生子代理不能自动切换当前工具的工作目录，所有命令显式使用目标 workdir，并核对 Git 根。可写范围以实际会话权限为准；权限不足应回报，不能偷偷修改全局权限配置。
 
-## 开发交付和独立 QA
+## 开发自测和风险触发 QA
 
-开发回报包含 task_id、attempt、目标仓库/基线、变更文件、命令和退出码、证据、跨仓兼容性影响及剩余问题。主会话检查实际差异后进入 waiting_qa，再派新的 QA 子代理。
+开发回报必须包含 task_id、attempt、目标仓库/基线、变更文件、实际执行的命令和退出码、自测/冒烟证据、未覆盖场景、跨仓兼容性影响及剩余问题。开发阶段必须完成任务要求的类型检查、构建、单测或冒烟；主会话检查实际差异和自测结果后，按 `QA_LEVEL` 决定完成或进入 waiting_qa。
+
+默认触发规则：
+
+| QA_LEVEL | 默认动作 | 典型任务 |
+|----------|----------|----------|
+| `skip` | 开发自测 + 主会话差异复核 | 文档、配置、纯重命名、无行为变化 |
+| `smoke` | 开发自测 + 轻量冒烟；主会话按风险决定是否独立 QA | 简单 UI、字段展示、低风险页面 |
+| `full` | 开发自测后必须独立 QA | 权限、支付、订单、数据库、邮件、跨仓契约、Agent 工具、生产影响 |
+
+独立 QA 不是开发自测的重复执行者。被触发时，QA 优先检查权限、失败路径、跨仓契约、真实浏览器行为和副作用；已由开发可靠验证的命令不必机械重复。
 
 QA 应检查任务全部适用标准，不把局部类型检查或首页可见性烟测替代完整业务验证。后端默认 build 仅覆盖局部文件，完整类型检查须另外记录。后台 lint 具有自动修复行为，只读检查必须禁用 fix。
 
@@ -83,7 +93,7 @@ python scripts/validate-desktop-result.py --result 05-verification/BACKEND-029/a
 
 环境不可用、缺少身份或未测场景返回 BLOCKED；代码不符返回 FAIL。已知基线失败写入限制和恢复计划，不能隐瞒后继续声称整体绿色。生产数据写入、发信、支付和迁移需有明确任务授权。
 
-通过后进入 qa_passed，主会话复核及同步 API 文档，再记录集成情况并决定 completed。任务完成、Git 提交、推送和部署分开；不默认自动推送或部署。
+独立 QA 通过后进入 qa_passed；未触发 QA 时，主会话核对开发自测、差异和限制后进入 dev_verified。两种路径都要同步 API 文档并记录集成情况后才能 completed。任务完成、Git 提交、推送和部署分开；不默认自动推送或部署。
 
 ## 证据和干净工作区
 
@@ -96,7 +106,7 @@ python scripts/validate-desktop-result.py --result 05-verification/BACKEND-029/a
 ## 日常指令
 
 - “先讨论这个需求，拆成后端和后台任务，先不执行。”
-- “按确认的任务派遣开发，交付后安排独立 QA。”
+- “按确认的任务派遣开发，按 QA_LEVEL 和风险决定是否独立 QA。”
 - “恢复当前轮次，核对实际代码后继续未完成任务。”
 - “汇总本轮变更、验证、阻塞和下次入口。”
 

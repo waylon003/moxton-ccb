@@ -158,8 +158,25 @@ class ProjectConfigurationTests(unittest.TestCase):
                 text = path.read_text(encoding='utf-8-sig')
                 self.assertIn('**执行模式:** codex-desktop', text)
                 self.assertIn('**当前 attempt:**', text)
+                self.assertIn('QA_LEVEL 规则', text)
+                self.assertIn('full', text)
+                self.assertIn('smoke', text)
+                self.assertIn('skip', text)
                 self.assertNotIn('report_route(status=', text)
                 self.assertNotIn('\\CLAUDE.md', text)
+
+    def test_qa_is_risk_triggered_instead_of_always_chained(self):
+        workflow = (ROOT / '03-guides' / 'codex-desktop-workflow.md').read_text(encoding='utf-8')
+        root_rules = (ROOT / 'AGENTS.md').read_text(encoding='utf-8')
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        for text in (workflow, root_rules, readme):
+            self.assertIn('QA_LEVEL', text)
+            self.assertIn('full', text)
+            self.assertIn('smoke', text)
+            self.assertIn('skip', text)
+        self.assertIn('不是开发自测的重复执行者', workflow)
+        self.assertIn('未触发 QA', workflow)
+        self.assertNotIn('每个开发任务都必须派独立 QA', workflow)
 
     def test_ignore_policy_keeps_summaries_and_roles_but_excludes_local_data(self):
         scratch = ROOT / 'runtime' / 'tests'

@@ -11,6 +11,8 @@
 **技术栈:** Node.js + Koa + TypeScript + Prisma + MySQL
 **QA_LEVEL:** [full|smoke|skip]
 
+**QA_LEVEL 规则:** `full` 必须独立 QA；`smoke` 由主会话按风险决定是否独立 QA；`skip` 只做开发自测和主会话复核。无论级别，开发者都必须返回实际验证命令、退出码、证据和未覆盖范围。
+
 ---
 
 ## 执行上下文（强约束）

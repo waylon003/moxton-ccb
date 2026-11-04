@@ -19,7 +19,7 @@
 ## 主会话职责
 
 - 用户提出需求后，先明确会影响结果的范围和验收条件，使用现有模板落地任务。仅请求讨论或计划时不执行开发。
-- 用户要求执行时，允许主会话派遣开发和独立 QA 子代理，无需逐次重复征求派遣许可；不替用户创建侧栏新聊天。
+- 用户要求执行时，允许主会话派遣开发子代理；独立 QA 按任务 `QA_LEVEL` 和风险触发，不再默认跟随每次开发派遣；不替用户创建侧栏新聊天。
 - 每次派遣传入任务绝对路径、任务 ID、当前 attempt、角色文件、目标工作区、基线提交、既有改动、允许范围和验收要求。
 - 工具支持自定义角色时选用 `.codex/config.toml` 中的角色；不支持时要求子代理读取对应 `.codex/agents/*.toml` 的职责。不能假定角色配置已经热加载。
 - 主会话唯一维护任务主记录、STATUS 和 CURRENT-ROUND；子代理不得自行推进状态、归档或改其他任务。
@@ -29,13 +29,14 @@
 
 ## 状态与交付
 
-- 任务 Markdown 是唯一正式状态源：`planned -> ready -> in_progress -> waiting_qa -> qa -> qa_passed -> completed`；阻塞用 `blocked`，中断先核实再续派。
+- 任务 Markdown 是唯一正式状态源。低风险任务：`planned -> ready -> in_progress -> dev_verified -> completed`；需要独立 QA 的任务：`planned -> ready -> in_progress -> waiting_qa -> qa -> qa_passed -> completed`；阻塞用 `blocked`，中断先核实再续派。
+- `QA_LEVEL=full` 必须派独立 QA；`QA_LEVEL=smoke` 先由开发完成自测和轻量冒烟，再由主会话决定是否派独立 QA；`QA_LEVEL=skip` 只要求开发自测、主会话差异复核和结果记录。
 - 原有 active 任务的 `migration_hold` 表示保留需求、等待核实实际代码，不能根据旧“待开发”标题重新实现。
 - 新的重试增加 attempt；拒绝旧 attempt 回报。旧 `TASK-LOCKS.json`、route 日志、pane 和 PID 不参与新任务推进。
-- 开发交付包含变更文件、执行命令和退出码、结果、证据、未解决问题及跨仓影响。QA 使用新的子代理上下文，验证准确的提交或工作区。
+- 开发交付包含变更文件、执行命令和退出码、结果、自测/冒烟证据、未覆盖场景、未解决问题及跨仓影响。触发 QA 时，QA 使用新的子代理上下文验证准确的提交或工作区。
 - 证据放 `05-verification/<TASK-ID>/attempt-<N>/`。脱敏摘要放任务目录的 `summary.md`；原始日志、截图、测试身份和客户数据保持本地。
-- QA PASS 前运行 `scripts/validate-desktop-result.py` 校验对应任务、attempt 和证据。未执行、环境阻塞或既有失败均须如实记录，不用 smoke 或局部构建冒充完整业务验收。
-- QA 通过进入 qa_passed；主会话复核、接口文档同步并记录集成情况后才能 completed。提交、推送和部署分别记录，不自动推送或部署。
+- 触发 QA 时，QA PASS 前运行 `scripts/validate-desktop-result.py` 校验对应任务、attempt 和证据；未执行、环境阻塞或既有失败均须如实记录，不用 smoke 或局部构建冒充完整业务验收。未触发 QA 时，主会话核对开发自测、差异和限制后记录 `dev_verified`。
+- 独立 QA 通过进入 qa_passed；两种路径都要完成主会话复核、接口文档同步并记录集成情况后才能 completed。提交、推送和部署分别记录，不自动推送或部署。
 - 每轮结束保存最后完成步骤、准确验证命令、剩余事项和下次入口；恢复不能只靠聊天记忆或子代理 ID。
 
 ## 项目范围和工作区

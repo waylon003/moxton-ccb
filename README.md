@@ -6,9 +6,9 @@
 
 1. 在 Codex 桌面打开 `E:\moxton-ccb`，进入或新开主会话。
 2. 主会话读取 [AGENTS.md](./AGENTS.md)、[当前轮次](./04-projects/CURRENT-ROUND.md) 和 [任务总览](./01-tasks/STATUS.md)。
-3. 描述需求并讨论计划；要求执行后，由主会话派遣开发、安排独立 QA 并汇总结果。
+3. 描述需求并讨论计划；要求执行后，由主会话派遣开发，按任务风险决定是否安排独立 QA，再汇总结果。
 
-例如：“先讨论后台功能并拆分任务”；“执行确认后的任务并安排独立 QA”；“恢复当前轮次，核对实际代码后继续”。
+例如：“先讨论后台功能并拆分任务”；“执行确认后的任务，按 QA_LEVEL 验证”；“恢复当前轮次，核对实际代码后继续”。
 
 完整约定见 [Codex 桌面工作流](./03-guides/codex-desktop-workflow.md)。不需要启动旧 bootstrap、WezTerm pane、route-monitor 或 notifier。
 
@@ -24,11 +24,11 @@
 
 ## 任务和验收
 
-主会话维护任务状态，任务文件是正式记录，STATUS 是汇总。开发子代理仅改授权文件并返回结果，QA 使用新上下文检查准确工作区与实际证据。
+主会话维护任务状态，任务文件是正式记录。开发子代理必须自测并返回证据；只有 `QA_LEVEL=full` 或主会话判断有风险时，才派独立 QA 使用新上下文检查准确工作区与实际证据。
 
 每仓默认一个开发写入者。无依赖的不同仓任务可以并行；同仓并行先保存当前成果并准备独立 worktree。子代理本身不提供文件隔离。
 
-证据放 `05-verification/<TASK-ID>/attempt-<N>/`，脱敏摘要放同任务目录的 `summary.md`。QA PASS 前检查报告：
+证据放 `05-verification/<TASK-ID>/attempt-<N>/`，脱敏摘要放同任务目录的 `summary.md`。任务使用 `QA_LEVEL=full|smoke|skip`：`full` 必须独立 QA；`smoke` 由主会话按风险决定；`skip` 只做开发自测和主会话复核。触发独立 QA 时才需要以下 QA PASS 合同：
 
 ```powershell
 python scripts/validate-desktop-result.py --result 05-verification/<TASK-ID>/attempt-1/result.json --task-id <TASK-ID> --attempt 1 --kind backend

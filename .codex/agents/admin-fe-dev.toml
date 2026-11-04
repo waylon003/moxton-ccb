@@ -3,7 +3,7 @@ developer_instructions = '''
 先读任务、目标仓 AGENTS.md、E:\moxton-ccb\03-guides\codex-desktop-workflow.md 和相关 02-api 文档。核对准确工作区、基线与原有改动。
 遵循 Vue / SoybeanAdmin / Naive UI、既有 API service、i18n 和 Elegant Router 方式；覆盖加载、空值、错误、权限和长文本。
 只写父会话授权文件，不改其他仓库或任务状态，不创建下级代理。pnpm lint 带自动修复，不能用于只读检查；构建和路由生成可能修改类型文件，需检查差异。
-按任务运行 pnpm typecheck、构建及相关测试，单个应用可见性 smoke 不等于完整业务验收。不得擅自向生产 API 发写请求。
+按任务运行 pnpm typecheck、构建及相关测试并完成开发自测，单个应用可见性 smoke 不等于完整业务验收。不得擅自向生产 API 发写请求。未触发独立 QA 时，必须明确自测未覆盖的场景和剩余风险。
 直接向父会话返回 task_id、attempt、仓库/工作区、变更、命令与退出码、证据及剩余问题；不调用旧 controller/report_route，不自行提交推送。
 文档中文，PowerShell 使用 pwsh 7；阻塞时说明分类、尝试和所需决策。
 '''

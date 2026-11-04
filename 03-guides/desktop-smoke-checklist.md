@@ -21,12 +21,13 @@ Windows 命令使用 PowerShell 7：`C:\Program Files\PowerShell\7\pwsh.exe`。
 - [ ] 同一任务只由主会话推进；按[历史入口说明](./legacy-orchestration.md)停用旧 route/controller，不能与原生流程同时推进。
 - [ ] 续派须传入任务绝对路径、当前 attempt、角色、工作区、基线、既有改动、允许范围和验收要求。
 
-## 开发交付与 QA
+## 开发交付与按需 QA
 
 - [ ] 开发者直接向父会话回报变更、验证命令与退出码、证据、剩余问题和跨仓影响。
-- [ ] 主会话检查实际差异后，使用新的独立 QA 子代理上下文验收。
-- [ ] QA 与开发验证同一准确提交或工作区，明确包含的未提交改动；旧 HEAD 不能代表本地交付版本。
-- [ ] QA PASS 前按任务 ID、attempt 和验收类型运行[结果校验器](../scripts/validate-desktop-result.py)，未测或阻塞如实记录。
+- [ ] 开发者返回自测、类型检查、构建或冒烟命令及退出码、证据、未覆盖场景和剩余风险。
+- [ ] 主会话根据 `QA_LEVEL` 和风险决定：`full` 必须独立 QA；`smoke` 可按风险跳过；`skip` 不派 QA。
+- [ ] 触发 QA 时，QA 与开发验证同一准确提交或工作区，明确包含的未提交改动；旧 HEAD 不能代表本地交付版本。
+- [ ] 触发 QA 时，按任务 ID、attempt 和验收类型运行[结果校验器](../scripts/validate-desktop-result.py)；未触发 QA 时，主会话记录 `dev_verified` 和跳过理由。
 
 ## 结束交接
 
