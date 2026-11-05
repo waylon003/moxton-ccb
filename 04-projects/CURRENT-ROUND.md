@@ -110,6 +110,12 @@
 - 正式任务已归档：`01-tasks/completed/admin-frontend/ADMIN-FE-030-operations-assistant-history-details.md`，attempt 1 / QA_LEVEL=smoke。
 - 使用版本化浏览器存储；完成定向 E2E 10 次、类型检查、改动文件 ESLint 和差异检查。未运行全量测试或构建。截图与原始日志位于本地忽略证据目录；摘要见 `05-verification/ADMIN-FE-030/summary.md`。本地使用说明与 API 文档已同步；按既有授权提交、推送并清理有改动的后台与指挥中心仓。
 
+### ADMIN-FE-031：移除运营助手旧摘要重复提醒（2026-11-05，已完成）
+
+- 用户确认移除旧摘要会话反复出现的蓝色提醒，保留摘要内容。
+- 正式任务已归档：`01-tasks/completed/admin-frontend/ADMIN-FE-031-remove-repeated-summary-alert.md`，attempt 1 / QA_LEVEL=smoke。
+- 删除提醒组件，保留旧摘要内容与存储失败提示。3 项定向 E2E、类型检查、改动文件 ESLint 和差异检查通过；未运行全量测试/构建。按既有授权提交、推送后台与指挥中心仓。
+
 客户查询已集成并归档：后端原始工作区新增/更新 8 个授权文件，后台 9 个；集成前备份与最终 SHA-256 在 `runtime/agent-customer-round-20261104/integration-backup/` 和 `integration-applied.json`。隔离 worktree 保留便于审阅。后端 `npm test` 271/271、完整 TypeScript 与构建通过；后台 typecheck/build 通过，ESLint 0 errors/82 warnings，助手 Playwright 32/32。联合合成 HTTP/浏览器 66 项断言通过，final-review.md 无 Critical/Important/Minor。文档中心工作流回归 16/16，两个任务 validator valid=true。
 
 `ADMIN-FE-025` 已完成，恢复依据为 `runtime/assistant-round-20261104/admin-025-progress.md`、`admin-025-integration-applied.json` 和 `05-verification/ADMIN-FE-025/attempt-2/`。浮窗可拖动缩放、刷新恢复几何、即时用户/助手等待气泡、底部输入区均已验收；两个实际 Vue 模块HTTP 200确认新版本。原工作区三个文件已备份，其他业务改动保留，worktree保留待后续整理。
