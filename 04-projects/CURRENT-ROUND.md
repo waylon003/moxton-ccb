@@ -95,11 +95,12 @@
 - 后端只调整总结生成和去重；后台只调整同源指标卡片分组及显示。保持 API 结构、数据库查询与权限边界不变。
 - 验证：后端重复模型行/兜底回退两项 Vitest 各 1/1、TypeScript 检查通过；后台分组/国家范围与既有英文统计 Playwright 各 1/1、typecheck、改动文件 ESLint、差异检查通过。截图与摘要位于 `05-verification/ADMIN-FE-028/` 和 `05-verification/BACKEND-033/`。测试数据为合成数据，未访问真实客户或真实模型。
 - 未运行全量测试/构建。此前用户授权的提交、推送要求沿用；本轮只提交实际有改动的后台、后端与指挥中心，商城仓保持干净且不创建空提交。
+- 本地提交：后台 `4f98fd15`，后端 `e183fde`，指挥中心任务与验收记录 `4463893`；待推送并核对各仓 HEAD、upstream 与工作区清洁。
 
 客户查询已集成并归档：后端原始工作区新增/更新 8 个授权文件，后台 9 个；集成前备份与最终 SHA-256 在 `runtime/agent-customer-round-20261104/integration-backup/` 和 `integration-applied.json`。隔离 worktree 保留便于审阅。后端 `npm test` 271/271、完整 TypeScript 与构建通过；后台 typecheck/build 通过，ESLint 0 errors/82 warnings，助手 Playwright 32/32。联合合成 HTTP/浏览器 66 项断言通过，final-review.md 无 Critical/Important/Minor。文档中心工作流回归 16/16，两个任务 validator valid=true。
 
 `ADMIN-FE-025` 已完成，恢复依据为 `runtime/assistant-round-20261104/admin-025-progress.md`、`admin-025-integration-applied.json` 和 `05-verification/ADMIN-FE-025/attempt-2/`。浮窗可拖动缩放、刷新恢复几何、即时用户/助手等待气泡、底部输入区均已验收；两个实际 Vue 模块HTTP 200确认新版本。原工作区三个文件已备份，其他业务改动保留，worktree保留待后续整理。
 
-当前4项活跃、84项完成、88项总计。原四项 `migration_hold / attempt 0` 仍待后续核实，不重做已完成迁移。未改私有数据库/模型配置与生产配置；本轮结束时后端3033未监听、本地 MySQL 3307运行、后台9527运行。专用后台5186已停止。验收使用合成/mock数据，未做真实客户、真实数据库或真实模型联调；底层原页头窄屏超宽仍为已有页面限制。服务说明见[本地使用说明](../03-guides/operations-assistant-local.md)。
+当前4项活跃、87项完成、91项总计。原四项 `migration_hold / attempt 0` 仍待后续核实，不重做已完成迁移。未改私有数据库/模型配置与生产配置；本轮结束时后端3033未监听、本地 MySQL 3307运行、后台9527运行。专用后台5186已停止。验收使用合成/mock数据，未做真实客户、真实数据库或真实模型联调；底层原页头窄屏超宽仍为已有页面限制。服务说明见[本地使用说明](../03-guides/operations-assistant-local.md)。
 
 子代理 ID 仅用于本轮跟进；恢复依据为任务文件、准确代码版本、证据与交接记录。关闭会话后的自动续派尚未建立。
