@@ -18,10 +18,10 @@
 | 角色 | backlog | active | completed | 总计 |
 |------|---------|--------|-----------|------|
 | SHOP-FE | 0 | 1 | 21 | 22 |
-| ADMIN-FE | 0 | 2 | 28 | 30 |
+| ADMIN-FE | 0 | 2 | 29 | 31 |
 | BACKEND | 0 | 1 | 37 | 38 |
 | CCB | 0 | 0 | 1 | 1 |
-| **TOTAL** | **0** | **4** | **87** | **91** |
+| **TOTAL** | **0** | **4** | **88** | **92** |
 
 ## 目录结构
 
@@ -151,6 +151,7 @@
 | [ADMIN-FE-026](./completed/admin-frontend/ADMIN-FE-026-agent-customer-records.md) | 客户记录卡片与摘要历史 |
 | [ADMIN-FE-027](./completed/admin-frontend/ADMIN-FE-027-operations-assistant-session-navigation.md) | 运营助手会话导航与说明文案精简 |
 | [ADMIN-FE-028](./completed/admin-frontend/ADMIN-FE-028-operations-assistant-metric-groups.md) | 运营助手合并问卷统计分组展示 |
+| [ADMIN-FE-029](./completed/admin-frontend/ADMIN-FE-029-adaptive-assistant-breakdown-layout.md) | 运营助手统计项自适应排布 |
 
 ### 后端 (BACKEND)
 

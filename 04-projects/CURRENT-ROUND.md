@@ -97,10 +97,17 @@
 - 未运行全量测试/构建。此前用户授权的提交、推送要求沿用；本轮只提交实际有改动的后台、后端与指挥中心，商城仓保持干净且不创建空提交。
 - 本地提交：后台 `4f98fd15`，后端 `e183fde`，指挥中心任务与验收记录 `4463893`；待推送并核对各仓 HEAD、upstream 与工作区清洁。
 
+### ADMIN-FE-029：运营助手统计项自适应排布（2026-11-05）
+
+- 用户补充验收要求：依据实际可用宽度自适应，窗口越宽，每行展示越多项。
+- 正式任务已完成并归档：`01-tasks/completed/admin-frontend/ADMIN-FE-029-adaptive-assistant-breakdown-layout.md`，attempt 1 / QA_LEVEL=smoke。
+- 统计分布列表使用自适应网格，窗口增宽后每行项目数增加；窄/宽窗口均验证无横向溢出。定向 E2E 1/1、类型检查、改动文件 ESLint、差异检查通过；未运行全量 E2E 或构建。脱敏摘要见 `05-verification/ADMIN-FE-029/summary.md`，截图和原始日志位于本地忽略证据目录。
+- 仅修改后台统计列表布局，无 API 契约变化；按既有用户授权完成提交、推送及四仓工作区清洁核对。
+
 客户查询已集成并归档：后端原始工作区新增/更新 8 个授权文件，后台 9 个；集成前备份与最终 SHA-256 在 `runtime/agent-customer-round-20261104/integration-backup/` 和 `integration-applied.json`。隔离 worktree 保留便于审阅。后端 `npm test` 271/271、完整 TypeScript 与构建通过；后台 typecheck/build 通过，ESLint 0 errors/82 warnings，助手 Playwright 32/32。联合合成 HTTP/浏览器 66 项断言通过，final-review.md 无 Critical/Important/Minor。文档中心工作流回归 16/16，两个任务 validator valid=true。
 
 `ADMIN-FE-025` 已完成，恢复依据为 `runtime/assistant-round-20261104/admin-025-progress.md`、`admin-025-integration-applied.json` 和 `05-verification/ADMIN-FE-025/attempt-2/`。浮窗可拖动缩放、刷新恢复几何、即时用户/助手等待气泡、底部输入区均已验收；两个实际 Vue 模块HTTP 200确认新版本。原工作区三个文件已备份，其他业务改动保留，worktree保留待后续整理。
 
-当前4项活跃、87项完成、91项总计。原四项 `migration_hold / attempt 0` 仍待后续核实，不重做已完成迁移。未改私有数据库/模型配置与生产配置；本轮结束时后端3033未监听、本地 MySQL 3307运行、后台9527运行。专用后台5186已停止。验收使用合成/mock数据，未做真实客户、真实数据库或真实模型联调；底层原页头窄屏超宽仍为已有页面限制。服务说明见[本地使用说明](../03-guides/operations-assistant-local.md)。
+当前4项活跃、88项完成、92项总计。原四项 `migration_hold / attempt 0` 仍待后续核实，不重做已完成迁移。未改私有数据库/模型配置与生产配置；本轮结束时后端3033未监听、本地 MySQL 3307运行、后台9527运行。专用后台5186已停止。验收使用合成/mock数据，未做真实客户、真实数据库或真实模型联调；底层原页头窄屏超宽仍为已有页面限制。服务说明见[本地使用说明](../03-guides/operations-assistant-local.md)。
 
 子代理 ID 仅用于本轮跟进；恢复依据为任务文件、准确代码版本、证据与交接记录。关闭会话后的自动续派尚未建立。
