@@ -14,6 +14,7 @@
 | 商品管理 | [products.md](products.md) | ✅ |
 | 预售预约优惠码 | [preorder-discounts.md](preorder-discounts.md) | ✅ |
 | 产品测试计划申请 | [product-testing-applications.md](product-testing-applications.md) | ⏳ |
+| 后台只读运营助手 | [operations-assistant.md](operations-assistant.md) | 本地独立验收，未部署 |
 | 分类管理 | [categories.md](categories.md) | ✅ |
 | 线下咨询订单 | [offline-orders.md](offline-orders.md) | ✅ |
 | 地址管理 | [addresses.md](addresses.md) | ✅ |

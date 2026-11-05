@@ -2,8 +2,8 @@
 
 > 默认入口已改为 Codex 桌面主会话，先读 [当前轮次](../04-projects/CURRENT-ROUND.md) 和 [工作流](../03-guides/codex-desktop-workflow.md)。任务文件是正式状态源，旧 TASK-LOCKS 不再推进任务。历史 completed 只代表归档记录，不等于本次重新验收；原业务四项处于 migration_hold，先核实代码。
 
-**更新时间**: 2026-11-02
-**活跃任务**: 4 个（均为业务 migration_hold；本轮指挥迁移已归档）
+**更新时间**: 2026-11-05
+**活跃任务**: 4 个（原业务4项 migration_hold）
 
 ## 项目映射
 
@@ -18,10 +18,10 @@
 | 角色 | backlog | active | completed | 总计 |
 |------|---------|--------|-----------|------|
 | SHOP-FE | 0 | 1 | 21 | 22 |
-| ADMIN-FE | 0 | 2 | 21 | 23 |
-| BACKEND | 0 | 1 | 32 | 33 |
+| ADMIN-FE | 0 | 2 | 27 | 29 |
+| BACKEND | 0 | 1 | 36 | 37 |
 | CCB | 0 | 0 | 1 | 1 |
-| **TOTAL** | **0** | **4** | **75** | **79** |
+| **TOTAL** | **0** | **4** | **85** | **89** |
 
 ## 目录结构
 
@@ -48,11 +48,29 @@
 |--------|------|------|
 | [CCB-MIGRATION-001](./completed/coordination/CCB-MIGRATION-001-desktop-workflow.md) | Codex 桌面指挥迁移与验收 | completed / attempt 1 |
 
-历史业务归档 74 项，加本轮指挥迁移 1 项，共 75 项；指挥迁移通过不代表业务功能重新验收。
+历史业务归档74项，加运营助手及后续调整9项，共83项业务任务；再加指挥迁移1项，完成总数84项。指挥迁移通过不代表其他业务功能重新验收。
+
+## 已完成：运营助手实施轮次
+
+用户已授权执行，主模型 `gpt-6.1-sol`。计划见 [实施记录](../docs/plans/2026-11-03-operations-assistant-implementation.md)，接口见 [助手 API](../02-api/operations-assistant.md)。
+
+| 任务 | 状态 | attempt | 归档 |
+|------|------|---------|------|
+| BACKEND-029 | completed | 1 | [全量类型与构建](./completed/backend/BACKEND-029-full-typecheck-build-repair.md) |
+| ADMIN-FE-022 | completed | 1 | [lint 基线](./completed/admin-frontend/ADMIN-FE-022-lint-baseline-repair.md) |
+| BACKEND-030 | completed | 2 | [助手后端](./completed/backend/BACKEND-030-readonly-operations-assistant.md) |
+| ADMIN-FE-023 | completed | 2 | [助手页面](./completed/admin-frontend/ADMIN-FE-023-operations-assistant-page.md) |
+| BACKEND-031 | completed | 1 | [三分钟预算](./completed/backend/BACKEND-031-agent-timeout-budget.md) |
+| ADMIN-FE-024 | completed | 2 | [全局入口](./completed/admin-frontend/ADMIN-FE-024-global-operations-assistant.md) |
+| ADMIN-FE-025 | completed | 2 | [独立浮动聊天卡片](./completed/admin-frontend/ADMIN-FE-025-floating-chat-card.md) |
+
+七项助手相关任务已完成本地集成。最新浮动卡片25/25 E2E及独立 QA通过、validator valid=true；类型检查、构建、ESLint（0 errors/82旧 warnings）通过。服务启动与限制见[本地运营助手使用说明](../03-guides/operations-assistant-local.md)，证据见 `05-verification/`；原四项 `migration_hold / attempt 0` 不变。
 
 ## 当前活跃任务
 
 下面四项业务任务均为 `migration_hold / attempt 0`。其原有实现、未提交内容和下一步见任务接管上下文及 [现状复核](../docs/reports/2026-11-02-project-status-review.md)。本轮不将这些任务自动标为完成。
+
+2026-11-03 主会话完成 [BACKEND-028 接管核查](../docs/reports/2026-11-03-backend-028-takeover-review.md)：主要实现已存在；48 项 mock/smoke 测试、局部类型检查和 schema 校验通过，全量类型检查仍有 156 条错误。随后按用户说明，将开发/线上共享库复制到本机，19 张表、146 条记录恢复及一致性核对通过，并按指令将默认开发数据库切到 `127.0.0.1:3307/moxton_local`，应用配置及 Prisma CLI 连接验证通过，生产配置未改；见 [本地副本交付记录](../docs/reports/2026-11-03-local-database-copy.md)。真实 HTTP/权限验收及迁移交付仍待收尾，未派遣或签发业务 QA PASS，四项任务状态保持不变。
 
 ### 独立站前端 (SHOP-FE)
 
@@ -130,6 +148,8 @@
 | [ADMIN-FE-017](./completed/admin-frontend/ADMIN-FE-017-product-testing-applications.md) | 后台产品测试计划申请列表与资格邮件 |
 | [ADMIN-FE-018](./completed/admin-frontend/ADMIN-FE-018-preorder-lead-ranch-fields-display.md) | 预约优惠码后台展示牧场扩展字段 |
 | [ADMIN-FE-019](./completed/admin-frontend/ADMIN-FE-019-preorder-product-feedback-survey-display.md) | 后台展示预售预约产品反馈 Survey |
+| [ADMIN-FE-026](./completed/admin-frontend/ADMIN-FE-026-agent-customer-records.md) | 客户记录卡片与摘要历史 |
+| [ADMIN-FE-027](./completed/admin-frontend/ADMIN-FE-027-operations-assistant-session-navigation.md) | 运营助手会话导航与说明文案精简 |
 
 ### 后端 (BACKEND)
 
@@ -167,4 +187,9 @@
 | [BUG-001](./completed/backend/BUG-001-order-api-500-error.md) | 订单列表 API 返回 500 错误 |
 | [BUG-002](./completed/backend/BUG-002-order-items-field-name.md) | findByIdWithDetails 使用错误的字段名 |
 | [BUG-004](./completed/backend/BUG-004-stripe-payment-intent-params.md) | Stripe Payment Intent 参数冲突 |
+| [BACKEND-032](./completed/backend/BACKEND-032-customer-aware-agent.md) | 客户业务查询与模型合同 |
 
+
+## 已完成：客户业务信息查询
+
+`BACKEND-032 / attempt 1` 与 `ADMIN-FE-026 / attempt 1` 均经独立 full QA、validator 与主会话最终只读代码审查通过，并完成本地受控集成。后端全量测试 271/271，后台助手 Playwright 32/32；合成跨仓 HTTP/浏览器 66 项断言通过。API 与本地使用说明已同步。未访问真实客户、真实数据库、线上模型或生产环境；未提交、推送或部署。详情见任务归档、各 attempt 脱敏 summary 及 `runtime/agent-customer-round-20261104/progress.md`。原四项 `migration_hold / attempt 0` 不变。

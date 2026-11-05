@@ -367,7 +367,8 @@ Authorization: Bearer <token>
 {
   "code": 200,
   "message": "Success",
-  "data": [
+  "data": {
+    "list": [
     {
       "id": "clt123456789",
       "paymentNo": "PAY202512180001",
@@ -386,8 +387,7 @@ Authorization: Bearer <token>
         "createdAt": "2025-12-18T09:25:00.000Z"
       }
     }
-  ],
-  "pagination": {
+    ],
     "pageNum": 1,
     "pageSize": 10,
     "total": 25,
@@ -397,6 +397,8 @@ Authorization: Bearer <token>
   "timestamp": "2025-12-18T10:00:00.000Z"
 }
 ```
+
+> 2026-11-03 独立核查：该接口实际沿用 `ctx.paginatedSuccess`，列表与分页字段均位于 `data`；此处纠正文档示例，不改变既有接口。
 
 **错误响应**:
 - `403`: `Authentication required` - 需要用户认证
@@ -441,8 +443,8 @@ model Payment {
   stripePaymentIntentId  String?   // 保留兼容性
   checkoutSessionId      String?
   providerPaymentId      String?
-  providerCustomerId     String?
-  paypalOrderId          String?
+  // providerCustomerId 保存在 metadata JSON 内，不是独立列
+  // PayPal 编号同样使用 providerPaymentId，不存在 paypalOrderId 列
 
   // 安全字段
   paymentAttemptCount    Int       @default(0)
