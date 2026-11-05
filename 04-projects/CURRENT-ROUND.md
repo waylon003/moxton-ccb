@@ -88,6 +88,14 @@
 - 正式任务已归档：`01-tasks/completed/admin-frontend/ADMIN-FE-027-operations-assistant-session-navigation.md`，attempt 1、QA_LEVEL=smoke；按低风险界面改动未触发独立 QA。
 - 用户要求的项目工作区整理、提交、推送已执行；提交号和最终 clean 状态见本轮交付记录。
 
+### BACKEND-033 / ADMIN-FE-028：运营助手统计回答与分组展示（2026-11-05）
+
+- 用户要求继续实施已讨论方案：合并重复问卷总数、归纳多个分组，模型回答避免重复，并将对应统计分布在一张卡片中标明各自维度。
+- 正式任务已完成并归档：后端 `01-tasks/completed/backend/BACKEND-033-operations-assistant-feedback-summary.md`，后台 `01-tasks/completed/admin-frontend/ADMIN-FE-028-operations-assistant-metric-groups.md`；均为 attempt 1 / QA_LEVEL=smoke，主会话复核后未触发独立 QA。
+- 后端只调整总结生成和去重；后台只调整同源指标卡片分组及显示。保持 API 结构、数据库查询与权限边界不变。
+- 验证：后端重复模型行/兜底回退两项 Vitest 各 1/1、TypeScript 检查通过；后台分组/国家范围与既有英文统计 Playwright 各 1/1、typecheck、改动文件 ESLint、差异检查通过。截图与摘要位于 `05-verification/ADMIN-FE-028/` 和 `05-verification/BACKEND-033/`。测试数据为合成数据，未访问真实客户或真实模型。
+- 未运行全量测试/构建。此前用户授权的提交、推送要求沿用；本轮只提交实际有改动的后台、后端与指挥中心，商城仓保持干净且不创建空提交。
+
 客户查询已集成并归档：后端原始工作区新增/更新 8 个授权文件，后台 9 个；集成前备份与最终 SHA-256 在 `runtime/agent-customer-round-20261104/integration-backup/` 和 `integration-applied.json`。隔离 worktree 保留便于审阅。后端 `npm test` 271/271、完整 TypeScript 与构建通过；后台 typecheck/build 通过，ESLint 0 errors/82 warnings，助手 Playwright 32/32。联合合成 HTTP/浏览器 66 项断言通过，final-review.md 无 Critical/Important/Minor。文档中心工作流回归 16/16，两个任务 validator valid=true。
 
 `ADMIN-FE-025` 已完成，恢复依据为 `runtime/assistant-round-20261104/admin-025-progress.md`、`admin-025-integration-applied.json` 和 `05-verification/ADMIN-FE-025/attempt-2/`。浮窗可拖动缩放、刷新恢复几何、即时用户/助手等待气泡、底部输入区均已验收；两个实际 Vue 模块HTTP 200确认新版本。原工作区三个文件已备份，其他业务改动保留，worktree保留待后续整理。

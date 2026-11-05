@@ -18,10 +18,10 @@
 | 角色 | backlog | active | completed | 总计 |
 |------|---------|--------|-----------|------|
 | SHOP-FE | 0 | 1 | 21 | 22 |
-| ADMIN-FE | 0 | 2 | 27 | 29 |
-| BACKEND | 0 | 1 | 36 | 37 |
+| ADMIN-FE | 0 | 2 | 28 | 30 |
+| BACKEND | 0 | 1 | 37 | 38 |
 | CCB | 0 | 0 | 1 | 1 |
-| **TOTAL** | **0** | **4** | **85** | **89** |
+| **TOTAL** | **0** | **4** | **87** | **91** |
 
 ## 目录结构
 
@@ -150,6 +150,7 @@
 | [ADMIN-FE-019](./completed/admin-frontend/ADMIN-FE-019-preorder-product-feedback-survey-display.md) | 后台展示预售预约产品反馈 Survey |
 | [ADMIN-FE-026](./completed/admin-frontend/ADMIN-FE-026-agent-customer-records.md) | 客户记录卡片与摘要历史 |
 | [ADMIN-FE-027](./completed/admin-frontend/ADMIN-FE-027-operations-assistant-session-navigation.md) | 运营助手会话导航与说明文案精简 |
+| [ADMIN-FE-028](./completed/admin-frontend/ADMIN-FE-028-operations-assistant-metric-groups.md) | 运营助手合并问卷统计分组展示 |
 
 ### 后端 (BACKEND)
 
@@ -188,6 +189,7 @@
 | [BUG-002](./completed/backend/BUG-002-order-items-field-name.md) | findByIdWithDetails 使用错误的字段名 |
 | [BUG-004](./completed/backend/BUG-004-stripe-payment-intent-params.md) | Stripe Payment Intent 参数冲突 |
 | [BACKEND-032](./completed/backend/BACKEND-032-customer-aware-agent.md) | 客户业务查询与模型合同 |
+| [BACKEND-033](./completed/backend/BACKEND-033-operations-assistant-feedback-summary.md) | 运营助手问卷统计摘要去重 |
 
 
 ## 已完成：客户业务信息查询
