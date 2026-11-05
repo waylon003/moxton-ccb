@@ -104,6 +104,12 @@
 - 统计分布列表使用自适应网格，窗口增宽后每行项目数增加；窄/宽窗口均验证无横向溢出。定向 E2E 1/1、类型检查、改动文件 ESLint、差异检查通过；未运行全量 E2E 或构建。脱敏摘要见 `05-verification/ADMIN-FE-029/summary.md`，截图和原始日志位于本地忽略证据目录。
 - 仅修改后台统计列表布局，无 API 契约变化；按既有用户授权完成提交、推送及四仓工作区清洁核对。
 
+### ADMIN-FE-030：运营助手刷新后恢复完整查询记录（2026-11-05，已完成）
+
+- 用户确认会话不需要摘要保护，助手刷新后须保留完整回答、客户详情、统计与筛选；保留7天、最多10个会话、每会话最多10轮。旧摘要因详情已丢弃，仍提示重新查询。
+- 正式任务已归档：`01-tasks/completed/admin-frontend/ADMIN-FE-030-operations-assistant-history-details.md`，attempt 1 / QA_LEVEL=smoke。
+- 使用版本化浏览器存储；完成定向 E2E 10 次、类型检查、改动文件 ESLint 和差异检查。未运行全量测试或构建。截图与原始日志位于本地忽略证据目录；摘要见 `05-verification/ADMIN-FE-030/summary.md`。本地使用说明与 API 文档已同步；按既有授权提交、推送并清理有改动的后台与指挥中心仓。
+
 客户查询已集成并归档：后端原始工作区新增/更新 8 个授权文件，后台 9 个；集成前备份与最终 SHA-256 在 `runtime/agent-customer-round-20261104/integration-backup/` 和 `integration-applied.json`。隔离 worktree 保留便于审阅。后端 `npm test` 271/271、完整 TypeScript 与构建通过；后台 typecheck/build 通过，ESLint 0 errors/82 warnings，助手 Playwright 32/32。联合合成 HTTP/浏览器 66 项断言通过，final-review.md 无 Critical/Important/Minor。文档中心工作流回归 16/16，两个任务 validator valid=true。
 
 `ADMIN-FE-025` 已完成，恢复依据为 `runtime/assistant-round-20261104/admin-025-progress.md`、`admin-025-integration-applied.json` 和 `05-verification/ADMIN-FE-025/attempt-2/`。浮窗可拖动缩放、刷新恢复几何、即时用户/助手等待气泡、底部输入区均已验收；两个实际 Vue 模块HTTP 200确认新版本。原工作区三个文件已备份，其他业务改动保留，worktree保留待后续整理。
